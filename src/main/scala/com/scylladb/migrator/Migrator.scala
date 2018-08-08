@@ -2,6 +2,7 @@ package com.scylladb.migrator
 
 import com.datastax.spark.connector._
 import com.datastax.spark.connector.cql.CassandraConnectorConf
+import com.datastax.spark.connector.rdd.ReadConf
 import org.apache.log4j.LogManager
 import org.apache.spark.sql._
 import org.apache.spark.sql.cassandra._
@@ -15,7 +16,7 @@ object Migrator {
   def readDataframe(source: Target)(implicit spark: SparkSession): DataFrame =
     spark.read
       .cassandraFormat(source.table, source.keyspace, source.cluster, pushdownEnable = true)
-      .options(source.splitCount.map(cnt => ("spark.cassandra.splitCount", cnt.toString)).toMap)
+      .options(source.splitCount.map(cnt => ReadConf.SplitCountParam.name -> cnt.toString).toMap)
       .load()
 
   def writeDataframe(dest: Target, df: DataFrame)(implicit spark: SparkSession): Unit =
@@ -41,7 +42,7 @@ object Migrator {
       spark.conf.get("spark.scylla.source.port").toInt,
       spark.conf.get("spark.scylla.source.keyspace"),
       spark.conf.get("spark.scylla.source.table"),
-      spark.conf.getOption("scylla.source.splitCount").map(_.toInt)
+      spark.conf.getOption("spark.scylla.source.splitCount").map(_.toInt)
     )
 
     spark.setCassandraConf(source.cluster,
