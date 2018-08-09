@@ -52,6 +52,8 @@ object Migrator {
     spark.setCassandraConf(source.cluster,
       CassandraConnectorConf.ConnectionHostParam.option(source.host) ++
       CassandraConnectorConf.ConnectionPortParam.option(source.port))
+    spark.setCassandraConf(source.cluster,
+      CassandraConnectorConf.MaxConnectionsPerExecutorParam.option(source.connectionCount))
 
     val dest = Target(
       spark.conf.get("spark.scylla.dest.cluster"),
@@ -65,6 +67,8 @@ object Migrator {
     spark.setCassandraConf(dest.cluster,
       CassandraConnectorConf.ConnectionHostParam.option(dest.host) ++
       CassandraConnectorConf.ConnectionPortParam.option(dest.port))
+    spark.setCassandraConf(dest.cluster,
+      CassandraConnectorConf.MaxConnectionsPerExecutorParam.option(dest.connectionCount))
 
     val sourceDF = readDataframe(source)
 
