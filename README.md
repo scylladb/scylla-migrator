@@ -52,3 +52,12 @@ The `spark-master` container mounts the `./target/scala-2.11` dir on `/jars`. To
 After running `sbt assembly`, copy the jar from `./target/scala-2.11/scylla-migrator-assembly-0.0.1.jar` to the Spark master server.
 
 There, you can use the same `spark-submit` command, but without the `spark.driver.host` line; that shouldn't be needed. Make sure to adjust the `SOURCE_SPLIT` parameter.
+
+# Renaming columns
+
+You can pass the following option to rename columns before writing them to Scylla:
+```shell
+--conf spark.scylla.dest.renames='oldcol1:newcol1;oldcol2:newcol2'
+```
+
+This will rename `oldcol1` to `newcol1` and `oldcol2` to `newcol2`.

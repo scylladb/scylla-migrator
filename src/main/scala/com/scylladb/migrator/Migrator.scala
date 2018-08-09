@@ -7,6 +7,19 @@ import org.apache.log4j.LogManager
 import org.apache.spark.sql._
 import org.apache.spark.sql.cassandra._
 
+case class Renames(renames: List[Rename])
+object Renames {
+  def fromString(str: String): Renames =
+    Renames(str.split(';').flatMap {
+      _.split(':') match {
+        case Array(from, to) => Some(Rename(from, to))
+        case _ => None
+      }
+    }.toList)
+}
+
+case class Rename(from: String, to: String)
+
 object Migrator {
   val log = LogManager.getLogger("com.scylladb.migrator")
 
@@ -21,12 +34,17 @@ object Migrator {
         Map(CassandraConnectorConf.MaxConnectionsPerExecutorParam.name -> source.connectionCount.toString))
       .load()
 
-  def writeDataframe(dest: Target, df: DataFrame)(implicit spark: SparkSession): Unit =
-    df.write
+  def writeDataframe(dest: Target, df: DataFrame, renames: Renames)(implicit spark: SparkSession): Unit = {
+    val renamed = renames.renames.foldLeft(df) {
+      case (acc, Rename(from, to)) => df.withColumnRenamed(from, to)
+    }
+
+    renamed.write
       .cassandraFormat(dest.table, dest.keyspace, dest.cluster, pushdownEnable = true)
       .option(CassandraConnectorConf.MaxConnectionsPerExecutorParam.name, dest.connectionCount.toString)
       .mode(SaveMode.Append)
       .save()
+  }
 
   def main(args: Array[String]): Unit = {
     implicit val spark = SparkSession.builder()
@@ -37,7 +55,6 @@ object Migrator {
       .getOrCreate
 
     import spark.implicits._
-    // import spark.log
 
     val source = Target(
       spark.conf.get("spark.scylla.source.cluster"),
@@ -48,6 +65,10 @@ object Migrator {
       spark.conf.getOption("spark.scylla.source.splitCount").map(_.toInt),
       spark.conf.getOption("spark.scylla.source.connections").map(_.toInt).getOrElse(1)
     )
+
+    val renames = spark.conf.getOption("spark.scylla.dest.renames")
+      .map(Renames.fromString)
+      .getOrElse(Renames(Nil))
 
     spark.setCassandraConf(source.cluster,
       CassandraConnectorConf.ConnectionHostParam.option(source.host) ++
@@ -76,6 +97,6 @@ object Migrator {
     sourceDF.printSchema()
 
     log.info("Starting write...")
-    writeDataframe(dest, sourceDF)
+    writeDataframe(dest, sourceDF, renames)
   }
 }
