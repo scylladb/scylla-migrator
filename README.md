@@ -27,12 +27,14 @@ Then, launch `spark-submit` in the master's container to run the job:
 docker-compose exec spark-master spark-submit --class com.scylladb.migrator.Migrator \
   --master spark://spark-master:7077 \
   --conf spark.driver.host=spark-master \
+  --conf spark.scylla.source.connections=CONNECTION_COUNT \
   --conf spark.scylla.source.cluster=cassandra \
   --conf spark.scylla.source.host=cassandra \
   --conf spark.scylla.source.port=9042 \
   --conf spark.scylla.source.keyspace=SOURCE_KEYSPACE \
   --conf spark.scylla.source.table=SOURCE_TABLE \
   --conf spark.scylla.source.splitCount=SOURCE_SPLIT \
+  --conf spark.scylla.dest.connections=CONNECTION_COUNT \
   --conf spark.scylla.dest.cluster=scylla \
   --conf spark.scylla.dest.host=scylla \
   --conf spark.scylla.dest.port=9042 \
