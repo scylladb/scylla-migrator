@@ -59,7 +59,7 @@ object Migrator {
       spark.conf.get("spark.scylla.dest.port").toInt,
       spark.conf.get("spark.scylla.dest.keyspace"),
       spark.conf.get("spark.scylla.dest.table"),
-      connectionCount = spark.conf.getOption("spark.scylla.source.connections").map(_.toInt).getOrElse(1)
+      connectionCount = spark.conf.getOption("spark.scylla.dest.connections").map(_.toInt).getOrElse(1)
     )
 
     spark.setCassandraConf(dest.cluster,
