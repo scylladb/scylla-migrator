@@ -10,18 +10,21 @@ import org.apache.spark.sql.cassandra._
 object Migrator {
   val log = LogManager.getLogger("com.scylladb.migrator")
 
-  case class Target(cluster: String, host: String, port: Int, keyspace: String, table: String, splitCount: Option[Int] = None)
+  case class Target(cluster: String, host: String, port: Int, keyspace: String,
+    table: String, splitCount: Option[Int] = None, connectionCount: Int)
   case class Config(source: Target, dest: Target)
 
   def readDataframe(source: Target)(implicit spark: SparkSession): DataFrame =
     spark.read
       .cassandraFormat(source.table, source.keyspace, source.cluster, pushdownEnable = true)
-      .options(source.splitCount.map(cnt => ReadConf.SplitCountParam.name -> cnt.toString).toMap)
+      .options(source.splitCount.map(cnt => ReadConf.SplitCountParam.name -> cnt.toString).toMap ++
+        Map(CassandraConnectorConf.MaxConnectionsPerExecutorParam.name -> source.connectionCount.toString))
       .load()
 
   def writeDataframe(dest: Target, df: DataFrame)(implicit spark: SparkSession): Unit =
     df.write
       .cassandraFormat(dest.table, dest.keyspace, dest.cluster, pushdownEnable = true)
+      .option(CassandraConnectorConf.MaxConnectionsPerExecutorParam.name, dest.connectionCount.toString)
       .mode(SaveMode.Append)
       .save()
 
@@ -42,7 +45,8 @@ object Migrator {
       spark.conf.get("spark.scylla.source.port").toInt,
       spark.conf.get("spark.scylla.source.keyspace"),
       spark.conf.get("spark.scylla.source.table"),
-      spark.conf.getOption("spark.scylla.source.splitCount").map(_.toInt)
+      spark.conf.getOption("spark.scylla.source.splitCount").map(_.toInt),
+      spark.conf.getOption("spark.scylla.source.connections").map(_.toInt).getOrElse(1)
     )
 
     spark.setCassandraConf(source.cluster,
@@ -54,7 +58,8 @@ object Migrator {
       spark.conf.get("spark.scylla.dest.host"),
       spark.conf.get("spark.scylla.dest.port").toInt,
       spark.conf.get("spark.scylla.dest.keyspace"),
-      spark.conf.get("spark.scylla.dest.table")
+      spark.conf.get("spark.scylla.dest.table"),
+      connectionCount = spark.conf.getOption("spark.scylla.source.connections").map(_.toInt).getOrElse(1)
     )
 
     spark.setCassandraConf(dest.cluster,
