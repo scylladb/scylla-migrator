@@ -156,7 +156,7 @@ object Migrator {
                row.get(ordinal),
                if (row.isNullAt(ttlOrdinal)) None
                else Some(row.getLong(ttlOrdinal)),
-               if (row.isNullAt(writetimeOrdinal)) throw new Exception("WRITETIME was null; this is unexpected")
+               if (row.isNullAt(writetimeOrdinal)) throw new Exception(s"WRITETIME for ${fieldName} was null; this is unexpected")
                else row.getLong(writetimeOrdinal))
           }
           .groupBy(tp => (tp._3, tp._4))
@@ -164,36 +164,37 @@ object Migrator {
           .map {
             case ((ttl, writetime), fields) =>
               val newValues = broadcastSchema.value.fields.map { field =>
-                val v = primaryKeyOrdinals.value.get(field.name)
+                primaryKeyOrdinals.value.get(field.name)
                   .flatMap { ord =>
                     if (row.isNullAt(ord)) None
                     else Some(row.get(ord))
                   }
                   .orElse(fields.get(field.name))
                   .orNull
-
-                println(s"${field} is ${v}")
-                v
               } ++ Seq(ttl.getOrElse(0L), writetime)
 
-              println(newValues)
               Row(newValues: _*)
           }
       }(RowEncoder(finalSchema))
 
-    val renamed = renames.renames
+    // Similarly to createDataFrame, when using withColumnRenamed, Spark tries
+    // to re-encode the dataset. Instead we just use the modified schema from this
+    // DataFrame; the access to the rows is positional anyway and the field names
+    // are only used to construct the columns part of the INSERT statement.
+    val renamedSchema = renames.renames
       .foldLeft(timeTransformations) {
-        case (acc, Rename(from, to)) => df.withColumnRenamed(from, to)
+        case (acc, Rename(from, to)) => acc.withColumnRenamed(from, to)
       }
+      .schema
 
     println("Schema after renames:")
-    renamed.printSchema()
+    renamedSchema.printTreeString()
 
     implicit val rwf = SqlRowWriter.Factory
-    renamed.rdd.saveToCassandra(
+    timeTransformations.rdd.saveToCassandra(
       dest.keyspace,
       dest.table,
-      SomeColumns(renamed.columns.map(x => x: ColumnRef).filterNot(ref => ref.columnName == "ttl" || ref.columnName == "writetime"): _*),
+      SomeColumns(renamedSchema.fields.map(x => x.name: ColumnRef).filterNot(ref => ref.columnName == "ttl" || ref.columnName == "writetime"): _*),
       WriteConf.fromSparkConf(spark.sparkContext.getConf)
         .copy(
           ttl = TTLOption.perRow("ttl"),
