@@ -74,10 +74,13 @@ object Migrator {
     implicit val connector = CassandraConnector(
       spark.sparkContext.getConf.setAll(
         CassandraConnectorConf.ConnectionHostParam.option(source.host) ++
-          CassandraConnectorConf.ConnectionPortParam.option(source.port) ++
-          CassandraConnectorConf.MaxConnectionsPerExecutorParam.option(source.connectionCount)
+        CassandraConnectorConf.ConnectionPortParam.option(source.port) ++
+        CassandraConnectorConf.MaxConnectionsPerExecutorParam.option(source.connectionCount)
       )
     )
+
+    implicit val readConf = ReadConf.fromSparkConf(spark.sparkContext.getConf)
+      .copy(splitCount = source.splitCount)
 
     val tableDef = Schema.tableFromCassandra(connector, source.keyspace, source.table)
     println("TableDef retrieved for source:")
@@ -150,14 +153,16 @@ object Migrator {
     val timeTransformations = df
       .flatMap { row =>
         regularKeyOrdinals.value
-          .map {
-            case (fieldName, (ordinal, ttlOrdinal, writetimeOrdinal)) =>
-              (fieldName,
+          .flatMap {
+            case (fieldName, (ordinal, ttlOrdinal, writetimeOrdinal)) if !row.isNullAt(writetimeOrdinal) =>
+              Some((fieldName,
                row.get(ordinal),
                if (row.isNullAt(ttlOrdinal)) None
                else Some(row.getLong(ttlOrdinal)),
-               if (row.isNullAt(writetimeOrdinal)) throw new Exception(s"WRITETIME for ${fieldName} was null; this is unexpected")
-               else row.getLong(writetimeOrdinal))
+               row.getLong(writetimeOrdinal)))
+
+            case _ =>
+              None
           }
           .groupBy(tp => (tp._3, tp._4))
           .mapValues(_.map(tp => tp._1 -> tp._2).toMap)
