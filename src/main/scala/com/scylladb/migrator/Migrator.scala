@@ -213,7 +213,6 @@ object Migrator {
     implicit val spark = SparkSession.builder()
       .appName("scylla-migrator")
       .config("spark.cassandra.input.fetch.size_in_rows", 50000)
-      .config("spark.cassandra.output.consistency.level", "LOCAL_ONE")
       .config("spark.cassandra.output.batch.size.bytes", 100L * 1024L * 1024L)
       .getOrCreate
 
