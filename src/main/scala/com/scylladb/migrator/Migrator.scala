@@ -3,6 +3,7 @@ package com.scylladb.migrator
 import com.datastax.spark.connector._
 import com.datastax.spark.connector.cql.{ CassandraConnector, CassandraConnectorConf, Schema, TableDef }
 import com.datastax.spark.connector.rdd.ReadConf
+import com.datastax.spark.connector.types.CassandraOption
 import com.datastax.spark.connector.writer.{ SqlRowWriter, TTLOption, TimestampOption, WriteConf }
 import org.apache.log4j.LogManager
 import org.apache.spark.broadcast.Broadcast
@@ -156,7 +157,8 @@ object Migrator {
           .flatMap {
             case (fieldName, (ordinal, ttlOrdinal, writetimeOrdinal)) if !row.isNullAt(writetimeOrdinal) =>
               Some((fieldName,
-               row.get(ordinal),
+               if (row.isNullAt(ordinal)) CassandraOption.Null
+               else CassandraOption.Value(row.get(ordinal)),
                if (row.isNullAt(ttlOrdinal)) None
                else Some(row.getLong(ttlOrdinal)),
                row.getLong(writetimeOrdinal)))
@@ -174,8 +176,7 @@ object Migrator {
                     if (row.isNullAt(ord)) None
                     else Some(row.get(ord))
                   }
-                  .orElse(fields.get(field.name))
-                  .orNull
+                  .getOrElse(fields.getOrElse(field.name, CassandraOption.Unset))
               } ++ Seq(ttl.getOrElse(0L), writetime)
 
               Row(newValues: _*)
