@@ -55,34 +55,75 @@ object Renames {
 
 case class Rename(from: String, to: String)
 
+object AnotherCustomUUIDConverter extends NullableTypeConverter[UUID] {
+  def targetTypeTag = implicitly[TypeTag[UUID]]
+  def convertPF = {
+    case x: UUID   => x
+    case x: String => UUID.fromString(x)
+    case x: UTF8String =>
+      UUID.fromString(new String(x.getBytes, StandardCharsets.UTF_8))
+  }
+}
+
+case object CustomTimeUUIDType extends PrimitiveColumnType[UUID] {
+  def scalaTypeTag = implicitly[TypeTag[UUID]]
+  def cqlTypeName = "timeuuid"
+  def converterToCassandra =
+    new TypeConverter.OptionToNullConverter(AnotherCustomUUIDConverter)
+}
+
+object CustomUUIDConverter extends CustomDriverConverter {
+  import org.apache.spark.sql.{types => catalystTypes}
+  import com.datastax.driver.core.DataType
+  import com.datastax.spark.connector.types.ColumnType
+
+  override val fromDriverRowExtension
+    : PartialFunction[DataType, ColumnType[_]] = {
+    case dataType if dataType.getName == DataType.timeuuid().getName =>
+      CustomTimeUUIDType
+  }
+
+  override val catalystDataType
+    : PartialFunction[ColumnType[_], catalystTypes.DataType] = {
+    case CustomTimeUUIDType => catalystTypes.StringType
+  }
+}
+
 object Migrator {
   val log = LogManager.getLogger("com.scylladb.migrator")
 
-  case class Target(cluster: String, host: String, port: Int, keyspace: String,
-    table: String, splitCount: Option[Int] = None, connectionCount: Int)
+  case class Target(cluster: String,
+                    host: String,
+                    port: Int,
+                    keyspace: String,
+                    table: String,
+                    splitCount: Option[Int] = None,
+                    connectionCount: Int)
   case class Config(source: Target, dest: Target)
 
-  def createSelection(tableDef: TableDef, origSchema: StructType): (List[ColumnRef], StructType) = {
+  def createSelection(tableDef: TableDef,
+                      origSchema: StructType): (List[ColumnRef], StructType) = {
     val columnRefs = for {
       colName <- origSchema.fieldNames.toList
       isRegular = tableDef.regularColumns.exists(_.ref.columnName == colName)
       colRef <- if (isRegular)
-                  List[ColumnRef](colName,
-                                  colName.ttl as s"${colName}_ttl",
-                                  colName.writeTime as s"${colName}_writetime")
-                else List[ColumnRef](colName)
+        List[ColumnRef](colName,
+                        colName.ttl as s"${colName}_ttl",
+                        colName.writeTime as s"${colName}_writetime")
+      else List[ColumnRef](colName)
     } yield colRef
     println("ColumnRefs generated for selection:")
     println(columnRefs.mkString("\n"))
 
     val schema = StructType(for {
       origField <- origSchema.fields
-      isRegular = tableDef.regularColumns.exists(_.ref.columnName == origField.name)
+      isRegular = tableDef.regularColumns.exists(
+        _.ref.columnName == origField.name)
       field <- if (isRegular)
-                 List(origField,
-                      StructField(s"${origField.name}_ttl", LongType, true),
-                      StructField(s"${origField.name}_writetime", LongType, true))
-               else List(origField)
+        List(origField,
+             StructField(s"${origField.name}_ttl", LongType, true),
+             StructField(s"${origField.name}_writetime", LongType, true))
+      else List(origField)
     } yield field)
 
     println("Schema generated with TTLs and Writetimes:")
@@ -91,34 +132,41 @@ object Migrator {
     (columnRefs, schema)
   }
 
-
-  def readDataframe(source: Target)(implicit spark: SparkSession): (StructType, TableDef, DataFrame) = {
-    spark.setCassandraConf(source.cluster,
+  def readDataframe(source: Target)(
+      implicit spark: SparkSession): (StructType, TableDef, DataFrame) = {
+    spark.setCassandraConf(
+      source.cluster,
       CassandraConnectorConf.ConnectionHostParam.option(source.host) ++
         CassandraConnectorConf.ConnectionPortParam.option(source.port))
     spark.setCassandraConf(source.cluster,
-      CassandraConnectorConf.MaxConnectionsPerExecutorParam.option(source.connectionCount))
+                           CassandraConnectorConf.MaxConnectionsPerExecutorParam
+                             .option(source.connectionCount))
 
     implicit val connector = CassandraConnector(
       spark.sparkContext.getConf.setAll(
         CassandraConnectorConf.ConnectionHostParam.option(source.host) ++
-        CassandraConnectorConf.ConnectionPortParam.option(source.port) ++
-        CassandraConnectorConf.MaxConnectionsPerExecutorParam.option(source.connectionCount)
+          CassandraConnectorConf.ConnectionPortParam.option(source.port) ++
+          CassandraConnectorConf.MaxConnectionsPerExecutorParam.option(
+            source.connectionCount)
       )
     )
 
-    implicit val readConf = ReadConf.fromSparkConf(spark.sparkContext.getConf)
+    implicit val readConf = ReadConf
+      .fromSparkConf(spark.sparkContext.getConf)
       .copy(splitCount = source.splitCount)
 
-    val tableDef = Schema.tableFromCassandra(connector, source.keyspace, source.table)
+    val tableDef =
+      Schema.tableFromCassandra(connector, source.keyspace, source.table)
     println("TableDef retrieved for source:")
     println(tableDef)
 
-    val origSchema = StructType(tableDef.columns.map(DataTypeConverter.toStructField))
+    val origSchema = StructType(
+      tableDef.columns.map(DataTypeConverter.toStructField))
     println("Original schema loaded:")
     origSchema.printTreeString()
 
-    val (selection, schemaWithTtlsWritetimes) = createSelection(tableDef, origSchema)
+    val (selection, schemaWithTtlsWritetimes) =
+      createSelection(tableDef, origSchema)
 
     val rdd = spark.sparkContext
       .cassandraTable[CassandraSQLRow](source.keyspace, source.table)
@@ -127,20 +175,29 @@ object Migrator {
 
     // spark.createDataFrame does something weird with the encoder (tries to convert the row again),
     // so it's important to use createDataset with an explciit encoder instead here
-    (origSchema, tableDef, spark.createDataset(rdd)(RowEncoder(schemaWithTtlsWritetimes)))
+    (origSchema,
+     tableDef,
+     spark.createDataset(rdd)(RowEncoder(schemaWithTtlsWritetimes)))
   }
 
-  def writeDataframe(dest: Target, df: DataFrame, renames: Renames, origSchema: StructType, tableDef: TableDef)(implicit spark: SparkSession): Unit = {
-    spark.setCassandraConf(dest.cluster,
+  def writeDataframe(dest: Target,
+                     df: DataFrame,
+                     renames: Renames,
+                     origSchema: StructType,
+                     tableDef: TableDef)(implicit spark: SparkSession): Unit = {
+    spark.setCassandraConf(
+      dest.cluster,
       CassandraConnectorConf.ConnectionHostParam.option(dest.host) ++
         CassandraConnectorConf.ConnectionPortParam.option(dest.port))
     spark.setCassandraConf(dest.cluster,
-      CassandraConnectorConf.MaxConnectionsPerExecutorParam.option(dest.connectionCount))
+                           CassandraConnectorConf.MaxConnectionsPerExecutorParam
+                             .option(dest.connectionCount))
     implicit val connector = CassandraConnector(
       spark.sparkContext.getConf.setAll(
         CassandraConnectorConf.ConnectionHostParam.option(dest.host) ++
           CassandraConnectorConf.ConnectionPortParam.option(dest.port) ++
-          CassandraConnectorConf.MaxConnectionsPerExecutorParam.option(dest.connectionCount)
+          CassandraConnectorConf.MaxConnectionsPerExecutorParam.option(
+            dest.connectionCount)
       )
     )
 
@@ -163,16 +220,18 @@ object Migrator {
           if tableDef.regularColumns.exists(_.ref.columnName == origField.name)
           (_, fieldOrdinal) <- zipped.find(_._1.name == origField.name)
           (_, ttlOrdinal) <- zipped.find(_._1.name == s"${origField.name}_ttl")
-          (_, writetimeOrdinal) <- zipped.find(_._1.name == s"${origField.name}_writetime")
-        } yield origField.name -> (fieldOrdinal, ttlOrdinal, writetimeOrdinal)).toMap
+          (_, writetimeOrdinal) <- zipped.find(
+            _._1.name == s"${origField.name}_writetime")
+        } yield
+          origField.name -> (fieldOrdinal, ttlOrdinal, writetimeOrdinal)).toMap
       }
 
     val broadcastTableDef = spark.sparkContext.broadcast(tableDef)
     val broadcastSchema = spark.sparkContext.broadcast(origSchema)
     val finalSchema = StructType(
       origSchema.fields ++
-      Seq(StructField("ttl", LongType, true),
-          StructField("writetime", LongType, true))
+        Seq(StructField("ttl", LongType, true),
+            StructField("writetime", LongType, true))
     )
 
     println("Schema that'll be used for writing to Scylla:")
@@ -182,13 +241,15 @@ object Migrator {
       .flatMap { row =>
         regularKeyOrdinals.value
           .flatMap {
-            case (fieldName, (ordinal, ttlOrdinal, writetimeOrdinal)) if !row.isNullAt(writetimeOrdinal) =>
-              Some((fieldName,
-               if (row.isNullAt(ordinal)) CassandraOption.Null
-               else CassandraOption.Value(row.get(ordinal)),
-               if (row.isNullAt(ttlOrdinal)) None
-               else Some(row.getLong(ttlOrdinal)),
-               row.getLong(writetimeOrdinal)))
+            case (fieldName, (ordinal, ttlOrdinal, writetimeOrdinal))
+                if !row.isNullAt(writetimeOrdinal) =>
+              Some(
+                (fieldName,
+                 if (row.isNullAt(ordinal)) CassandraOption.Null
+                 else CassandraOption.Value(row.get(ordinal)),
+                 if (row.isNullAt(ttlOrdinal)) None
+                 else Some(row.getLong(ttlOrdinal)),
+                 row.getLong(writetimeOrdinal)))
 
             case _ =>
               None
@@ -198,12 +259,14 @@ object Migrator {
           .map {
             case ((ttl, writetime), fields) =>
               val newValues = broadcastSchema.value.fields.map { field =>
-                primaryKeyOrdinals.value.get(field.name)
+                primaryKeyOrdinals.value
+                  .get(field.name)
                   .flatMap { ord =>
                     if (row.isNullAt(ord)) None
                     else Some(row.get(ord))
                   }
-                  .getOrElse(fields.getOrElse(field.name, CassandraOption.Unset))
+                  .getOrElse(fields.getOrElse(field.name,
+                                              CassandraOption.Unset))
               } ++ Seq(ttl.getOrElse(0L), writetime)
 
               Row(newValues: _*)
@@ -247,6 +310,8 @@ object Migrator {
       .appName("scylla-migrator")
       .config("spark.cassandra.input.fetch.size_in_rows", 50000)
       .config("spark.cassandra.output.batch.size.bytes", 100L * 1024L * 1024L)
+      .config("spark.cassandra.dev.customFromDriver",
+              "com.scylladb.migrator.CustomUUIDConverter")
       .getOrCreate
 
     import spark.implicits._
