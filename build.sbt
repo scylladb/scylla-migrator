@@ -16,6 +16,8 @@ lazy val root = (project in file(".")).
     parallelExecution in Test := false,
     fork := true,
 
+    scalafmtOnCompile := true,
+
     libraryDependencies ++= Seq(
       "org.apache.spark" %% "spark-streaming" % "2.3.1" % "provided",
       "org.apache.spark" %% "spark-sql" % "2.3.1" % "provided",

@@ -1,29 +1,56 @@
 package com.scylladb.migrator
 
 import com.datastax.spark.connector._
-import com.datastax.spark.connector.cql.{ CassandraConnector, CassandraConnectorConf, Schema, TableDef }
+import com.datastax.spark.connector.cql.{
+  CassandraConnector,
+  CassandraConnectorConf,
+  Schema,
+  TableDef
+}
+import java.nio.charset.StandardCharsets
+import com.datastax.spark.connector.types.NullableTypeConverter
+import com.datastax.spark.connector.types.TypeConverter
+import java.util.UUID
+import com.datastax.spark.connector.types.PrimitiveColumnType
+import com.datastax.spark.connector.types.CustomDriverConverter
 import com.datastax.spark.connector.rdd.ReadConf
 import com.datastax.spark.connector.types.CassandraOption
-import com.datastax.spark.connector.writer.{ SqlRowWriter, TTLOption, TimestampOption, WriteConf }
+import com.datastax.spark.connector.writer.{
+  SqlRowWriter,
+  TTLOption,
+  TimestampOption,
+  WriteConf
+}
 import org.apache.log4j.LogManager
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql._
 import org.apache.spark.sql.cassandra._
 import org.apache.spark.sql.catalyst.encoders.RowEncoder
-import org.apache.spark.sql.types.{ DataTypes, LongType, StringType, StructField, StructType }
+import org.apache.spark.sql.types.{
+  DataTypes,
+  LongType,
+  StringType,
+  StructField,
+  StructType
+}
 import org.apache.spark.unsafe.types.UTF8String
 import scala.reflect.ClassTag
+import scala.reflect.runtime.universe.TypeTag
 
 case class Renames(renames: List[Rename])
 object Renames {
   def fromString(str: String): Renames =
-    Renames(str.split(';').flatMap {
-      _.split(':') match {
-        case Array(from, to) => Some(Rename(from, to))
-        case _ => None
-      }
-    }.toList)
+    Renames(
+      str
+        .split(';')
+        .flatMap {
+          _.split(':') match {
+            case Array(from, to) => Some(Rename(from, to))
+            case _               => None
+          }
+        }
+        .toList)
 }
 
 case class Rename(from: String, to: String)
@@ -200,8 +227,13 @@ object Migrator {
     timeTransformations.rdd.saveToCassandra(
       dest.keyspace,
       dest.table,
-      SomeColumns(renamedSchema.fields.map(x => x.name: ColumnRef).filterNot(ref => ref.columnName == "ttl" || ref.columnName == "writetime"): _*),
-      WriteConf.fromSparkConf(spark.sparkContext.getConf)
+      SomeColumns(
+        renamedSchema.fields
+          .map(x => x.name: ColumnRef)
+          .filterNot(ref =>
+            ref.columnName == "ttl" || ref.columnName == "writetime"): _*),
+      WriteConf
+        .fromSparkConf(spark.sparkContext.getConf)
         .copy(
           ttl = TTLOption.perRow("ttl"),
           timestamp = TimestampOption.perRow("writetime")
@@ -210,7 +242,8 @@ object Migrator {
   }
 
   def main(args: Array[String]): Unit = {
-    implicit val spark = SparkSession.builder()
+    implicit val spark = SparkSession
+      .builder()
       .appName("scylla-migrator")
       .config("spark.cassandra.input.fetch.size_in_rows", 50000)
       .config("spark.cassandra.output.batch.size.bytes", 100L * 1024L * 1024L)
@@ -225,10 +258,14 @@ object Migrator {
       spark.conf.get("spark.scylla.source.keyspace"),
       spark.conf.get("spark.scylla.source.table"),
       spark.conf.getOption("spark.scylla.source.splitCount").map(_.toInt),
-      spark.conf.getOption("spark.scylla.source.connections").map(_.toInt).getOrElse(1)
+      spark.conf
+        .getOption("spark.scylla.source.connections")
+        .map(_.toInt)
+        .getOrElse(1)
     )
 
-    val renames = spark.conf.getOption("spark.scylla.dest.renames")
+    val renames = spark.conf
+      .getOption("spark.scylla.dest.renames")
       .map(Renames.fromString)
       .getOrElse(Renames(Nil))
 
@@ -238,7 +275,10 @@ object Migrator {
       spark.conf.get("spark.scylla.dest.port").toInt,
       spark.conf.get("spark.scylla.dest.keyspace"),
       spark.conf.get("spark.scylla.dest.table"),
-      connectionCount = spark.conf.getOption("spark.scylla.dest.connections").map(_.toInt).getOrElse(1)
+      connectionCount = spark.conf
+        .getOption("spark.scylla.dest.connections")
+        .map(_.toInt)
+        .getOrElse(1)
     )
 
     val (origSchema, tableDef, sourceDF) = readDataframe(source)
