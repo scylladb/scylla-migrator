@@ -72,6 +72,13 @@ case object CustomTimeUUIDType extends PrimitiveColumnType[UUID] {
     new TypeConverter.OptionToNullConverter(AnotherCustomUUIDConverter)
 }
 
+case object CustomUUIDType extends PrimitiveColumnType[UUID] {
+  def scalaTypeTag = implicitly[TypeTag[UUID]]
+  def cqlTypeName = "uuid"
+  def converterToCassandra =
+    new TypeConverter.OptionToNullConverter(AnotherCustomUUIDConverter)
+}
+
 object CustomUUIDConverter extends CustomDriverConverter {
   import org.apache.spark.sql.{types => catalystTypes}
   import com.datastax.driver.core.DataType
@@ -81,11 +88,14 @@ object CustomUUIDConverter extends CustomDriverConverter {
     : PartialFunction[DataType, ColumnType[_]] = {
     case dataType if dataType.getName == DataType.timeuuid().getName =>
       CustomTimeUUIDType
+    case dataType if dataType.getName == DataType.uuid().getName =>
+      CustomUUIDType
   }
 
   override val catalystDataType
     : PartialFunction[ColumnType[_], catalystTypes.DataType] = {
     case CustomTimeUUIDType => catalystTypes.StringType
+    case CustomUUIDType     => catalystTypes.StringType
   }
 }
 
