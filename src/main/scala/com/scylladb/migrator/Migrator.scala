@@ -115,7 +115,7 @@ object Migrator {
                       origSchema: StructType,
                       preserveTimes: Boolean): (List[ColumnRef], StructType) = {
     import com.datastax.driver.core.DataType
-    if (tableDef.columnTypes.exists(_.isCollection))
+    if (tableDef.columnTypes.exists(_.isCollection) && preserveTimes)
       throw new Exception(
         "TTL/Writetime preservation is unsupported for tables with collection types")
 
