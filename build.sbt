@@ -22,11 +22,18 @@ lazy val root = (project in file(".")).
       "org.apache.spark" %% "spark-streaming" % "2.3.1" % "provided",
       "org.apache.spark" %% "spark-sql" % "2.3.1" % "provided",
 
-      "com.datastax.spark" %% "spark-cassandra-connector" % "2.3.0",
+      "org.yaml" % "snakeyaml" % "1.23",
+      "io.circe" %% "circe-yaml" % "0.9.0",
+      "io.circe" %% "circe-generic" % "0.9.0",
+
       "commons-configuration" % "commons-configuration" % "1.10",
 
       "org.scalatest" %% "scalatest" % "3.0.1" % "test",
       "org.scalacheck" %% "scalacheck" % "1.13.4" % "test"
+    ),
+
+    assemblyShadeRules in assembly := Seq(
+      ShadeRule.rename("org.yaml.snakeyaml.**" -> "shaded.@1").inAll
     ),
 
     // uses compile classpath for the run task, including "provided" jar (cf http://stackoverflow.com/a/21803413/3827)

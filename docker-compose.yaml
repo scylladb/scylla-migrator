@@ -43,6 +43,7 @@ services:
     volumes:
       - ./data/spark-master:/tmp/data
       - ./target/scala-2.11:/jars
+      - ./:/app
 
   spark-worker:
     image: gettyimages/spark

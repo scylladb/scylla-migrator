@@ -1,0 +1,46 @@
+# Configuration for the source database to copy from
+source:
+  host: cassandra
+  port: 9042
+  keyspace: stocks
+  table: stocks
+  # Number of splits to use - this should be at minimum the amount of cores
+  # available in the Spark cluster, and optimally more; higher splits will lead
+  # to more fine-grained resumes. Aim for 8 * (Spark cores).
+  splitCount: 256
+  # Number of connections to use to Cassandra when copying
+  connections: 8
+  # Number of rows to fetch in each read
+  fetchSize: 1000
+
+# Configuration for the database you're copying into
+target:
+  host: scylla 
+  port: 9042
+  # NOTE: The destination table must have the same schema as the source table.
+  # If you'd like to rename columns, that's ok - see the renames parameter below.
+  keyspace: stocks
+  table: stocks
+  # Number of connections to use to Scylla when copying
+  connections: 16
+
+# Preserve TTLs and WRITETIMEs of cells in the source database. Note that this
+# option is *incompatible* when copying tables with collections (lists, maps, sets).
+preserveTimestamps: false
+
+# Savepoints are configuration files (like this one), saved by the migrator as it
+# runs. Their purpose is to skip token ranges that have already been copied.
+savepoints:
+  # Where should savepoint configurations be stored? This is a path on the host running
+  # the Spark driver - usually the Spark master.
+  path: /app/savepoints
+  # Interval in which savepoints will be created
+  intervalSeconds: 300
+
+# Column renaming configuration. If you'd like to rename any columns, specify them like so:
+# - from: source_column_name
+#   to: dest_column_name
+renames: []
+# Which token ranges to skip. You shouldn't need to fill this in normally; the migrator will
+# create a savepoint file with this filled.
+skipTokenRanges: []

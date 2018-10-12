@@ -1,0 +1,4 @@
+[submodule "spark-cassandra-connector"]
+	path = spark-cassandra-connector
+	url = https://github.com/iravid/spark-cassandra-connector
+	branch = feature/track-token-ranges
