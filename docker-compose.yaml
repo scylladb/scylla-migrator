@@ -2,7 +2,7 @@ version: '3'
 
 services:
   scylla:
-    image: scylladb/scylla:2.2.0
+    image: scylladb/scylla:3.0.3
     networks:
       - scylla
     volumes:
@@ -17,7 +17,7 @@ services:
       - ./data/cassandra:/var/lib/cassandra
 
   spark-master:
-    image: gettyimages/spark
+    image: gettyimages/spark:2.3.1-hadoop-3.0
     command: bin/spark-class org.apache.spark.deploy.master.Master -h spark-master
     hostname: master
     environment:
@@ -46,7 +46,7 @@ services:
       - ./:/app
 
   spark-worker:
-    image: gettyimages/spark
+    image: gettyimages/spark:2.3.1-hadoop-3.0
     command: bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     hostname: spark-worker
     environment:

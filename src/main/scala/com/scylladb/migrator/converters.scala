@@ -38,20 +38,18 @@ case object CustomUUIDType extends PrimitiveColumnType[UUID] {
 }
 
 object CustomUUIDConverter extends CustomDriverConverter {
-  import org.apache.spark.sql.{types => catalystTypes}
+  import org.apache.spark.sql.{ types => catalystTypes }
   import com.datastax.driver.core.DataType
   import com.datastax.spark.connector.types.ColumnType
 
-  override val fromDriverRowExtension
-    : PartialFunction[DataType, ColumnType[_]] = {
+  override val fromDriverRowExtension: PartialFunction[DataType, ColumnType[_]] = {
     case dataType if dataType.getName == DataType.timeuuid().getName =>
       CustomTimeUUIDType
     case dataType if dataType.getName == DataType.uuid().getName =>
       CustomUUIDType
   }
 
-  override val catalystDataType
-    : PartialFunction[ColumnType[_], catalystTypes.DataType] = {
+  override val catalystDataType: PartialFunction[ColumnType[_], catalystTypes.DataType] = {
     case CustomTimeUUIDType => catalystTypes.StringType
     case CustomUUIDType     => catalystTypes.StringType
   }

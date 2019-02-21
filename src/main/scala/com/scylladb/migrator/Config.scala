@@ -2,7 +2,7 @@ package com.scylladb.migrator
 
 import cats.implicits._
 import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, Paths}
+import java.nio.file.{ Files, Paths }
 import io.circe._, io.circe.syntax._, io.circe.generic.auto._
 import io.circe.yaml._, io.circe.yaml.syntax._
 
