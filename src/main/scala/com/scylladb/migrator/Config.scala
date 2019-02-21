@@ -27,8 +27,11 @@ object MigratorConfig {
   }
 }
 
+case class Credentials(username: String, password: String)
+
 case class SourceSettings(host: String,
                           port: Int,
+                          credentials: Option[Credentials],
                           keyspace: String,
                           table: String,
                           splitCount: Option[Int],
@@ -37,6 +40,7 @@ case class SourceSettings(host: String,
 
 case class TargetSettings(host: String,
                           port: Int,
+                          credentials: Option[Credentials],
                           keyspace: String,
                           table: String,
                           connections: Option[Int])

@@ -2,6 +2,9 @@
 source:
   host: cassandra
   port: 9042
+  # credentials:
+  #   username: <user>
+  #   password: <pass>
   keyspace: stocks
   table: stocks
   # Number of splits to use - this should be at minimum the amount of cores
@@ -17,6 +20,9 @@ source:
 target:
   host: scylla 
   port: 9042
+  # credentials:
+  #   username: <user>
+  #   password: <pass>
   # NOTE: The destination table must have the same schema as the source table.
   # If you'd like to rename columns, that's ok - see the renames parameter below.
   keyspace: stocks

@@ -2,19 +2,16 @@ package com.scylladb.migrator
 
 import com.datastax.driver.core.ProtocolOptions
 import com.datastax.spark.connector._
-import com.datastax.spark.connector.cql.{
-  CassandraConnector,
-  CassandraConnectorConf,
-  Schema,
-  TableDef
-}
+import com.datastax.spark.connector.cql._
 import com.datastax.spark.connector.rdd.partitioner.dht.LongToken
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.ScheduledThreadPoolExecutor
+
 import scala.util.control.NonFatal
 import java.nio.charset.StandardCharsets
 import java.nio.file.Paths
 import java.nio.file.Files
+
 import com.datastax.spark.connector.writer.TokenRangeAccumulator
 import com.datastax.spark.connector.rdd.ReadConf
 import com.datastax.spark.connector.types.CassandraOption
@@ -35,19 +32,9 @@ import sun.misc.{Signal, SignalHandler}
 object Migrator {
   val log = LogManager.getLogger("com.scylladb.migrator")
 
-  case class Target(cluster: String,
-                    host: String,
-                    port: Int,
-                    keyspace: String,
-                    table: String,
-                    splitCount: Option[Int] = None,
-                    connectionCount: Int)
-  case class Config(source: Target, dest: Target)
-
   def createSelection(tableDef: TableDef,
                       origSchema: StructType,
                       preserveTimes: Boolean): (List[ColumnRef], StructType) = {
-    import com.datastax.driver.core.DataType
     if (tableDef.columnTypes.exists(_.isCollection) && preserveTimes)
       throw new Exception(
         "TTL/Writetime preservation is unsupported for tables with collection types")
@@ -98,7 +85,14 @@ object Migrator {
       CassandraConnectorConf(
         spark.sparkContext.getConf.setAll(
           CassandraConnectorConf.ConnectionHostParam.option(source.host) ++
-            CassandraConnectorConf.ConnectionPortParam.option(source.port)
+            CassandraConnectorConf.ConnectionPortParam.option(source.port) ++
+            source.credentials
+              .map {
+                case Credentials(user, pass) =>
+                  DefaultAuthConfFactory.UserNameParam.option(user) ++
+                    DefaultAuthConfFactory.PasswordParam.option(pass)
+              }
+              .getOrElse(Map())
         )
       ).copy(
         maxConnectionsPerExecutor = source.connections,
@@ -161,7 +155,14 @@ object Migrator {
       CassandraConnectorConf(
         spark.sparkContext.getConf.setAll(
           CassandraConnectorConf.ConnectionHostParam.option(target.host) ++
-            CassandraConnectorConf.ConnectionPortParam.option(target.port)
+            CassandraConnectorConf.ConnectionPortParam.option(target.port) ++
+            target.credentials
+              .map {
+                case Credentials(user, pass) =>
+                  DefaultAuthConfFactory.UserNameParam.option(user) ++
+                    DefaultAuthConfFactory.PasswordParam.option(pass)
+              }
+              .getOrElse(Map())
         )
       ).copy(
         maxConnectionsPerExecutor = target.connections,
@@ -293,8 +294,6 @@ object Migrator {
       MigratorConfig.loadFrom(spark.conf.get("spark.scylla.config"))
 
     log.info(s"Loaded config: ${migratorConfig}")
-
-    import spark.implicits._
 
     val (origSchema, tableDef, sourceDF) =
       readDataframe(migratorConfig.source,
