@@ -35,19 +35,9 @@ import sun.misc.{Signal, SignalHandler}
 object Migrator {
   val log = LogManager.getLogger("com.scylladb.migrator")
 
-  case class Target(cluster: String,
-                    host: String,
-                    port: Int,
-                    keyspace: String,
-                    table: String,
-                    splitCount: Option[Int] = None,
-                    connectionCount: Int)
-  case class Config(source: Target, dest: Target)
-
   def createSelection(tableDef: TableDef,
                       origSchema: StructType,
                       preserveTimes: Boolean): (List[ColumnRef], StructType) = {
-    import com.datastax.driver.core.DataType
     if (tableDef.columnTypes.exists(_.isCollection) && preserveTimes)
       throw new Exception(
         "TTL/Writetime preservation is unsupported for tables with collection types")
@@ -293,8 +283,6 @@ object Migrator {
       MigratorConfig.loadFrom(spark.conf.get("spark.scylla.config"))
 
     log.info(s"Loaded config: ${migratorConfig}")
-
-    import spark.implicits._
 
     val (origSchema, tableDef, sourceDF) =
       readDataframe(migratorConfig.source,
