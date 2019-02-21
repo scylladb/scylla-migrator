@@ -2,19 +2,16 @@ package com.scylladb.migrator
 
 import com.datastax.driver.core.ProtocolOptions
 import com.datastax.spark.connector._
-import com.datastax.spark.connector.cql.{
-  CassandraConnector,
-  CassandraConnectorConf,
-  Schema,
-  TableDef
-}
+import com.datastax.spark.connector.cql._
 import com.datastax.spark.connector.rdd.partitioner.dht.LongToken
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.ScheduledThreadPoolExecutor
+
 import scala.util.control.NonFatal
 import java.nio.charset.StandardCharsets
 import java.nio.file.Paths
 import java.nio.file.Files
+
 import com.datastax.spark.connector.writer.TokenRangeAccumulator
 import com.datastax.spark.connector.rdd.ReadConf
 import com.datastax.spark.connector.types.CassandraOption
@@ -88,7 +85,14 @@ object Migrator {
       CassandraConnectorConf(
         spark.sparkContext.getConf.setAll(
           CassandraConnectorConf.ConnectionHostParam.option(source.host) ++
-            CassandraConnectorConf.ConnectionPortParam.option(source.port)
+            CassandraConnectorConf.ConnectionPortParam.option(source.port) ++
+            source.credentials
+              .map {
+                case Credentials(user, pass) =>
+                  DefaultAuthConfFactory.UserNameParam.option(user) ++
+                    DefaultAuthConfFactory.PasswordParam.option(pass)
+              }
+              .getOrElse(Map())
         )
       ).copy(
         maxConnectionsPerExecutor = source.connections,
@@ -151,7 +155,14 @@ object Migrator {
       CassandraConnectorConf(
         spark.sparkContext.getConf.setAll(
           CassandraConnectorConf.ConnectionHostParam.option(target.host) ++
-            CassandraConnectorConf.ConnectionPortParam.option(target.port)
+            CassandraConnectorConf.ConnectionPortParam.option(target.port) ++
+            target.credentials
+              .map {
+                case Credentials(user, pass) =>
+                  DefaultAuthConfFactory.UserNameParam.option(user) ++
+                    DefaultAuthConfFactory.PasswordParam.option(pass)
+              }
+              .getOrElse(Map())
         )
       ).copy(
         maxConnectionsPerExecutor = target.connections,
