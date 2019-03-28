@@ -83,7 +83,12 @@ object Migrator {
         Selection(columnRefs.toList, schema, CopyType.WithTimestampPreservation)
 
       case CopyType.NoTimestampPreservation =>
-        val columnRefs = tableDef.allColumns.map(_.ref).toList
+        // We're not using the `tableDef.allColumns` property here in order to generate
+        // a schema that is consistent with the timestamp preservation case; the ordering
+        // must be (partition keys, clustering keys, regular columns).
+        val columnRefs = (tableDef.partitionKey.map(_.ref) ++
+          tableDef.clusteringColumns.map(_.ref) ++
+          tableDef.regularColumns.map(_.ref)).toList
 
         log.info("ColumnRefs generated for selection:")
         log.info(columnRefs.mkString("\n"))
