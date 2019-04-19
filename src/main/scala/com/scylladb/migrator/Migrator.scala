@@ -1,21 +1,18 @@
 package com.scylladb.migrator
 
+import java.net.InetAddress
+import java.nio.charset.StandardCharsets
+import java.nio.file.{ Files, Paths }
+import java.util.concurrent.{ ScheduledThreadPoolExecutor, TimeUnit }
+
 import com.datastax.spark.connector._
 import com.datastax.spark.connector.cql._
-import com.datastax.spark.connector.rdd.partitioner.dht.LongToken
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.ScheduledThreadPoolExecutor
-
-import scala.util.control.NonFatal
-import java.nio.charset.StandardCharsets
-import java.nio.file.Paths
-import java.nio.file.Files
-
-import com.datastax.spark.connector.writer.TokenRangeAccumulator
 import com.datastax.spark.connector.rdd.ReadConf
+import com.datastax.spark.connector.rdd.partitioner.dht.LongToken
 import com.datastax.spark.connector.types.CassandraOption
-import com.datastax.spark.connector.writer.{ SqlRowWriter, TTLOption, TimestampOption, WriteConf }
-import org.apache.log4j.LogManager
+import com.datastax.spark.connector.writer._
+import org.apache.log4j.{ Level, LogManager, Logger }
+import org.apache.spark.SparkConf
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql._
 import org.apache.spark.sql.cassandra._
@@ -23,12 +20,44 @@ import org.apache.spark.sql.catalyst.encoders.RowEncoder
 import org.apache.spark.sql.types.{ LongType, StructField, StructType }
 import sun.misc.{ Signal, SignalHandler }
 
+import scala.util.control.NonFatal
+
 sealed trait CopyType
 object CopyType {
   case object WithTimestampPreservation extends CopyType
   case object NoTimestampPreservation extends CopyType
 }
 case class Selection(columnRefs: List[ColumnRef], schema: StructType, copyType: CopyType)
+
+object Connectors {
+  def sourceConnector(sparkConf: SparkConf, sourceSettings: SourceSettings) =
+    new CassandraConnector(
+      CassandraConnectorConf(sparkConf).copy(
+        hosts = Set(InetAddress.getByName(sourceSettings.host)),
+        port  = sourceSettings.port,
+        authConf = sourceSettings.credentials match {
+          case None                                  => NoAuthConf
+          case Some(Credentials(username, password)) => PasswordAuthConf(username, password)
+        },
+        maxConnectionsPerExecutor = sourceSettings.connections,
+        queryRetryCount           = -1
+      )
+    )
+
+  def targetConnector(sparkConf: SparkConf, targetSettings: TargetSettings) =
+    new CassandraConnector(
+      CassandraConnectorConf(sparkConf).copy(
+        hosts = Set(InetAddress.getByName(targetSettings.host)),
+        port  = targetSettings.port,
+        authConf = targetSettings.credentials match {
+          case None                                  => NoAuthConf
+          case Some(Credentials(username, password)) => PasswordAuthConf(username, password)
+        },
+        maxConnectionsPerExecutor = targetSettings.connections,
+        queryRetryCount           = -1
+      )
+    )
+}
 
 object Migrator {
   val log = LogManager.getLogger("com.scylladb.migrator")
@@ -102,36 +131,8 @@ object Migrator {
                     preserveTimes: Boolean,
                     tokenRangesToSkip: Set[(Long, Long)])(
     implicit spark: SparkSession): (StructType, TableDef, DataFrame, CopyType) = {
-    val clusterName = "source"
-    spark.setCassandraConf(
-      clusterName,
-      CassandraConnectorConf.ConnectionHostParam.option(source.host) ++
-        CassandraConnectorConf.ConnectionPortParam.option(source.port))
-    spark.setCassandraConf(
-      clusterName,
-      CassandraConnectorConf.MaxConnectionsPerExecutorParam
-        .option(source.connections))
-
-    implicit val connector = new CassandraConnector(
-      CassandraConnectorConf(
-        spark.sparkContext.getConf.setAll(
-          CassandraConnectorConf.ConnectionHostParam.option(source.host) ++
-            CassandraConnectorConf.ConnectionPortParam.option(source.port) ++
-            source.credentials
-              .map {
-                case Credentials(user, pass) =>
-                  DefaultAuthConfFactory.UserNameParam.option(user) ++
-                    DefaultAuthConfFactory.PasswordParam.option(pass)
-              }
-              .getOrElse(Map())
-        )
-      ).copy(
-        maxConnectionsPerExecutor = source.connections,
-        queryRetryCount           = -1
-      )
-    )
-
-    implicit val readConf = ReadConf
+    val connector = Connectors.sourceConnector(spark.sparkContext.getConf, source)
+    val readConf = ReadConf
       .fromSparkConf(spark.sparkContext.getConf)
       .copy(
         splitCount      = source.splitCount,
@@ -154,6 +155,8 @@ object Migrator {
         source.keyspace,
         source.table,
         (s, e) => !tokenRangesToSkip.contains((s, e)))
+      .withConnector(connector)
+      .withReadConf(readConf)
       .select(selection.columnRefs: _*)
       .asInstanceOf[RDD[Row]]
 
@@ -242,35 +245,7 @@ object Migrator {
     tableDef: TableDef,
     copyType: CopyType,
     tokenRangeAccumulator: TokenRangeAccumulator)(implicit spark: SparkSession): Unit = {
-    val clusterName = "dest"
-    spark.setCassandraConf(
-      clusterName,
-      CassandraConnectorConf.ConnectionHostParam.option(target.host) ++
-        CassandraConnectorConf.ConnectionPortParam.option(target.port))
-    spark.setCassandraConf(
-      clusterName,
-      CassandraConnectorConf.MaxConnectionsPerExecutorParam
-        .option(target.connections))
-
-    val connector = new CassandraConnector(
-      CassandraConnectorConf(
-        spark.sparkContext.getConf.setAll(
-          CassandraConnectorConf.ConnectionHostParam.option(target.host) ++
-            CassandraConnectorConf.ConnectionPortParam.option(target.port) ++
-            target.credentials
-              .map {
-                case Credentials(user, pass) =>
-                  DefaultAuthConfFactory.UserNameParam.option(user) ++
-                    DefaultAuthConfFactory.PasswordParam.option(pass)
-              }
-              .getOrElse(Map())
-        )
-      ).copy(
-        maxConnectionsPerExecutor = target.connections,
-        queryRetryCount           = -1
-      )
-    )
-
+    val connector = Connectors.targetConnector(spark.sparkContext.getConf, target)
     val writeConf = WriteConf.fromSparkConf(spark.sparkContext.getConf)
 
     val transformedDF = copyType match {
@@ -341,6 +316,11 @@ object Migrator {
       .config("spark.task.maxFailures", "1024")
       .config("spark.stage.maxConsecutiveAttempts", "60")
       .getOrCreate
+
+    Logger.getRootLogger.setLevel(Level.WARN)
+    log.setLevel(Level.INFO)
+    Logger.getLogger("org.apache.spark.scheduler.TaskSetManager").setLevel(Level.INFO)
+    Logger.getLogger("com.datastax.spark.connector.cql.CassandraConnector").setLevel(Level.INFO)
 
     val migratorConfig =
       MigratorConfig.loadFrom(spark.conf.get("spark.scylla.config"))

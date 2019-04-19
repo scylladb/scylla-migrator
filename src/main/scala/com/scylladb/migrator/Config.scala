@@ -1,8 +1,6 @@
 package com.scylladb.migrator
 
 import cats.implicits._
-import java.nio.charset.StandardCharsets
-import java.nio.file.{ Files, Paths }
 import io.circe._, io.circe.syntax._, io.circe.generic.auto._
 import io.circe.yaml._, io.circe.yaml.syntax._
 
@@ -11,10 +9,10 @@ case class MigratorConfig(source: SourceSettings,
                           preserveTimestamps: Boolean,
                           renames: List[Rename],
                           savepoints: Savepoints,
-                          skipTokenRanges: Set[(Long, Long)]) {
+                          skipTokenRanges: Set[(Long, Long)],
+                          validation: Validation) {
   def render: String = this.asJson.asYaml.spaces2
 }
-
 object MigratorConfig {
   def loadFrom(path: String): MigratorConfig = {
     val configData = scala.io.Source.fromFile(path).mkString
@@ -48,3 +46,8 @@ case class TargetSettings(host: String,
 case class Rename(from: String, to: String)
 
 case class Savepoints(intervalSeconds: Int, path: String)
+
+case class Validation(compareTimestamps: Boolean,
+                      ttlToleranceMillis: Long,
+                      failuresToFetch: Int,
+                      floatingPointTolerance: Double)
