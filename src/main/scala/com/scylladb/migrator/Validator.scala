@@ -26,19 +26,19 @@ object RowComparisonFailure {
     case object MismatchedColumnCount extends Item("Mismatched column count")
     case object MismatchedColumnNames extends Item("Mismatched column names")
     case class DifferingFieldValues(fields: List[String])
-        extends Item(s"Differing fields (${fields.mkString(", ")})")
+        extends Item(s"Differing fields: ${fields.mkString(", ")}")
     case class DifferingTtls(details: List[(String, Long)])
-        extends Item(s"Differing TTLs (${details
+        extends Item(s"Differing TTLs: ${details
           .map {
             case (fieldName, ttlDiff) => s"$fieldName ($ttlDiff millis)"
           }
-          .mkString(", ")})")
+          .mkString(", ")}")
     case class DifferingWritetimes(details: List[(String, Long)])
-        extends Item(s"Differing WRITETIMEs (${details
+        extends Item(s"Differing WRITETIMEs: ${details
           .map {
             case (fieldName, writeTimeDiff) => s"$fieldName ($writeTimeDiff millis)"
           }
-          .mkString(", ")})")
+          .mkString(", ")}")
   }
 
   def compareRows(left: CassandraRow,
