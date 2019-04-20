@@ -2,6 +2,7 @@ package com.scylladb.migrator
 
 import com.datastax.spark.connector._
 import com.datastax.spark.connector.cql._
+import com.datastax.spark.connector.rdd.ReadConf
 import com.google.common.math.DoubleMath
 import org.apache.log4j.{ Level, LogManager, Logger }
 import org.apache.spark.sql.SparkSession
@@ -181,6 +182,14 @@ object Validator {
       spark.sparkContext
         .cassandraTable(config.source.keyspace, config.source.table)
         .withConnector(sourceConnector)
+        .withReadConf(
+          ReadConf
+            .fromSparkConf(spark.sparkContext.getConf)
+            .copy(
+              splitCount      = config.source.splitCount,
+              fetchSizeInRows = config.source.fetchSize
+            )
+        )
         .select(primaryKeyProjection ++ regularColumnsProjection: _*)
     }
 
