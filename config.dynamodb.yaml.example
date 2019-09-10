@@ -1,0 +1,44 @@
+# Configuration for the source database to copy from
+# with dynamodb just the region and table name is needed
+source:
+  #hostURL: http://dynamodb.us-east-1.amazonaws.com
+  region: us-east-1
+  #port: 8000
+  #credentials:
+  #   accessKey: <user>
+  #   secretKey: <pass>
+  table: stocks
+
+  # below controls split factor
+  #scan_segments: 1
+
+  # throttling settings
+  #read_throughput: 1
+  #throughput_read_percent: 1
+
+  # performance limits for the spark application
+  #max_map_tasks: 1
+
+# Configuration for the database you're copying into
+# with scylla the host and port are a must
+target:
+  hostURL: http://scylla
+  #region: us-east-1
+  port: 8000
+  #credentials:
+  #   accessKey: <user>
+  #   secretKey: <pass>
+
+  # table is optional, if not set, source table name will be used
+  #table: stocks
+
+  # below controls split factor
+  #scan_segments: 1
+
+  # throttling settings
+  #read_throughput: 1
+  #throughput_read_percent: 1
+
+  # performance limits for the spark application
+  #max_map_tasks: 1
+
