@@ -5,6 +5,7 @@ Make sure `sbt` is installed on your machine, and run `build.sh`.
 # Configuring the Migrator
 
 Create a `config.dynamodb.yaml` for your migration using the template `config.dynamodb.yaml` in the repository root. Read the comments throughout carefully.
+Proper setting of this file will have serious impact on your performance and resources that are needed from spark workers!
 
 # Running on a live Spark cluster
 
@@ -19,6 +20,10 @@ spark-submit --class com.scylladb.migrator.DynamoDBMigrator \
   --conf spark.scylla.config=<path to config.dynamodb.yaml>
   <path to scylla-migrator-assembly-0.0.1.jar>
 ```
+
+It is suggested to increase the memory above defaults and depending on your config.
+E.g. you might add to above ```--conf "spark.executor.memory=100G" \```. 
+Alternative is to modify your defaults in your spark config and add enough resources.
 
 # Running locally
 
