@@ -30,7 +30,8 @@ case class DynamoDBSourceSettings(hostURL: Option[String],
                                   credentials: Option[AWSCredentials],
                                   table: String,
                                   scan_segments: Option[Int],
-                                  throughput_read_percent: Option[Int],
+                                  read_throughput: Option[Int],
+                                  throughput_read_percent: Option[Float],
                                   max_map_tasks: Option[Int])
 
 case class DynamoDBTargetSettings(hostURL: String,
@@ -39,5 +40,6 @@ case class DynamoDBTargetSettings(hostURL: String,
                                   credentials: Option[AWSCredentials],
                                   table: Option[String],
                                   scan_segments: Option[Int],
-                                  throughput_read_percent: Option[Int],
+                                  write_throughput: Option[Int],
+                                  throughput_write_percent: Option[Float],
                                   max_map_tasks: Option[Int])

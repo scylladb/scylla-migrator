@@ -25,7 +25,14 @@ object DynamoDBMigrator {
 
     val sc = spark.sparkContext
     val tableToRead = migratorConfig.source.table
-    var jobConf = getSourceDynamoDbJobConf(sc, tableToRead)
+    val jobConf = getSourceDynamoDbJobConf(
+      sc,
+      tableToRead,
+      migratorConfig.source.read_throughput,
+      migratorConfig.source.throughput_read_percent,
+      migratorConfig.source.max_map_tasks,
+      migratorConfig.source.scan_segments
+    )
     val sourceEndpoint = migratorConfig.source.hostURL
       .getOrElse("") + ":" + migratorConfig.source.port.getOrElse("")
     if (":" != sourceEndpoint) { //endpoint not needed if region is there
@@ -75,7 +82,14 @@ object DynamoDBMigrator {
       classOf[Text],
       classOf[DynamoDBItemWritable])
 
-    val dstJobConf = getDestinationDynamoDbJobConf(sc, tableToWrite)
+    val dstJobConf = getDestinationDynamoDbJobConf(
+      sc,
+      tableToWrite,
+      migratorConfig.target.write_throughput,
+      migratorConfig.target.throughput_write_percent,
+      migratorConfig.target.max_map_tasks,
+      migratorConfig.target.scan_segments
+    )
     dstJobConf.set(DynamoDBConstants.ENDPOINT, destEndpoint)
     dstJobConf.set(DynamoDBConstants.REGION_ID, destRegion)
     dstJobConf.set(DynamoDBConstants.DYNAMODB_ACCESS_KEY_CONF, destcreds.accessKey)
@@ -88,28 +102,60 @@ object DynamoDBMigrator {
   def getCommonDynamoDbJobConf(sc: SparkContext) = {
     val jobConf = new JobConf(sc.hadoopConfiguration)
 //    jobConf.set("dynamodb.servicename", "dynamodb")
-//    jobConf.set(DynamoDBConstants.MAX_MAP_TASKS,"1")
-//    jobConf.set(DynamoDBConstants.SCAN_SEGMENTS, "3") // control split factor
     jobConf
   }
 
-  def getSourceDynamoDbJobConf(sc: SparkContext, tableNameForRead: String) = {
+  def getSourceDynamoDbJobConf(sc: SparkContext,
+                               tableNameForRead: String,
+                               READ_THROUGHPUT: Option[Int] = None,
+                               THROUGHPUT_READ_PERCENT: Option[Float] = None,
+                               MAX_MAP_TASKS: Option[Int] = None,
+                               SCAN_SEGMENTS: Option[Int] = None) = {
     val jobConf = getCommonDynamoDbJobConf(sc);
     jobConf.set(DynamoDBConstants.INPUT_TABLE_NAME, tableNameForRead)
     jobConf.set("mapred.input.format.class", "org.apache.hadoop.dynamodb.read.DynamoDBInputFormat")
-//    jobConf.set(DynamoDBConstants.READ_THROUGHPUT, "1")
-//    jobConf.set(DynamoDBConstants.THROUGHPUT_READ_PERCENT, "1")
+    if (READ_THROUGHPUT != None) {
+      jobConf.set(DynamoDBConstants.READ_THROUGHPUT, String.valueOf(READ_THROUGHPUT.get))
+    }
+    if (THROUGHPUT_READ_PERCENT != None) {
+      jobConf.set(
+        DynamoDBConstants.THROUGHPUT_READ_PERCENT,
+        String.valueOf(THROUGHPUT_READ_PERCENT.get))
+    }
+    if (MAX_MAP_TASKS != None) {
+      jobConf.set(DynamoDBConstants.MAX_MAP_TASKS, String.valueOf(MAX_MAP_TASKS.get))
+    }
+    if (SCAN_SEGMENTS != None) {
+      jobConf.set(DynamoDBConstants.SCAN_SEGMENTS, String.valueOf(SCAN_SEGMENTS.get)) // control split factor
+    }
     jobConf
   }
 
-  def getDestinationDynamoDbJobConf(sc: SparkContext, tableNameForWrite: String) = {
+  def getDestinationDynamoDbJobConf(sc: SparkContext,
+                                    tableNameForWrite: String,
+                                    WRITE_THROUGHPUT: Option[Int] = None,
+                                    THROUGHPUT_WRITE_PERCENT: Option[Float] = None,
+                                    MAX_MAP_TASKS: Option[Int] = None,
+                                    SCAN_SEGMENTS: Option[Int] = None) = {
     val jobConf = getCommonDynamoDbJobConf(sc);
     jobConf.set(DynamoDBConstants.OUTPUT_TABLE_NAME, tableNameForWrite)
     jobConf.set(
       "mapred.output.format.class",
       "org.apache.hadoop.dynamodb.write.DynamoDBOutputFormat")
-//    jobConf.set(DynamoDBConstants.WRITE_THROUGHPUT, "1")
-//    jobConf.set(DynamoDBConstants.THROUGHPUT_WRITE_PERCENT, "1")
+    if (WRITE_THROUGHPUT != None) {
+      jobConf.set(DynamoDBConstants.WRITE_THROUGHPUT, String.valueOf(WRITE_THROUGHPUT.get))
+    }
+    if (THROUGHPUT_WRITE_PERCENT != None) {
+      jobConf.set(
+        DynamoDBConstants.THROUGHPUT_WRITE_PERCENT,
+        String.valueOf(THROUGHPUT_WRITE_PERCENT.get))
+    }
+    if (MAX_MAP_TASKS != None) {
+      jobConf.set(DynamoDBConstants.MAX_MAP_TASKS, String.valueOf(MAX_MAP_TASKS.get))
+    }
+    if (SCAN_SEGMENTS != None) {
+      jobConf.set(DynamoDBConstants.SCAN_SEGMENTS, String.valueOf(SCAN_SEGMENTS.get)) // control split factor
+    }
     jobConf
   }
 
