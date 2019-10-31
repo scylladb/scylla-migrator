@@ -2,7 +2,7 @@ package com.scylladb.migrator
 
 import com.datastax.spark.connector._
 import com.datastax.spark.connector.cql._
-import com.datastax.spark.connector.rdd.partitioner.dht.LongToken
+import com.datastax.spark.connector.rdd.partitioner.dht.{ LongToken, Token }
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.ScheduledThreadPoolExecutor
 
@@ -100,7 +100,7 @@ object Migrator {
 
   def readDataframe(source: SourceSettings,
                     preserveTimes: Boolean,
-                    tokenRangesToSkip: Set[(Long, Long)])(
+                    tokenRangesToSkip: Set[(Token[_], Token[_])])(
     implicit spark: SparkSession): (StructType, TableDef, DataFrame, CopyType) = {
     val clusterName = "source"
     spark.setCassandraConf(
@@ -395,11 +395,8 @@ object Migrator {
                            reason: String): Unit = {
     val filename =
       Paths.get(savepointFilename(config.savepoints.path)).normalize
-    val rangesToSkip = accumulator.value.get.map { range =>
-      (
-        range.range.start.asInstanceOf[LongToken].value,
-        range.range.end.asInstanceOf[LongToken].value)
-    }
+    val rangesToSkip = accumulator.value.get.map(range =>
+      (range.range.start.asInstanceOf[Token[_]], range.range.end.asInstanceOf[Token[_]]))
 
     val modifiedConfig = config.copy(
       skipTokenRanges = config.skipTokenRanges ++ rangesToSkip
