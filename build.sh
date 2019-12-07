@@ -1,5 +1,8 @@
 #!/bin/bash
 
+#workaround for number exceptions, once new sbt will be used + 2.12 scala below won't be needed
+export TERM=xterm-color
+
 set -e
 set -x
 

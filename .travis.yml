@@ -1,0 +1,31 @@
+language: scala
+scala:
+        2.11.11
+#branches:
+#  only:
+#    - master
+cache:
+  directories:
+    - $HOME/.scalding.dep.cache
+    - $HOME/.m2/repository
+    - $HOME/.sbt
+    - $HOME/.ivy2
+sudo: false
+before_install: umask 0022
+jdk:
+  - openjdk8
+env: BUILD="base" TEST_TARGET="scalding-args scalding-date maple"
+
+#sbt_args: -no-colors -J-Xss2m
+
+#script:
+#  - sbt -jvm-opts travis/jvmopts.compile ... compile
+#  - sbt -jvm-opts travis/jvmopts.test ... test
+
+
+script:
+  - sbt ++$TRAVIS_SCALA_VERSION compile test:compile
+  - sbt ++$TRAVIS_SCALA_VERSION -Dakka.test.timefactor=1.5 'set concurrentRestrictions in Global += Tags.limit(Tags.Test, 1)' test
+
+  # Trick to avoid unnecessary cache updates
+  - find $HOME/.sbt -name "*.lock" | xargs rm

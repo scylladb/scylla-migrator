@@ -1,6 +1,13 @@
 package com.scylladb.migrator
 
 import java.net.InetAddress
+import com.datastax.spark.connector._
+import com.datastax.spark.connector.cql._
+import com.datastax.spark.connector.rdd.partitioner.dht.{ LongToken, Token }
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.ScheduledThreadPoolExecutor
+
+import scala.util.control.NonFatal
 import java.nio.charset.StandardCharsets
 import java.nio.file.{ Files, Paths }
 import java.util.concurrent.{ ScheduledThreadPoolExecutor, TimeUnit }
@@ -129,7 +136,7 @@ object Migrator {
 
   def readDataframe(source: SourceSettings,
                     preserveTimes: Boolean,
-                    tokenRangesToSkip: Set[(Long, Long)])(
+                    tokenRangesToSkip: Set[(Token[_], Token[_])])(
     implicit spark: SparkSession): (StructType, TableDef, DataFrame, CopyType) = {
     val connector = Connectors.sourceConnector(spark.sparkContext.getConf, source)
     val readConf = ReadConf
@@ -375,11 +382,8 @@ object Migrator {
                            reason: String): Unit = {
     val filename =
       Paths.get(savepointFilename(config.savepoints.path)).normalize
-    val rangesToSkip = accumulator.value.get.map { range =>
-      (
-        range.range.start.asInstanceOf[LongToken].value,
-        range.range.end.asInstanceOf[LongToken].value)
-    }
+    val rangesToSkip = accumulator.value.get.map(range =>
+      (range.range.start.asInstanceOf[Token[_]], range.range.end.asInstanceOf[Token[_]]))
 
     val modifiedConfig = config.copy(
       skipTokenRanges = config.skipTokenRanges ++ rangesToSkip
