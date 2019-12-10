@@ -50,3 +50,13 @@ renames: []
 # Which token ranges to skip. You shouldn't need to fill this in normally; the migrator will
 # create a savepoint file with this filled.
 skipTokenRanges: []
+
+validation:
+  # Should WRITETIMEs and TTLs be compared?
+  compareTimestamps: true
+  # What difference should we allow between TTLs?
+  ttlToleranceMillis: 60000
+  # How many differences to fetch and print
+  failuresToFetch: 100
+  # What difference should we allow between floating point numbers?
+  floatingPointTolerance: 0.001
