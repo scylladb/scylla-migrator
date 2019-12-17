@@ -16,7 +16,20 @@ Then, run this command on the Spark master server:
 ```shell
 spark-submit --class com.scylladb.migrator.Migrator \
   --master spark://<spark-master-hostname>:7077 \
-  --conf spark.scylla.config=<path to config.yaml>
+  --conf spark.scylla.config=<path to config.yaml> \
+  <path to scylla-migrator-assembly-0.0.1.jar>
+```
+
+# Running the validator
+
+This project also includes an entrypoint for comparing the source
+table and the target table. You can launch it as so (after performing
+the previous steps):
+
+```shell
+spark-submit --class com.scylladb.migrator.Validator \
+  --master spark://<spark-master-hostname>:7077 \
+  --conf spark.scylla.config=<path to config.yaml> \
   <path to scylla-migrator-assembly-0.0.1.jar>
 ```
 
