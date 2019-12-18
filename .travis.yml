@@ -1,0 +1,15 @@
+language: scala
+scala:
+        2.11.12
+cache:
+  directories:
+    - $HOME/.scalding.dep.cache
+    - $HOME/.m2/repository
+    - $HOME/.sbt
+    - $HOME/.ivy2
+sudo: false
+before_install: umask 0022
+jdk:
+  - openjdk8
+script:
+        ./build.sh
