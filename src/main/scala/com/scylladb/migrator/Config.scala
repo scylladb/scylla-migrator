@@ -91,6 +91,7 @@ object Savepoints {
 
 case class Validation(compareTimestamps: Boolean,
                       ttlToleranceMillis: Long,
+                      writetimeToleranceMillis: Long,
                       failuresToFetch: Int,
                       floatingPointTolerance: Double)
 object Validation {

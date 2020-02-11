@@ -45,6 +45,7 @@ object RowComparisonFailure {
                   right: Option[CassandraRow],
                   floatingPointTolerance: Double,
                   ttlToleranceMillis: Long,
+                  writetimeToleranceMillis: Long,
                   compareTimestamps: Boolean): Option[RowComparisonFailure] =
     right match {
       case None => Some(RowComparisonFailure(left, right, List(Item.MissingTargetRow)))
@@ -110,6 +111,8 @@ object RowComparisonFailure {
                        }
             } yield result
 
+        // WRITETIME is expressed in microseconds
+        val writetimeToleranceMicros = writetimeToleranceMillis * 1000
         val differingWritetimes =
           if (!compareTimestamps) Nil
           else
@@ -119,11 +122,12 @@ object RowComparisonFailure {
               leftTtl  = left.getLongOption(name)
               rightTtl = right.getLongOption(name)
               result <- (leftTtl, rightTtl) match {
-                         case (Some(l), Some(r)) if l != r => Some(name -> math.abs(l - r))
-                         case (Some(l), None)              => Some(name -> l)
-                         case (None, Some(r))              => Some(name -> r)
-                         case (Some(l), Some(r))           => None
-                         case (None, None)                 => None
+                         case (Some(l), Some(r)) if math.abs(l - r) > writetimeToleranceMicros =>
+                           Some(name -> math.abs(l - r))
+                         case (Some(l), None)    => Some(name -> l)
+                         case (None, Some(r))    => Some(name -> r)
+                         case (Some(l), Some(r)) => None
+                         case (None, None)       => None
                        }
             } yield result
 
@@ -231,7 +235,9 @@ object Validator {
             r,
             config.validation.floatingPointTolerance,
             config.validation.ttlToleranceMillis,
-            config.validation.compareTimestamps)
+            config.validation.writetimeToleranceMillis,
+            config.validation.compareTimestamps
+          )
       }
       .take(config.validation.failuresToFetch)
       .toList
