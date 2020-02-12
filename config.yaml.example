@@ -56,6 +56,8 @@ validation:
   compareTimestamps: true
   # What difference should we allow between TTLs?
   ttlToleranceMillis: 60000
+  # What difference should we allow between WRITETIMEs?
+  writetimeToleranceMillis: 1000
   # How many differences to fetch and print
   failuresToFetch: 100
   # What difference should we allow between floating point numbers?
