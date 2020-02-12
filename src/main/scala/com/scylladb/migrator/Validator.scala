@@ -119,9 +119,9 @@ object RowComparisonFailure {
             for {
               name <- names
               if name.endsWith("_writetime")
-              leftTtl  = left.getLongOption(name)
-              rightTtl = right.getLongOption(name)
-              result <- (leftTtl, rightTtl) match {
+              leftWritetime  = left.getLongOption(name)
+              rightWritetime = right.getLongOption(name)
+              result <- (leftWritetime, rightWritetime) match {
                          case (Some(l), Some(r)) if math.abs(l - r) > writetimeToleranceMicros =>
                            Some(name -> math.abs(l - r))
                          case (Some(l), None)    => Some(name -> l)
