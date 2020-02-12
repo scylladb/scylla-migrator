@@ -181,31 +181,37 @@ object Migrator {
                  primaryKeyOrdinals: Map[String, Int],
                  regularKeyOrdinals: Map[String, (Int, Int, Int)]) =
     if (regularKeyOrdinals.isEmpty) List(row)
-    else
-      regularKeyOrdinals
-        .flatMap {
-          case (fieldName, (ordinal, ttlOrdinal, writetimeOrdinal))
-              if !row.isNullAt(writetimeOrdinal) =>
-            Some(
+    else {
+      val rowTimestampsToFields =
+        regularKeyOrdinals
+          .map {
+            case (fieldName, (ordinal, ttlOrdinal, writetimeOrdinal)) =>
               (
                 fieldName,
                 if (row.isNullAt(ordinal)) CassandraOption.Null
                 else CassandraOption.Value(row.get(ordinal)),
                 if (row.isNullAt(ttlOrdinal)) None
                 else Some(row.getLong(ttlOrdinal)),
-                row.getLong(writetimeOrdinal)))
+                if (row.isNullAt(writetimeOrdinal)) None
+                else Some(row.getLong(writetimeOrdinal)))
+          }
+          .groupBy {
+            case (fieldName, value, ttl, writetime) => (ttl, writetime)
+          }
+          .mapValues(
+            _.map {
+              case (fieldName, value, _, _) => fieldName -> value
+            }.toMap
+          )
 
-          case _ =>
-            None
-        }
-        .groupBy {
-          case (fieldName, value, ttl, writetime) => (ttl, writetime)
-        }
-        .mapValues(
-          _.map {
-            case (fieldName, value, _, _) => fieldName -> value
-          }.toMap
-        )
+      // This is an optimisation to avoid unnecessary inserts and tombstones:
+      // If there are multiple rows to insert, remove the row containing NULLs
+      // (since those will be "inserted" as a result of inserting the remaining rows)
+      val timestampsToFields =
+        if (rowTimestampsToFields.size > 1) rowTimestampsToFields.-((None, None))
+        else rowTimestampsToFields
+
+      timestampsToFields
         .map {
           case ((ttl, writetime), fields) =>
             val newValues = schema.fields.map { field =>
@@ -216,10 +222,11 @@ object Migrator {
                   else Some(row.get(ord))
                 }
                 .getOrElse(fields.getOrElse(field.name, CassandraOption.Unset))
-            } ++ Seq(ttl.getOrElse(0L), writetime)
+            } ++ Seq(ttl.getOrElse(0L), writetime.getOrElse(CassandraOption.Unset))
 
             Row(newValues: _*)
         }
+    }
 
   def indexFields(currentFieldNames: List[String],
                   origFieldNames: List[String],
