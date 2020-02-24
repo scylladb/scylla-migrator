@@ -1,0 +1,26 @@
+# Configuration for the Parquet file to load
+source:
+  path: s3a://bucket-name/path/to/parquet-directory
+  # credentials:
+  #   accessKey:
+  #   secretKey:
+
+# Configuration for the database you're copying into
+target:
+  host: scylla
+  port: 9042
+  # credentials:
+  #   username: <user>
+  #   password: <pass>
+  # NOTE: The destination table must have a schema that is compatible with the Parquet
+  # file. If you'd like to rename columns, that's ok - see the renames parameter below.
+  # See the README.parquet.md for details on compatible types.
+  keyspace: stocks
+  table: stocks
+  # Number of connections to use to Scylla when copying
+  connections: 16
+
+# Column renaming configuration. If you'd like to rename any columns, specify them like so:
+# - from: source_column_name
+#   to: dest_column_name
+renames: []

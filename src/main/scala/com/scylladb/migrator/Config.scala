@@ -4,7 +4,6 @@ import cats.implicits._
 import com.datastax.spark.connector.rdd.partitioner.dht.{ BigIntToken, LongToken, Token }
 import io.circe.generic.semiauto._
 import io.circe._, io.circe.syntax._
-//import io.circe.generic.auto._ //this will break the compiler resulting in : could not find Lazy implicit value of type io.circe.generic.encoding.DerivedObjectEncoder
 import io.circe.yaml._, io.circe.yaml.syntax._
 
 case class MigratorConfig(source: SourceSettings,
