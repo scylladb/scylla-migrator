@@ -1,5 +1,6 @@
 # Configuration for the source database to copy from
 source:
+  type: cassandra
   host: cassandra
   port: 9042
   # credentials:
@@ -16,6 +17,15 @@ source:
   # Number of rows to fetch in each read
   fetchSize: 1000
 
+# Example for loading from Parquet
+# source:
+#   path: s3a://bucket-name/path/to/parquet-directory
+#   # Optional AWS access/secret key for loading from S3:
+#   credentials:
+#     accessKey:
+#     secretKey:
+
+
 # Configuration for the database you're copying into
 target:
   host: scylla 
@@ -23,7 +33,8 @@ target:
   # credentials:
   #   username: <user>
   #   password: <pass>
-  # NOTE: The destination table must have the same schema as the source table.
+  # NOTE: The destination table must have the same schema as the source table. If copying
+  # from Parquet, review README.parquet.md for notes on type compatibilities.
   # If you'd like to rename columns, that's ok - see the renames parameter below.
   keyspace: stocks
   table: stocks

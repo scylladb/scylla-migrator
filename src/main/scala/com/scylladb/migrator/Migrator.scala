@@ -36,43 +36,51 @@ object Migrator {
 
     log.info(s"Loaded config: ${migratorConfig}")
 
-    val (sourceDF, timestampColumns) =
+    val scheduler = new ScheduledThreadPoolExecutor(1)
+
+    val sourceDF =
       migratorConfig.source match {
         case cassandraSource: SourceSettings.Cassandra =>
           readers.Cassandra.readDataframe(
+            spark,
             cassandraSource,
             migratorConfig.preserveTimestamps,
             migratorConfig.skipTokenRanges)
-        case otherwise => ???
+        case parquetSource: SourceSettings.Parquet =>
+          readers.Parquet.readDataFrame(spark, parquetSource)
       }
 
     log.info("Created source dataframe; resulting schema:")
-    sourceDF.printSchema()
+    sourceDF.dataFrame.printSchema()
+
+    val tokenRangeAccumulator =
+      if (!sourceDF.savepointsSupported) None
+      else {
+        val tokenRangeAccumulator = TokenRangeAccumulator.empty
+        spark.sparkContext.register(tokenRangeAccumulator, "Token ranges copied")
+
+        addUSR2Handler(migratorConfig, tokenRangeAccumulator)
+        startSavepointSchedule(scheduler, migratorConfig, tokenRangeAccumulator)
+
+        Some(tokenRangeAccumulator)
+      }
 
     log.info("Starting write...")
-
-    val tokenRangeAccumulator = TokenRangeAccumulator.empty
-    spark.sparkContext.register(tokenRangeAccumulator, "Token ranges copied")
-
-    val scheduler = new ScheduledThreadPoolExecutor(1)
-
-    addUSR2Handler(migratorConfig, tokenRangeAccumulator)
-    startSavepointSchedule(scheduler, migratorConfig, tokenRangeAccumulator)
 
     try {
       Writer.writeDataframe(
         migratorConfig.target,
         migratorConfig.renames,
-        sourceDF,
-        timestampColumns,
-        Some(tokenRangeAccumulator))
+        sourceDF.dataFrame,
+        sourceDF.timestampColumns,
+        tokenRangeAccumulator)
     } catch {
       case NonFatal(e) => // Catching everything on purpose to try and dump the accumulator state
         log.error(
           "Caught error while writing the DataFrame. Will create a savepoint before exiting",
           e)
     } finally {
-      dumpAccumulatorState(migratorConfig, tokenRangeAccumulator, "final")
+      tokenRangeAccumulator.foreach(dumpAccumulatorState(migratorConfig, _, "final"))
       scheduler.shutdown()
       spark.stop()
     }

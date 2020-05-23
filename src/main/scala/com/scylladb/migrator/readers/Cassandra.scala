@@ -155,11 +155,11 @@ object Cassandra {
     (primaryKeyIndices, regularKeyIndices)
   }
 
-  def adjustDataframeForTimestampPreservation(
-    df: DataFrame,
-    timestampColumns: Option[TimestampColumns],
-    origSchema: StructType,
-    tableDef: TableDef)(implicit spark: SparkSession): DataFrame =
+  def adjustDataframeForTimestampPreservation(spark: SparkSession,
+                                              df: DataFrame,
+                                              timestampColumns: Option[TimestampColumns],
+                                              origSchema: StructType,
+                                              tableDef: TableDef): DataFrame =
     timestampColumns match {
       case None => df
       case Some(TimestampColumns(ttl, writeTime)) =>
@@ -189,10 +189,10 @@ object Cassandra {
 
     }
 
-  def readDataframe(source: SourceSettings.Cassandra,
+  def readDataframe(spark: SparkSession,
+                    source: SourceSettings.Cassandra,
                     preserveTimes: Boolean,
-                    tokenRangesToSkip: Set[(Token[_], Token[_])])(
-    implicit spark: SparkSession): (DataFrame, Option[TimestampColumns]) = {
+                    tokenRangesToSkip: Set[(Token[_], Token[_])]): SourceDataFrame = {
     val connector = Connectors.sourceConnector(spark.sparkContext.getConf, source)
     val readConf = ReadConf
       .fromSparkConf(spark.sparkContext.getConf)
@@ -223,13 +223,15 @@ object Cassandra {
       .asInstanceOf[RDD[Row]]
 
     val resultingDataframe = adjustDataframeForTimestampPreservation(
+      spark,
+      // spark.createDataFrame does something weird with the encoder (tries to convert the row again),
+      // so it's important to use createDataset with an explciit encoder instead here
       spark.createDataset(rdd)(RowEncoder(selection.schema)),
       selection.timestampColumns,
       origSchema,
-      tableDef)
+      tableDef
+    )
 
-    // spark.createDataFrame does something weird with the encoder (tries to convert the row again),
-    // so it's important to use createDataset with an explciit encoder instead here
-    (resultingDataframe, selection.timestampColumns)
+    SourceDataFrame(resultingDataframe, selection.timestampColumns, true)
   }
 }
