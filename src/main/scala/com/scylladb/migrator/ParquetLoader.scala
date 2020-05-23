@@ -1,10 +1,15 @@
 package com.scylladb.migrator
 
 import com.datastax.spark.connector._
-import com.datastax.spark.connector.cql._
 import com.datastax.spark.connector.writer.{ SqlRowWriter, WriteConf }
+import com.scylladb.migrator.config.{
+  ParquetLoaderConfig,
+  ParquetSourceSettings,
+  Rename,
+  TargetSettings
+}
+import com.scylladb.migrator.writer.Writer
 import org.apache.log4j.{ Level, LogManager, Logger }
-import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.{ DataFrame, SparkSession }
 
 object ParquetLoader {
@@ -63,6 +68,6 @@ object ParquetLoader {
     renamedDf.printSchema()
 
     log.info("Starting write...")
-    writeDataFrame(spark, config.target, renamedDf)
+    Writer.writeDataframe(config.target, config.renames, parquetDf, None, None)
   }
 }

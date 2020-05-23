@@ -12,7 +12,7 @@ lazy val root = (project in file(".")).
 
     javacOptions ++= Seq("-source", "1.8", "-target", "1.8"),
     javaOptions ++= Seq("-Xms512M", "-Xmx2048M", "-XX:MaxPermSize=2048M", "-XX:+CMSClassUnloadingEnabled"),
-    scalacOptions ++= Seq("-deprecation", "-unchecked"),
+    scalacOptions ++= Seq("-deprecation", "-unchecked", "-Ypartial-unification"),
     parallelExecution in Test := false,
     fork := true,
 

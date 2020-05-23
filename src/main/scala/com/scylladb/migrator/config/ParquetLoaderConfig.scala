@@ -1,15 +1,10 @@
-package com.scylladb.migrator
+package com.scylladb.migrator.config
 
 import cats.implicits._
-import io.circe.generic.semiauto._
-import io.circe._, io.circe.syntax._
-import io.circe.yaml._, io.circe.yaml.syntax._
+import io.circe.generic.semiauto.{ deriveDecoder, deriveEncoder }
+import io.circe.yaml.parser
+import io.circe.{ Decoder, Encoder, Error }
 
-case class ParquetSourceSettings(path: String, credentials: Option[AWSCredentials])
-object ParquetSourceSettings {
-  implicit val decoder: Decoder[ParquetSourceSettings] = deriveDecoder
-  implicit val encoder: Encoder[ParquetSourceSettings] = deriveEncoder
-}
 case class ParquetLoaderConfig(source: ParquetSourceSettings,
                                target: TargetSettings,
                                renames: List[Rename])

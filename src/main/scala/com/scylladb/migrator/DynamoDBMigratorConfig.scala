@@ -1,13 +1,10 @@
 package com.scylladb.migrator
 
 import cats.implicits._
-import java.nio.charset.StandardCharsets
-import java.nio.file.{ Files, Paths }
-
+import com.scylladb.migrator.config.AWSCredentials
 import io.circe._
-import io.circe.syntax._
 import io.circe.generic.auto._
-import io.circe.generic.semiauto.{ deriveDecoder, deriveEncoder }
+import io.circe.syntax._
 import io.circe.yaml._
 import io.circe.yaml.syntax._
 
@@ -25,12 +22,6 @@ object DynamoDBMigratorConfig {
       .flatMap(_.as[DynamoDBMigratorConfig])
       .valueOr(throw _)
   }
-}
-
-case class AWSCredentials(accessKey: String, secretKey: String)
-object AWSCredentials {
-  implicit val decoder: Decoder[AWSCredentials] = deriveDecoder
-  implicit val encoder: Encoder[AWSCredentials] = deriveEncoder
 }
 
 case class DynamoDBSourceSettings(hostURL: Option[String],

@@ -2,17 +2,17 @@ package com.scylladb.migrator
 
 import com.amazonaws.auth.{ AWSStaticCredentialsProvider, BasicAWSCredentials }
 import com.amazonaws.client.builder.AwsClientBuilder
+import com.amazonaws.services.dynamodbv2.AmazonDynamoDBClientBuilder
 import com.amazonaws.services.dynamodbv2.document.DynamoDB
-import org.apache.hadoop.io.Text
-import org.apache.hadoop.dynamodb.{ DynamoDBClient, DynamoDBConstants, DynamoDBItemWritable }
-import org.apache.spark.SparkContext
+import com.amazonaws.services.dynamodbv2.model.{ CreateTableRequest, ProvisionedThroughput }
+import com.scylladb.migrator.config.AWSCredentials
 import org.apache.hadoop.dynamodb.read.DynamoDBInputFormat
+import org.apache.hadoop.dynamodb.{ DynamoDBClient, DynamoDBConstants, DynamoDBItemWritable }
+import org.apache.hadoop.io.Text
 import org.apache.hadoop.mapred.JobConf
+import org.apache.spark.SparkContext
 import org.apache.spark.sql.SparkSession
 import org.slf4j.LoggerFactory
-import com.amazonaws.services.dynamodbv2.AmazonDynamoDBClientBuilder
-import com.amazonaws.services.dynamodbv2.model.CreateTableRequest
-import com.amazonaws.services.dynamodbv2.model.ProvisionedThroughput
 
 object DynamoDBMigrator {
   private val log = LoggerFactory.getLogger(getClass)
