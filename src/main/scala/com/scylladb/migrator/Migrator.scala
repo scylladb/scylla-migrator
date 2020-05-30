@@ -44,7 +44,7 @@ object Migrator {
           readers.Cassandra.readDataframe(
             spark,
             cassandraSource,
-            migratorConfig.preserveTimestamps,
+            cassandraSource.preserveTimestamps,
             migratorConfig.skipTokenRanges)
         case parquetSource: SourceSettings.Parquet =>
           readers.Parquet.readDataFrame(spark, parquetSource)

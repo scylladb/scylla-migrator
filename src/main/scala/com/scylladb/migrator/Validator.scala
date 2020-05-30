@@ -35,7 +35,7 @@ object Validator {
         sourceTableDef.regularColumns.flatMap { colDef =>
           val alias = renameMap.getOrElse(colDef.columnName, colDef.columnName)
 
-          if (config.preserveTimestamps)
+          if (sourceSettings.preserveTimestamps)
             List(
               ColumnName(colDef.columnName, Some(alias)),
               WriteTime(colDef.columnName, Some(alias + "_writetime")),
@@ -67,7 +67,7 @@ object Validator {
         sourceTableDef.regularColumns.flatMap { colDef =>
           val renamedColName = renameMap.getOrElse(colDef.columnName, colDef.columnName)
 
-          if (config.preserveTimestamps)
+          if (sourceSettings.preserveTimestamps)
             List(
               ColumnName(renamedColName),
               WriteTime(renamedColName, Some(renamedColName + "_writetime")),

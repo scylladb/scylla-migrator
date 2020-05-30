@@ -13,7 +13,8 @@ object SourceSettings {
                        table: String,
                        splitCount: Option[Int],
                        connections: Option[Int],
-                       fetchSize: Int)
+                       fetchSize: Int,
+                       preserveTimestamps: Boolean)
       extends SourceSettings
   case class Parquet(path: String, credentials: Option[AWSCredentials]) extends SourceSettings
 
@@ -21,7 +22,7 @@ object SourceSettings {
     cursor.get[String]("type").flatMap {
       case "cassandra" | "scylla" =>
         Decoder
-          .forProduct8(
+          .forProduct9(
             "host",
             "port",
             "credentials",
@@ -29,7 +30,8 @@ object SourceSettings {
             "table",
             "splitCount",
             "connections",
-            "fetchSize")(Cassandra.apply)
+            "fetchSize",
+            "preserveTimestamps")(Cassandra.apply)
           .apply(cursor)
       case "parquet" =>
         Decoder
@@ -43,7 +45,7 @@ object SourceSettings {
   implicit val encoder: Encoder[SourceSettings] = Encoder.instance {
     case s: Cassandra =>
       Encoder
-        .forProduct8(
+        .forProduct9(
           "host",
           "port",
           "credentials",
@@ -51,7 +53,8 @@ object SourceSettings {
           "table",
           "splitCount",
           "connections",
-          "fetchSize")(Cassandra.unapply(_: Cassandra).get)
+          "fetchSize",
+          "preserveTimestamps")(Cassandra.unapply(_: Cassandra).get)
         .encodeObject(s)
         .add("type", Json.fromString("cassandra"))
         .asJson

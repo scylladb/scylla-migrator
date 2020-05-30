@@ -10,7 +10,6 @@ import io.circe.{ Decoder, DecodingFailure, Encoder, Error, Json }
 
 case class MigratorConfig(source: SourceSettings,
                           target: TargetSettings,
-                          preserveTimestamps: Boolean,
                           renames: List[Rename],
                           savepoints: Savepoints,
                           skipTokenRanges: Set[(Token[_], Token[_])],
