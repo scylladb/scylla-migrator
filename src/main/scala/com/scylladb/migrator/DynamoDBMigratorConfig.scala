@@ -1,10 +1,12 @@
 package com.scylladb.migrator
 
 import cats.implicits._
-import java.nio.charset.StandardCharsets
-import java.nio.file.{ Files, Paths }
-import io.circe._, io.circe.syntax._, io.circe.generic.auto._
-import io.circe.yaml._, io.circe.yaml.syntax._
+import com.scylladb.migrator.config.AWSCredentials
+import io.circe._
+import io.circe.generic.auto._
+import io.circe.syntax._
+import io.circe.yaml._
+import io.circe.yaml.syntax._
 
 case class DynamoDBMigratorConfig(source: DynamoDBSourceSettings, target: DynamoDBTargetSettings) {
   def render: String = this.asJson.asYaml.spaces2
@@ -21,8 +23,6 @@ object DynamoDBMigratorConfig {
       .valueOr(throw _)
   }
 }
-
-case class AWSCredentials(accessKey: String, secretKey: String)
 
 case class DynamoDBSourceSettings(hostURL: Option[String],
                                   region: String,

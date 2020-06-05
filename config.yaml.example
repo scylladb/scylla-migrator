@@ -1,12 +1,16 @@
-# Configuration for the source database to copy from
+# Example configuration for migrating from Cassandra:
 source:
-  host: cassandra
+  type: cassandra
+  host: cassandra-server-01
   port: 9042
   # credentials:
   #   username: <user>
   #   password: <pass>
   keyspace: stocks
   table: stocks
+  # Preserve TTLs and WRITETIMEs of cells in the source database. Note that this
+  # option is *incompatible* when copying tables with collections (lists, maps, sets).
+  preserveTimestamps: true
   # Number of splits to use - this should be at minimum the amount of cores
   # available in the Spark cluster, and optimally more; higher splits will lead
   # to more fine-grained resumes. Aim for 8 * (Spark cores).
@@ -15,6 +19,18 @@ source:
   connections: 8
   # Number of rows to fetch in each read
   fetchSize: 1000
+
+# Example for loading from Parquet:
+# source:
+#   type: parquet
+#   path: s3a://bucket-name/path/to/parquet-directory
+#   # Optional AWS access/secret key for loading from S3.
+#   # This section can be left out if running on EC2 instances that have instance profiles with the
+#   # appropriate permissions. Assuming roles is not supported currently.
+#   credentials:
+#     accessKey:
+#     secretKey:
+
 
 # Configuration for the database you're copying into
 target:
@@ -30,12 +46,9 @@ target:
   # Number of connections to use to Scylla when copying
   connections: 16
 
-# Preserve TTLs and WRITETIMEs of cells in the source database. Note that this
-# option is *incompatible* when copying tables with collections (lists, maps, sets).
-preserveTimestamps: true
-
 # Savepoints are configuration files (like this one), saved by the migrator as it
-# runs. Their purpose is to skip token ranges that have already been copied.
+# runs. Their purpose is to skip token ranges that have already been copied. This
+# configuration only applies when copying from Cassandra/Scylla.
 savepoints:
   # Where should savepoint configurations be stored? This is a path on the host running
   # the Spark driver - usually the Spark master.
@@ -51,6 +64,8 @@ renames: []
 # create a savepoint file with this filled.
 skipTokenRanges: []
 
+# Configuration section for running the validator. The validator is run manually (see README)
+# and currently only supports comparing a Cassandra source to a Scylla target.
 validation:
   # Should WRITETIMEs and TTLs be compared?
   compareTimestamps: true
