@@ -1,11 +1,9 @@
-// give the user a nice default project!
-
 lazy val root = (project in file(".")).
 
   settings(
     inThisBuild(List(
       organization := "com.scylladb",
-      scalaVersion := "2.11.11"
+      scalaVersion := "2.11.12"
     )),
     name := "scylla-migrator",
     version := "0.0.1",
@@ -19,10 +17,11 @@ lazy val root = (project in file(".")).
     scalafmtOnCompile := true,
 
     libraryDependencies ++= Seq(
-      "org.apache.spark" %% "spark-streaming" % "2.3.1" % "provided",
-      "org.apache.spark" %% "spark-sql" % "2.3.1" % "provided",
+      "org.apache.spark" %% "spark-streaming" % "2.4.4" % "provided",
+      "org.apache.spark" %% "spark-sql" % "2.4.4" % "provided",
 
       "com.amazon.emr" % "emr-dynamodb-hadoop" % "4.8.0" exclude("joda-time", "joda-time"),
+      "com.audienceproject" %% "spark-dynamodb" % "1.0.3",
 
       "org.yaml" % "snakeyaml" % "1.23",
       "io.circe" %% "circe-yaml" % "0.9.0",
