@@ -1,5 +1,6 @@
 package com.scylladb.migrator
 
+import java.net.InetAddress
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 
@@ -37,6 +38,22 @@ case object CustomUUIDType extends PrimitiveColumnType[UUID] {
     new TypeConverter.OptionToNullConverter(AnotherCustomUUIDConverter)
 }
 
+case object CustomInetType extends PrimitiveColumnType[InetAddress] {
+  def scalaTypeTag = implicitly[TypeTag[InetAddress]]
+  def cqlTypeName = "inet"
+  def converterToCassandra =
+    new TypeConverter.OptionToNullConverter(CustomInetAddressConverter)
+}
+
+case object CustomInetAddressConverter extends NullableTypeConverter[InetAddress] {
+  def targetTypeTag = implicitly[TypeTag[InetAddress]]
+  def convertPF = {
+    case x: InetAddress => x
+    case x: String      => InetAddress.getByName(x)
+    case x: UTF8String  => InetAddress.getByName(new String(x.getBytes, StandardCharsets.UTF_8))
+  }
+}
+
 object CustomUUIDConverter extends CustomDriverConverter {
   import org.apache.spark.sql.{ types => catalystTypes }
   import com.datastax.driver.core.DataType
@@ -47,10 +64,13 @@ object CustomUUIDConverter extends CustomDriverConverter {
       CustomTimeUUIDType
     case dataType if dataType.getName == DataType.uuid().getName =>
       CustomUUIDType
+    case dataType if dataType.getName == DataType.inet().getName =>
+      CustomInetType
   }
 
   override val catalystDataType: PartialFunction[ColumnType[_], catalystTypes.DataType] = {
     case CustomTimeUUIDType => catalystTypes.StringType
     case CustomUUIDType     => catalystTypes.StringType
+    case CustomInetType     => catalystTypes.StringType
   }
 }
