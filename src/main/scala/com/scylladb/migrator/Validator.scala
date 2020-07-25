@@ -3,7 +3,7 @@ package com.scylladb.migrator
 import com.datastax.spark.connector._
 import com.datastax.spark.connector.cql._
 import com.datastax.spark.connector.rdd.ReadConf
-import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings }
+import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
 import com.scylladb.migrator.validation.RowComparisonFailure
 import org.apache.log4j.{ Level, LogManager, Logger }
 import org.apache.spark.sql.SparkSession
@@ -21,10 +21,19 @@ object Validator {
             s"(found ${otherwise.getClass.getSimpleName} settings)")
     }
 
+    val targetSettings = config.target match {
+      case s: TargetSettings.Scylla => s
+      case otherwise =>
+        throw new RuntimeException(
+          s"Validation only supports validating against Cassandra/Scylla " +
+            s"(found ${otherwise.getClass.getSimpleName} settings)")
+
+    }
+
     val sourceConnector: CassandraConnector =
       Connectors.sourceConnector(spark.sparkContext.getConf, sourceSettings)
     val targetConnector: CassandraConnector =
-      Connectors.targetConnector(spark.sparkContext.getConf, config.target)
+      Connectors.targetConnector(spark.sparkContext.getConf, targetSettings)
 
     val renameMap = config.renames.map(rename => rename.from -> rename.to).toMap
     val sourceTableDef =
@@ -85,8 +94,8 @@ object Validator {
 
       source
         .leftJoinWithCassandraTable(
-          config.target.keyspace,
-          config.target.table,
+          targetSettings.keyspace,
+          targetSettings.table,
           SomeColumns(primaryKeyProjection ++ regularColumnsProjection: _*),
           SomeColumns(joinKey: _*))
         .withConnector(targetConnector)

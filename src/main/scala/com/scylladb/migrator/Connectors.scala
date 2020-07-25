@@ -26,7 +26,7 @@ object Connectors {
       )
     )
 
-  def targetConnector(sparkConf: SparkConf, targetSettings: TargetSettings) =
+  def targetConnector(sparkConf: SparkConf, targetSettings: TargetSettings.Scylla) =
     new CassandraConnector(
       CassandraConnectorConf(sparkConf).copy(
         hosts = Set(InetAddress.getByName(targetSettings.host)),

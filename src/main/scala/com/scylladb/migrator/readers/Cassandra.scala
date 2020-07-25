@@ -7,7 +7,6 @@ import com.datastax.spark.connector.rdd.partitioner.dht.Token
 import com.datastax.spark.connector.types.CassandraOption
 import com.scylladb.migrator.Connectors
 import com.scylladb.migrator.config.{ CopyType, SourceSettings }
-import com.scylladb.migrator.writer.Writer.TimestampColumns
 import org.apache.log4j.LogManager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.cassandra.{ CassandraSQLRow, DataTypeConverter }

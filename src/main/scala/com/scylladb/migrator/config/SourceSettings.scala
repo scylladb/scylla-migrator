@@ -16,6 +16,16 @@ object SourceSettings {
                        fetchSize: Int,
                        preserveTimestamps: Boolean)
       extends SourceSettings
+  case class DynamoDB(hostURL: Option[String],
+                      region: String,
+                      port: Option[Int],
+                      credentials: Option[AWSCredentials],
+                      table: String,
+                      scanSegments: Option[Int],
+                      readThroughput: Option[Int],
+                      throughputReadPercent: Option[Float],
+                      maxMapTasks: Option[Int])
+      extends SourceSettings
   case class Parquet(path: String, credentials: Option[AWSCredentials]) extends SourceSettings
 
   implicit val decoder: Decoder[SourceSettings] = Decoder.instance { cursor =>
@@ -57,6 +67,21 @@ object SourceSettings {
           "preserveTimestamps")(Cassandra.unapply(_: Cassandra).get)
         .encodeObject(s)
         .add("type", Json.fromString("cassandra"))
+        .asJson
+    case s: DynamoDB =>
+      Encoder
+        .forProduct9(
+          "hostURL",
+          "region",
+          "port",
+          "credentials",
+          "table",
+          "scanSegments",
+          "readThroughput",
+          "throughputReadPercent",
+          "maxMapTasks")(DynamoDB.unapply(_: DynamoDB).get)
+        .encodeObject(s)
+        .add("type", Json.fromString("dynamodb"))
         .asJson
     case s: Parquet =>
       Encoder

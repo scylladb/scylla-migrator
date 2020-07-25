@@ -7,7 +7,6 @@ import java.util.concurrent.{ ScheduledThreadPoolExecutor, TimeUnit }
 import com.datastax.spark.connector.rdd.partitioner.dht.Token
 import com.datastax.spark.connector.writer._
 import com.scylladb.migrator.config._
-import com.scylladb.migrator.writer.Writer
 import org.apache.log4j.{ Level, LogManager, Logger }
 import org.apache.spark.sql._
 import sun.misc.{ Signal, SignalHandler }
@@ -48,6 +47,8 @@ object Migrator {
             migratorConfig.skipTokenRanges)
         case parquetSource: SourceSettings.Parquet =>
           readers.Parquet.readDataFrame(spark, parquetSource)
+        case dynamoSource: SourceSettings.DynamoDB =>
+          readers.DynamoDB.readDataFrame(spark, dynamoSource)
       }
 
     log.info("Created source dataframe; resulting schema:")
@@ -68,12 +69,15 @@ object Migrator {
     log.info("Starting write...")
 
     try {
-      Writer.writeDataframe(
-        migratorConfig.target,
-        migratorConfig.renames,
-        sourceDF.dataFrame,
-        sourceDF.timestampColumns,
-        tokenRangeAccumulator)
+      migratorConfig.target match {
+        case target: TargetSettings.Scylla =>
+          writer.Scylla.writeDataframe(
+            target,
+            migratorConfig.renames,
+            sourceDF.dataFrame,
+            sourceDF.timestampColumns,
+            tokenRangeAccumulator)
+      }
     } catch {
       case NonFatal(e) => // Catching everything on purpose to try and dump the accumulator state
         log.error(
