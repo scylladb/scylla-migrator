@@ -48,7 +48,12 @@ object Migrator {
         case parquetSource: SourceSettings.Parquet =>
           readers.Parquet.readDataFrame(spark, parquetSource)
         case dynamoSource: SourceSettings.DynamoDB =>
-          readers.DynamoDB.readDataFrame(spark, dynamoSource)
+          val tableDesc = DynamoUtils
+            .buildDynamoClient(dynamoSource.endpoint, dynamoSource.credentials, dynamoSource.region)
+            .describeTable(dynamoSource.table)
+            .getTable
+
+          readers.DynamoDB.readDataFrame(spark, dynamoSource, tableDesc)
       }
 
     log.info("Created source dataframe; resulting schema:")
@@ -71,12 +76,25 @@ object Migrator {
     try {
       migratorConfig.target match {
         case target: TargetSettings.Scylla =>
-          writer.Scylla.writeDataframe(
+          writers.Scylla.writeDataframe(
             target,
             migratorConfig.renames,
             sourceDF.dataFrame,
             sourceDF.timestampColumns,
             tokenRangeAccumulator)
+        case target: TargetSettings.DynamoDB =>
+          DynamoUtils.replicateDynamoTable(migratorConfig.source, migratorConfig.target)
+
+          val tableDesc = DynamoUtils
+            .buildDynamoClient(target.endpoint, target.credentials, target.region)
+            .describeTable(target.table)
+            .getTable
+
+          writers.DynamoDB.writeDataframe(
+            target,
+            migratorConfig.renames,
+            sourceDF.dataFrame,
+            tableDesc)
       }
     } catch {
       case NonFatal(e) => // Catching everything on purpose to try and dump the accumulator state

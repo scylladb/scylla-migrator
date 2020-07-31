@@ -3,6 +3,16 @@ package com.scylladb.migrator.config
 import cats.implicits._
 import io.circe.syntax._
 import io.circe.{ Decoder, DecodingFailure, Encoder, Json, ObjectEncoder }
+import io.circe.generic.semiauto.{ deriveDecoder, deriveEncoder }
+
+case class DynamoDBEndpoint(host: String, port: Int) {
+  def renderEndpoint = s"${host}:${port}"
+}
+
+object DynamoDBEndpoint {
+  implicit val encoder = deriveEncoder[DynamoDBEndpoint]
+  implicit val decoder = deriveDecoder[DynamoDBEndpoint]
+}
 
 sealed trait SourceSettings
 object SourceSettings {
@@ -16,9 +26,8 @@ object SourceSettings {
                        fetchSize: Int,
                        preserveTimestamps: Boolean)
       extends SourceSettings
-  case class DynamoDB(hostURL: Option[String],
-                      region: String,
-                      port: Option[Int],
+  case class DynamoDB(endpoint: Option[DynamoDBEndpoint],
+                      region: Option[String],
                       credentials: Option[AWSCredentials],
                       table: String,
                       scanSegments: Option[Int],
@@ -47,6 +56,8 @@ object SourceSettings {
         Decoder
           .forProduct2("path", "credentials")(Parquet.apply)
           .apply(cursor)
+      case "dynamo" | "dynamodb" =>
+        deriveDecoder[DynamoDB].apply(cursor)
       case otherwise =>
         Left(DecodingFailure(s"Unknown source type: ${otherwise}", cursor.history))
     }
@@ -69,17 +80,7 @@ object SourceSettings {
         .add("type", Json.fromString("cassandra"))
         .asJson
     case s: DynamoDB =>
-      Encoder
-        .forProduct9(
-          "hostURL",
-          "region",
-          "port",
-          "credentials",
-          "table",
-          "scanSegments",
-          "readThroughput",
-          "throughputReadPercent",
-          "maxMapTasks")(DynamoDB.unapply(_: DynamoDB).get)
+      deriveEncoder[DynamoDB]
         .encodeObject(s)
         .add("type", Json.fromString("dynamodb"))
         .asJson

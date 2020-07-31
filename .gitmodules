@@ -2,3 +2,6 @@
 	path = spark-cassandra-connector
 	url = https://github.com/iravid/spark-cassandra-connector
 	branch = feature/track-token-ranges
+[submodule "spark-dynamodb"]
+	path = spark-dynamodb
+	url = git@github.com:iravid/spark-dynamodb

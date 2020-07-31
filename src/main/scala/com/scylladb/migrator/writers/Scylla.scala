@@ -1,4 +1,4 @@
-package com.scylladb.migrator.writer
+package com.scylladb.migrator.writers
 
 import com.datastax.spark.connector.writer._
 import com.datastax.spark.connector._

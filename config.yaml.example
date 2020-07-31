@@ -31,9 +31,42 @@ source:
 #     accessKey:
 #     secretKey:
 
+# Example for loading from DynamoDB:
+# source:
+#   type: dynamodb
+#   table: <table name>
+#   # Optional - load from a custom endpoint:
+#   endpoint:
+#     # Specify the hostname without a protocol
+#     host: <host>
+#     port: <port>
+#
+#   # Optional - specify the region:
+#   # region: <region>
+#
+#   # Optional - static credentials:
+#   credentials:
+#     accessKey: <user>
+#     secretKey: <pass>
+#
+#   # below controls split factor
+#   scanSegments: 1
+#
+#   # throttling settings, set based on your capacity (or wanted capacity)
+#   readThroughput: 1
+#
+#   # The value of dynamodb.throughput.read.percent can be between 0.1 and 1.5, inclusively.
+#   # 0.5 represents the default read rate, meaning that the job will attempt to consume half of the read capacity of the table.
+#   # If you increase the value above 0.5, spark will increase the request rate; decreasing the value below 0.5 decreases the read request rate.
+#   # (The actual read rate will vary, depending on factors such as whether there is a uniform key distribution in the DynamoDB table.)
+#   throughputReadPercent: 1.0
+#
+#   # how many tasks per executor?
+#   maxMapTasks: 1
 
 # Configuration for the database you're copying into
 target:
+  type: scylla
   host: scylla 
   port: 9042
   # credentials:
@@ -45,6 +78,39 @@ target:
   table: stocks
   # Number of connections to use to Scylla when copying
   connections: 16
+
+# Example for loading into a DynamoDB target (for example, Scylla's Alternator):
+# target:
+#   type: dynamodb
+#   table: <table name>
+#   # Optional - write to a custom endpoint:
+#   endpoint:
+#     # If writing to Scylla Alternator, prefix the hostname with 'http://'.
+#     host: <host>
+#     port: <port>
+#
+#   # Optional - specify the region:
+#   # region: <region>
+#
+#   # Optional - static credentials:
+#   credentials:
+#     accessKey: <user>
+#     secretKey: <pass>
+#
+#   # Split factor for reading/writing. This is required for Scylla targets.
+#   scanSegments: 1
+#
+#   # throttling settings, set based on your capacity (or wanted capacity)
+#   readThroughput: 1
+#
+#   # The value of dynamodb.throughput.read.percent can be between 0.1 and 1.5, inclusively.
+#   # 0.5 represents the default read rate, meaning that the job will attempt to consume half of the read capacity of the table.
+#   # If you increase the value above 0.5, spark will increase the request rate; decreasing the value below 0.5 decreases the read request rate.
+#   # (The actual read rate will vary, depending on factors such as whether there is a uniform key distribution in the DynamoDB table.)
+#   throughputReadPercent: 1.0
+#
+#   # how many tasks per executor?
+#   maxMapTasks: 1
 
 # Savepoints are configuration files (like this one), saved by the migrator as it
 # runs. Their purpose is to skip token ranges that have already been copied. This
