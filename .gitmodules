@@ -5,3 +5,6 @@
 [submodule "spark-dynamodb"]
 	path = spark-dynamodb
 	url = git@github.com:iravid/spark-dynamodb
+[submodule "spark-kinesis"]
+	path = spark-kinesis
+	url = git@github.com:iravid/spark-kinesis

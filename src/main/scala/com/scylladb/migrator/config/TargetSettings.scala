@@ -22,7 +22,8 @@ object TargetSettings {
                       scanSegments: Option[Int],
                       writeThroughput: Option[Int],
                       throughputWritePercent: Option[Float],
-                      maxMapTasks: Option[Int])
+                      maxMapTasks: Option[Int],
+                      streamChanges: Boolean)
       extends TargetSettings
 
   implicit val decoder: Decoder[TargetSettings] =

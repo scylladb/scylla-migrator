@@ -1,11 +1,14 @@
+import sbt.librarymanagement.InclExclRule
+
 lazy val root = (project in file(".")).settings(
   inThisBuild(
     List(
       organization := "com.scylladb",
       scalaVersion := "2.11.12"
     )),
-  name    := "scylla-migrator",
-  version := "0.0.1",
+  name      := "scylla-migrator",
+  version   := "0.0.1",
+  mainClass := Some("com.scylladb.migrator.Migrator"),
   javacOptions ++= Seq("-source", "1.8", "-target", "1.8"),
   javaOptions ++= Seq(
     "-Xms512M",
@@ -17,19 +20,28 @@ lazy val root = (project in file(".")).settings(
   fork                      := true,
   scalafmtOnCompile         := true,
   libraryDependencies ++= Seq(
-    "org.apache.spark" %% "spark-streaming" % "2.4.4" % "provided",
-    "org.apache.spark" %% "spark-sql"       % "2.4.4" % "provided",
-    "org.yaml"         % "snakeyaml"        % "1.23",
-    "io.circe"         %% "circe-yaml"      % "0.9.0",
-    "io.circe"         %% "circe-generic"   % "0.9.0",
-    "org.scalatest"    %% "scalatest"       % "3.0.1" % "test",
-    "org.scalacheck"   %% "scalacheck"      % "1.13.4" % "test"
+    "org.apache.spark" %% "spark-streaming"      % "2.4.4" % "provided",
+    "org.apache.spark" %% "spark-sql"            % "2.4.4" % "provided",
+    "org.apache.spark" %% "spark-sql"            % "2.4.4" % "provided",
+    "com.amazonaws"    % "aws-java-sdk-sts"      % "1.11.728",
+    "com.amazonaws"    % "aws-java-sdk-dynamodb" % "1.11.728",
+    ("com.amazonaws" % "dynamodb-streams-kinesis-adapter" % "1.5.2")
+      .excludeAll(InclExclRule("com.fasterxml.jackson.core")),
+    "org.yaml"       % "snakeyaml"      % "1.23",
+    "io.circe"       %% "circe-yaml"    % "0.9.0",
+    "io.circe"       %% "circe-generic" % "0.9.0",
+    "org.scalatest"  %% "scalatest"     % "3.0.1" % "test",
+    "org.scalacheck" %% "scalacheck"    % "1.13.4" % "test"
   ),
   assemblyShadeRules in assembly := Seq(
     ShadeRule.rename("org.yaml.snakeyaml.**" -> "shaded.@1").inAll
   ),
   assemblyMergeStrategy in assembly := {
-    case PathList("org", "joda", "time", _ @_*) => MergeStrategy.first
+    case PathList("org", "joda", "time", _ @_*)                       => MergeStrategy.first
+    case PathList("org", "apache", "commons", "logging", _ @_*)       => MergeStrategy.first
+    case PathList("com", "fasterxml", "jackson", "annotation", _ @_*) => MergeStrategy.first
+    case PathList("com", "fasterxml", "jackson", "core", _ @_*)       => MergeStrategy.first
+    case PathList("com", "fasterxml", "jackson", "databind", _ @_*)   => MergeStrategy.first
     case x =>
       val oldStrategy = (assemblyMergeStrategy in assembly).value
       oldStrategy(x)

@@ -7,6 +7,8 @@ services:
       - scylla
     volumes:
       - ./data/scylla:/var/lib/scylla
+    ports:
+      - "8000:8000"
     command: "--smp 2 --memory 2048M --alternator-port 8000"
 
   cassandra:

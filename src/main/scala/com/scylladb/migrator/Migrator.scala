@@ -4,11 +4,15 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{ Files, Paths }
 import java.util.concurrent.{ ScheduledThreadPoolExecutor, TimeUnit }
 
+import com.amazonaws.services.dynamodbv2.streamsadapter.model.RecordAdapter
 import com.datastax.spark.connector.rdd.partitioner.dht.Token
 import com.datastax.spark.connector.writer._
 import com.scylladb.migrator.config._
+import com.scylladb.migrator.writers.DynamoStreamReplication
 import org.apache.log4j.{ Level, LogManager, Logger }
 import org.apache.spark.sql._
+import org.apache.spark.streaming.{ Seconds, StreamingContext }
+import org.apache.spark.streaming.kinesis.{ KinesisInputDStream, SparkAWSCredentials }
 import sun.misc.{ Signal, SignalHandler }
 
 import scala.util.control.NonFatal
@@ -83,18 +87,46 @@ object Migrator {
             sourceDF.timestampColumns,
             tokenRangeAccumulator)
         case target: TargetSettings.DynamoDB =>
-          DynamoUtils.replicateDynamoTable(migratorConfig.source, migratorConfig.target)
+          DynamoUtils.replicateTableDefinition(migratorConfig.source, migratorConfig.target)
 
           val tableDesc = DynamoUtils
             .buildDynamoClient(target.endpoint, target.credentials, target.region)
             .describeTable(target.table)
             .getTable
 
+          migratorConfig.source match {
+            case src: SourceSettings.DynamoDB if target.streamChanges =>
+              log.info(
+                "Source is a Dynamo table and change streaming requested; enabling Dynamo Stream")
+              DynamoUtils.enableDynamoStream(src)
+            case _ => ()
+          }
+
           writers.DynamoDB.writeDataframe(
             target,
             migratorConfig.renames,
             sourceDF.dataFrame,
             tableDesc)
+
+          migratorConfig.source match {
+            case src: SourceSettings.DynamoDB if target.streamChanges =>
+              log.info("Done transferring table snapshot. Starting to transfer changes")
+
+              DynamoStreamReplication.createDStream(
+                spark,
+                streamingContext,
+                src,
+                target,
+                sourceDF.dataFrame.schema,
+                tableDesc,
+                migratorConfig.renames)
+
+              streamingContext.start()
+              streamingContext.awaitTermination()
+
+            case _ => ()
+          }
+
       }
     } catch {
       case NonFatal(e) => // Catching everything on purpose to try and dump the accumulator state

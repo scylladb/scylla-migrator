@@ -6,7 +6,10 @@ import com.amazonaws.services.dynamodbv2.AmazonDynamoDBClientBuilder
 import com.amazonaws.services.dynamodbv2.model.{
   CreateTableRequest,
   ProvisionedThroughput,
-  ResourceNotFoundException
+  ResourceNotFoundException,
+  StreamSpecification,
+  StreamViewType,
+  UpdateTableRequest
 }
 import com.scylladb.migrator.config.{ DynamoDBEndpoint, SourceSettings, TargetSettings }
 import org.apache.log4j.LogManager
@@ -16,7 +19,8 @@ import scala.util.{ Failure, Success, Try }
 object DynamoUtils {
   val log = LogManager.getLogger("com.scylladb.migrator.DynamoUtils")
 
-  def replicateDynamoTable(sourceSettings: SourceSettings, targetSettings: TargetSettings): Unit =
+  def replicateTableDefinition(sourceSettings: SourceSettings,
+                               targetSettings: TargetSettings): Unit =
     (sourceSettings, targetSettings) match {
       case (source: SourceSettings.DynamoDB, target: TargetSettings.DynamoDB) =>
         // If non-existent, replicate
@@ -54,6 +58,21 @@ object DynamoUtils {
       case _ =>
         log.info("Skipping table schema replication because source/target are not both DynamoDB")
     }
+
+  def enableDynamoStream(source: SourceSettings.DynamoDB): Unit = {
+    val sourceClient = buildDynamoClient(source.endpoint, source.credentials, source.region)
+
+    sourceClient
+      .updateTable(
+        new UpdateTableRequest()
+          .withTableName(source.table)
+          .withStreamSpecification(
+            new StreamSpecification()
+              .withStreamEnabled(true)
+              .withStreamViewType(StreamViewType.NEW_IMAGE)
+          )
+      )
+  }
 
   def buildDynamoClient(endpoint: Option[DynamoDBEndpoint],
                         creds: Option[AWSCredentialsProvider],
