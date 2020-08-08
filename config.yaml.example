@@ -63,6 +63,19 @@ source:
 #
 #   # how many tasks per executor?
 #   maxMapTasks: 1
+#
+#   # When transferring DynamoDB sources to DynamoDB targets (such as other DynamoDB tables or Alternator tables),
+#   # the migrator supports transferring live changes occuring on the source table after transferring an initial
+#   # snapshot. This is done using DynamoDB streams and incurs additional charges due to the Kinesis streams created.
+#   # Enable this flag to transfer live changes after transferring an initial snapshot. The migrator will continue
+#   # replicating changes endlessly; it must be stopped manually.
+#   #
+#   # NOTE: For the migration to be performed losslessly, the initial snapshot transfer must complete within 24 hours.
+#   # Otherwise, some captured changes may be lost due to the retention period of the table's stream.
+#   #
+#   # NOTE2: The migrator does not currently delete the created Dynamo stream. Delete it manually after ending the
+#   # migrator run.
+#   streamChanges: false
 
 # Configuration for the database you're copying into
 target:
