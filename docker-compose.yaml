@@ -9,7 +9,7 @@ services:
       - ./data/scylla:/var/lib/scylla
     ports:
       - "8000:8000"
-    command: "--smp 2 --memory 2048M --alternator-port 8000"
+    command: "--smp 2 --memory 2048M --alternator-port 8000 --alternator-write-isolation always_use_lwt"
 
   cassandra:
     image: cassandra:latest
@@ -54,7 +54,7 @@ services:
     hostname: spark-worker
     container_name: spark-worker-1
     environment:
-      SPARK_WORKER_CORES: 1
+      SPARK_WORKER_CORES: 3
       SPARK_WORKER_MEMORY: 1024m
       SPARK_WORKER_WEBUI_PORT: 8081
       SPARK_PUBLIC_DNS: spark-worker
