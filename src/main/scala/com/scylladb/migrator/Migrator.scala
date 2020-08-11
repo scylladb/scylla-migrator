@@ -28,11 +28,12 @@ object Migrator {
       .config("spark.task.maxFailures", "1024")
       .config("spark.stage.maxConsecutiveAttempts", "60")
       .getOrCreate
+    val streamingContext = new StreamingContext(spark.sparkContext, Seconds(5))
 
     Logger.getRootLogger.setLevel(Level.WARN)
     log.setLevel(Level.INFO)
-    Logger.getLogger("org.apache.spark.scheduler.TaskSetManager").setLevel(Level.INFO)
-    Logger.getLogger("com.datastax.spark.connector.cql.CassandraConnector").setLevel(Level.INFO)
+    Logger.getLogger("org.apache.spark.scheduler.TaskSetManager").setLevel(Level.WARN)
+    Logger.getLogger("com.datastax.spark.connector.cql.CassandraConnector").setLevel(Level.WARN)
 
     val migratorConfig =
       MigratorConfig.loadFrom(spark.conf.get("spark.scylla.config"))
