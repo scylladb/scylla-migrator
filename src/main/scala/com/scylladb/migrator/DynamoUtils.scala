@@ -2,9 +2,14 @@ package com.scylladb.migrator
 
 import com.amazonaws.auth.AWSCredentialsProvider
 import com.amazonaws.client.builder.AwsClientBuilder
-import com.amazonaws.services.dynamodbv2.AmazonDynamoDBClientBuilder
+import com.amazonaws.services.dynamodbv2.{
+  AmazonDynamoDBClientBuilder,
+  AmazonDynamoDBStreamsClient,
+  AmazonDynamoDBStreamsClientBuilder
+}
 import com.amazonaws.services.dynamodbv2.model.{
   CreateTableRequest,
+  DescribeStreamRequest,
   ProvisionedThroughput,
   ResourceNotFoundException,
   StreamSpecification,
@@ -61,6 +66,7 @@ object DynamoUtils {
 
   def enableDynamoStream(source: SourceSettings.DynamoDB): Unit = {
     val sourceClient = buildDynamoClient(source.endpoint, source.credentials, source.region)
+    val sourceStreamsClient = buildDynamoStreamsClient(source.credentials, source.region)
 
     sourceClient
       .updateTable(
@@ -72,6 +78,24 @@ object DynamoUtils {
               .withStreamViewType(StreamViewType.NEW_IMAGE)
           )
       )
+
+    var done = false
+    while (!done) {
+      val tableDesc = sourceClient.describeTable(source.table)
+      val latestStreamArn = tableDesc.getTable.getLatestStreamArn
+      val describeStream = sourceStreamsClient.describeStream(
+        new DescribeStreamRequest().withStreamArn(latestStreamArn))
+
+      val streamStatus = describeStream.getStreamDescription.getStreamStatus
+      if (streamStatus == "ENABLED") {
+        log.info("Stream enabled successfully")
+        done = true
+      } else {
+        log.info(
+          s"Stream not yet enabled (status ${streamStatus}); waiting for 5 seconds and retrying")
+        Thread.sleep(5000)
+      }
+    }
   }
 
   def buildDynamoClient(endpoint: Option[DynamoDBEndpoint],
@@ -86,6 +110,15 @@ object DynamoUtils {
             endpoint.renderEndpoint,
             region.getOrElse("empty")))
     }
+    creds.foreach(builder.withCredentials)
+    region.foreach(builder.withRegion)
+
+    builder.build()
+  }
+
+  def buildDynamoStreamsClient(creds: Option[AWSCredentialsProvider], region: Option[String]) = {
+    val builder = AmazonDynamoDBStreamsClientBuilder.standard()
+
     creds.foreach(builder.withCredentials)
     region.foreach(builder.withRegion)
 
