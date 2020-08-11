@@ -201,7 +201,7 @@ object Cassandra {
       )
 
     val tableDef =
-      Schema.tableFromCassandra(connector, source.keyspace, source.table)
+      connector.withSessionDo(Schema.tableFromCassandra(_, source.keyspace, source.table))
     log.info("TableDef retrieved for source:")
     log.info(tableDef)
 

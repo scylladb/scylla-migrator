@@ -37,7 +37,8 @@ object Validator {
 
     val renameMap = config.renames.map(rename => rename.from -> rename.to).toMap
     val sourceTableDef =
-      Schema.tableFromCassandra(sourceConnector, sourceSettings.keyspace, sourceSettings.table)
+      sourceConnector.withSessionDo(
+        Schema.tableFromCassandra(_, sourceSettings.keyspace, sourceSettings.table))
 
     val source = {
       val regularColumnsProjection =
