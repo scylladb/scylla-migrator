@@ -13,6 +13,7 @@ import org.apache.spark.sql.cassandra.{ CassandraSQLRow, DataTypeConverter }
 import org.apache.spark.sql.catalyst.encoders.RowEncoder
 import org.apache.spark.sql.types.{ LongType, StructField, StructType }
 import org.apache.spark.sql.{ DataFrame, Row, SparkSession }
+import org.apache.spark.unsafe.types.UTF8String
 
 object Cassandra {
   val log = LogManager.getLogger("com.scylladb.migrator.readers.Cassandra")
@@ -220,12 +221,22 @@ object Cassandra {
       .withReadConf(readConf)
       .select(selection.columnRefs: _*)
       .asInstanceOf[RDD[Row]]
+      .map { row =>
+        Row.fromSeq(
+          row.toSeq.map {
+            // We're using a low-level API of the Cassandra connector which produces UTF8String
+            // objects for the various textual data types in Cassandra. Spark forbids this type
+            // from showing up in DataFrames (it usually converts it internally), so we need to
+            // convert it to a String ourselves.
+            case x: UTF8String => x.toString
+            case x             => x
+          }
+        )
+      }
 
     val resultingDataframe = adjustDataframeForTimestampPreservation(
       spark,
-      // spark.createDataFrame does something weird with the encoder (tries to convert the row again),
-      // so it's important to use createDataset with an explciit encoder instead here
-      spark.createDataset(rdd)(RowEncoder(selection.schema)),
+      spark.createDataFrame(rdd, selection.schema),
       selection.timestampColumns,
       origSchema,
       tableDef

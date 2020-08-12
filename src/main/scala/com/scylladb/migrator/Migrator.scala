@@ -24,7 +24,6 @@ object Migrator {
     implicit val spark = SparkSession
       .builder()
       .appName("scylla-migrator")
-      .config("spark.cassandra.dev.customFromDriver", "com.scylladb.migrator.CustomUUIDConverter")
       .config("spark.task.maxFailures", "1024")
       .config("spark.stage.maxConsecutiveAttempts", "60")
       .getOrCreate

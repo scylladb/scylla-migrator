@@ -40,16 +40,7 @@ object Scylla {
     log.info("Schema after renames:")
     log.info(renamedSchema.treeString)
 
-    val columnSelector =
-      timestampColumns match {
-        case None =>
-          SomeColumns(renamedSchema.fields.map(_.name: ColumnRef): _*)
-        case Some(TimestampColumns(ttl, writeTime)) =>
-          SomeColumns(
-            renamedSchema.fields
-              .map(x => x.name: ColumnRef)
-              .filterNot(ref => ref.columnName == ttl || ref.columnName == writeTime): _*)
-      }
+    val columnSelector = SomeColumns(renamedSchema.fields.map(_.name: ColumnRef): _*)
 
     df.rdd.saveToCassandra(
       target.keyspace,
