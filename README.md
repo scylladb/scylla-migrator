@@ -1,14 +1,17 @@
 # Building
 
-Make sure `sbt` is installed on your machine, and run `build.sh`.
+1. Make sure the Java 8 JDK and `sbt` are installed on your machine.
+2. Export the `JAVA_HOME` environment variable with the path to the
+JDK installation.
+3. Run `build.sh`.
 
 # Configuring the Migrator
 
-Create a `config.yaml` for your migration using the template `config.yaml` in the repository root. Read the comments throughout carefully.
+Create a `config.yaml` for your migration using the template `config.yaml.example` in the repository root. Read the comments throughout carefully.
 
 # Running on a live Spark cluster
 
-The Scylla Migrator is built against Spark 2.3.1, so you'll need to run that version on your cluster.
+The Scylla Migrator is built against Spark 2.4.4, so you'll need to run that version on your cluster.
 
 After running `build.sh`, copy the jar from `./target/scala-2.11/scylla-migrator-assembly-0.0.1.jar` and the `config.yaml` you've created to the Spark master server.
 

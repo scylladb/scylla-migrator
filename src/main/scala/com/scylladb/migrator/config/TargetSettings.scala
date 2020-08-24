@@ -1,15 +1,49 @@
 package com.scylladb.migrator.config
 
-import io.circe.{ Decoder, Encoder }
+import cats.implicits._
+import io.circe.{ Decoder, DecodingFailure, Encoder, Json }
 import io.circe.generic.semiauto.{ deriveDecoder, deriveEncoder }
+import io.circe.syntax._
 
-case class TargetSettings(host: String,
-                          port: Int,
-                          credentials: Option[Credentials],
-                          keyspace: String,
-                          table: String,
-                          connections: Option[Int])
+sealed trait TargetSettings
 object TargetSettings {
-  implicit val encoder: Encoder[TargetSettings] = deriveEncoder[TargetSettings]
-  implicit val decoder: Decoder[TargetSettings] = deriveDecoder[TargetSettings]
+  case class Scylla(host: String,
+                    port: Int,
+                    credentials: Option[Credentials],
+                    keyspace: String,
+                    table: String,
+                    connections: Option[Int])
+      extends TargetSettings
+
+  case class DynamoDB(endpoint: Option[DynamoDBEndpoint],
+                      region: Option[String],
+                      credentials: Option[AWSCredentials],
+                      table: String,
+                      scanSegments: Option[Int],
+                      writeThroughput: Option[Int],
+                      throughputWritePercent: Option[Float],
+                      maxMapTasks: Option[Int],
+                      streamChanges: Boolean)
+      extends TargetSettings
+
+  implicit val decoder: Decoder[TargetSettings] =
+    Decoder.instance { cursor =>
+      cursor.get[String]("type").flatMap {
+        case "scylla" | "cassandra" =>
+          deriveDecoder[Scylla].apply(cursor)
+        case "dynamodb" | "dynamo" =>
+          deriveDecoder[DynamoDB].apply(cursor)
+        case otherwise =>
+          Left(DecodingFailure(s"Invalid target type: ${otherwise}", cursor.history))
+      }
+    }
+
+  implicit val encoder: Encoder[TargetSettings] =
+    Encoder.instance {
+      case t: Scylla =>
+        deriveEncoder[Scylla].encodeObject(t).add("type", Json.fromString("scylla")).asJson
+
+      case t: DynamoDB =>
+        deriveEncoder[DynamoDB].encodeObject(t).add("type", Json.fromString("dynamodb")).asJson
+    }
 }

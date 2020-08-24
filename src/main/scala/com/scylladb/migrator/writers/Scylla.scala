@@ -1,19 +1,18 @@
-package com.scylladb.migrator.writer
+package com.scylladb.migrator.writers
 
 import com.datastax.spark.connector.writer._
 import com.datastax.spark.connector._
 import com.scylladb.migrator.Connectors
 import com.scylladb.migrator.config.{ CopyType, Rename, TargetSettings }
+import com.scylladb.migrator.readers.TimestampColumns
 import org.apache.log4j.LogManager
 import org.apache.spark.sql.{ DataFrame, SparkSession }
 
-object Writer {
-  case class TimestampColumns(ttl: String, writeTime: String)
-
-  val log = LogManager.getLogger("com.scylladb.migrator.writer")
+object Scylla {
+  val log = LogManager.getLogger("com.scylladb.migrator.writer.Scylla")
 
   def writeDataframe(
-    target: TargetSettings,
+    target: TargetSettings.Scylla,
     renames: List[Rename],
     df: DataFrame,
     timestampColumns: Option[TimestampColumns],
@@ -41,16 +40,7 @@ object Writer {
     log.info("Schema after renames:")
     log.info(renamedSchema.treeString)
 
-    val columnSelector =
-      timestampColumns match {
-        case None =>
-          SomeColumns(renamedSchema.fields.map(_.name: ColumnRef): _*)
-        case Some(TimestampColumns(ttl, writeTime)) =>
-          SomeColumns(
-            renamedSchema.fields
-              .map(x => x.name: ColumnRef)
-              .filterNot(ref => ref.columnName == ttl || ref.columnName == writeTime): _*)
-      }
+    val columnSelector = SomeColumns(renamedSchema.fields.map(_.name: ColumnRef): _*)
 
     df.rdd.saveToCassandra(
       target.keyspace,
