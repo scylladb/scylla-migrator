@@ -14,6 +14,7 @@ import com.amazonaws.services.dynamodbv2.model.{
   ResourceNotFoundException,
   StreamSpecification,
   StreamViewType,
+  TableDescription,
   UpdateTableRequest
 }
 import com.scylladb.migrator.config.{ DynamoDBEndpoint, SourceSettings, TargetSettings }
@@ -24,45 +25,42 @@ import scala.util.{ Failure, Success, Try }
 object DynamoUtils {
   val log = LogManager.getLogger("com.scylladb.migrator.DynamoUtils")
 
-  def replicateTableDefinition(sourceSettings: SourceSettings,
-                               targetSettings: TargetSettings): Unit =
-    (sourceSettings, targetSettings) match {
-      case (source: SourceSettings.DynamoDB, target: TargetSettings.DynamoDB) =>
-        // If non-existent, replicate
-        val sourceClient = buildDynamoClient(source.endpoint, source.credentials, source.region)
-        val targetClient = buildDynamoClient(target.endpoint, target.credentials, target.region)
-        val sourceDescription = sourceClient.describeTable(source.table).getTable
+  def replicateTableDefinition(sourceDescription: TableDescription,
+                               target: TargetSettings.DynamoDB): TableDescription = {
+    // If non-existent, replicate
+    val targetClient = buildDynamoClient(target.endpoint, target.credentials, target.region)
 
-        log.info("Checking for table existence at destination")
-        val targetDescription = Try(targetClient.describeTable(target.table))
-        targetDescription match {
-          case Success(desc) =>
-            log.info(s"Table ${source.table} exists at destination")
+    log.info("Checking for table existence at destination")
+    val targetDescription = Try(targetClient.describeTable(target.table))
+    targetDescription match {
+      case Success(desc) =>
+        log.info(s"Table ${target.table} exists at destination")
+        desc.getTable
 
-          case Failure(e: ResourceNotFoundException) =>
-            val request = new CreateTableRequest()
-              .withTableName(target.table)
-              .withKeySchema(sourceDescription.getKeySchema)
-              .withAttributeDefinitions(sourceDescription.getAttributeDefinitions)
-              .withProvisionedThroughput(
-                new ProvisionedThroughput(
-                  sourceDescription.getProvisionedThroughput.getReadCapacityUnits,
-                  sourceDescription.getProvisionedThroughput.getWriteCapacityUnits
-                )
-              )
+      case Failure(e: ResourceNotFoundException) =>
+        val request = new CreateTableRequest()
+          .withTableName(target.table)
+          .withKeySchema(sourceDescription.getKeySchema)
+          .withAttributeDefinitions(sourceDescription.getAttributeDefinitions)
+          .withProvisionedThroughput(
+            new ProvisionedThroughput(
+              sourceDescription.getProvisionedThroughput.getReadCapacityUnits,
+              sourceDescription.getProvisionedThroughput.getWriteCapacityUnits
+            )
+          )
 
-            log.info(
-              s"Table ${source.table} does not exist at destination - creating it according to definition:")
-            log.info(sourceDescription.toString)
-            targetClient.createTable(request)
-            log.info(s"Table ${source.table} created.")
+        log.info(
+          s"Table ${target.table} does not exist at destination - creating it according to definition:")
+        log.info(sourceDescription.toString)
+        targetClient.createTable(request)
+        log.info(s"Table ${target.table} created.")
 
-          case Failure(otherwise) =>
-            throw new RuntimeException("Failed to check for table existence", otherwise)
-        }
-      case _ =>
-        log.info("Skipping table schema replication because source/target are not both DynamoDB")
+        targetClient.describeTable(target.table).getTable
+
+      case Failure(otherwise) =>
+        throw new RuntimeException("Failed to check for table existence", otherwise)
     }
+  }
 
   def enableDynamoStream(source: SourceSettings.DynamoDB): Unit = {
     val sourceClient = buildDynamoClient(source.endpoint, source.credentials, source.region)

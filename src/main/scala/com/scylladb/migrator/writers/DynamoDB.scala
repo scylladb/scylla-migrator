@@ -10,11 +10,12 @@ import org.apache.spark.sql.{ DataFrame, SparkSession }
 object DynamoDB {
   val log = LogManager.getLogger("com.scylladb.migrator.writers.DynamoDB")
 
-  def writeDataframe(target: TargetSettings.DynamoDB,
-                     renames: List[Rename],
-                     df: DataFrame,
-                     targetTableDesc: TableDescription)(implicit spark: SparkSession): Unit = {
-    val provisionedThroughput = Option(targetTableDesc.getProvisionedThroughput)
+  def writeDataframe(
+    target: TargetSettings.DynamoDB,
+    renames: List[Rename],
+    df: DataFrame,
+    targetTableDesc: Option[TableDescription])(implicit spark: SparkSession): Unit = {
+    val provisionedThroughput = targetTableDesc.flatMap(p => Option(p.getProvisionedThroughput))
     val readThroughput = provisionedThroughput.flatMap(p => Option(p.getReadCapacityUnits))
     val writeThroughput = provisionedThroughput.flatMap(p => Option(p.getWriteCapacityUnits))
 

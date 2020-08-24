@@ -9,7 +9,7 @@ import com.audienceproject.spark.dynamodb.connector.ColumnSchema
 import com.audienceproject.spark.dynamodb.datasource.TypeConverter
 import com.scylladb.migrator.config.{ AWSCredentials, Rename, SourceSettings, TargetSettings }
 import org.apache.log4j.LogManager
-import org.apache.spark.sql.types.{ BooleanType, StructType }
+import org.apache.spark.sql.types.{ BooleanType, StringType, StructType }
 import org.apache.spark.sql.{ Row, SparkSession }
 import org.apache.spark.streaming.StreamingContext
 import org.apache.spark.streaming.kinesis.{
@@ -20,6 +20,8 @@ import org.apache.spark.streaming.kinesis.{
 import org.apache.spark.unsafe.types.UTF8String
 import org.apache.spark.sql.{ functions => f }
 
+import scala.collection.JavaConverters._
+
 object DynamoStreamReplication {
   val log = LogManager.getLogger("com.scylladb.migrator.writers.DynamoStreamReplication")
 
@@ -28,9 +30,12 @@ object DynamoStreamReplication {
                     src: SourceSettings.DynamoDB,
                     target: TargetSettings.DynamoDB,
                     inferredSchema: StructType,
+                    sourceTableDesc: TableDescription,
                     targetTableDesc: TableDescription,
                     renames: List[Rename]) = {
     val typeConverter = TypeConverter.fromStructType(inferredSchema)
+    val partitionColumns =
+      sourceTableDesc.getKeySchema.asScala.map(keyElement => f.col(keyElement.getAttributeName))
 
     KinesisInputDStream.builder
       .streamingContext(streamingContext)
@@ -87,6 +92,7 @@ object DynamoStreamReplication {
               },
             inferredSchema.add(ColumnSchema.OperationTypeColumn, BooleanType)
           )
+          .repartition(partitionColumns: _*)
 
         log.info("Changes to be applied:")
         df.select(
@@ -103,7 +109,7 @@ object DynamoStreamReplication {
           .count()
           .show()
 
-        DynamoDB.writeDataframe(target, renames, df, targetTableDesc)(spark)
+        DynamoDB.writeDataframe(target, renames, df, Some(targetTableDesc))(spark)
       }
   }
 }
