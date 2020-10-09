@@ -122,7 +122,6 @@ object Validator {
     implicit val spark = SparkSession
       .builder()
       .appName("scylla-validator")
-      .config("spark.cassandra.dev.customFromDriver", "com.scylladb.migrator.CustomUUIDConverter")
       .config("spark.task.maxFailures", "1024")
       .config("spark.stage.maxConsecutiveAttempts", "60")
       .getOrCreate
