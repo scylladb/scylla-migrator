@@ -233,21 +233,21 @@ object Cassandra {
         // done in the SourceRelation connector of the Dataframe API. So we have to replicate
         // them here. Future versions of the migrator will use the DataFrame API directly to
         // avoid this replication.
-        lazy val convertUTF8String: Any => AnyRef = {
+        lazy val convertRowTypes: Any => AnyRef = {
           case x: UTF8String => x.toString
-          case set: Set[_]   => set.map(convertUTF8String)
-          case list: List[_] => list.map(convertUTF8String)
+          case set: Set[_]   => set.map(convertRowTypes)
+          case list: List[_] => list.map(convertRowTypes)
           case map: Map[_, _] =>
             map.map {
-              case (k, v) => convertUTF8String(k) -> convertUTF8String(v)
+              case (k, v) => convertRowTypes(k) -> convertRowTypes(v)
             }
-          case ab: ArrayBuffer[_] => ab.map(convertUTF8String)
-          case udt: UDTValue      => Row.fromSeq(udt.columnValues.map(convertUTF8String))
-          case tuple: TupleValue  => Row.fromSeq(tuple.values.map(convertUTF8String))
+          case ab: ArrayBuffer[_] => ab.map(convertRowTypes)
+          case udt: UDTValue      => Row.fromSeq(udt.columnValues.map(convertRowTypes))
+          case tuple: TupleValue  => Row.fromSeq(tuple.values.map(convertRowTypes))
           case x                  => x.asInstanceOf[AnyRef]
         }
 
-        Row.fromSeq(row.toSeq.map(convertUTF8String))
+        Row.fromSeq(row.toSeq.map(convertRowTypes))
       }
 
     val resultingDataframe = adjustDataframeForTimestampPreservation(
