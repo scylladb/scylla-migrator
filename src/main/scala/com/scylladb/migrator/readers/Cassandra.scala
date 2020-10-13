@@ -222,16 +222,26 @@ object Cassandra {
       .select(selection.columnRefs: _*)
       .asInstanceOf[RDD[Row]]
       .map { row =>
-        Row.fromSeq(
-          row.toSeq.map {
-            // We're using a low-level API of the Cassandra connector which produces UTF8String
-            // objects for the various textual data types in Cassandra. Spark forbids this type
-            // from showing up in DataFrames (it usually converts it internally), so we need to
-            // convert it to a String ourselves.
-            case x: UTF8String => x.toString
-            case x             => x
-          }
-        )
+        // We're using a low-level API of the Cassandra connector which produces UTF8String
+        // objects for the various textual data types in Cassandra. Spark forbids this type
+        // from showing up in DataFrames (it usually converts it internally), so we need to
+        // convert it to a String ourselves. Unfortunately we need to also recurse through the
+        // composite data types that can be produced from Cassandra, so this logic is slightly
+        // more involved than simply mapping.
+        lazy val convertUTF8String: Any => AnyRef = {
+          case x: UTF8String => x.toString
+          case set: Set[_]   => set.map(convertUTF8String)
+          case list: List[_] => list.map(convertUTF8String)
+          case map: Map[_, _] =>
+            map.map {
+              case (k, v) => convertUTF8String(k) -> convertUTF8String(v)
+            }
+          case UDTValue(names, values) => UDTValue(names, values map convertUTF8String)
+          case tuple: TupleValue       => TupleValue(tuple.values.map(convertUTF8String): _*)
+          case x                       => x.asInstanceOf[AnyRef]
+        }
+
+        Row.fromSeq(row.toSeq.map(convertUTF8String))
       }
 
     val resultingDataframe = adjustDataframeForTimestampPreservation(
