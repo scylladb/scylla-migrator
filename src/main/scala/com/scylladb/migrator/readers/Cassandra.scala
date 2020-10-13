@@ -15,6 +15,8 @@ import org.apache.spark.sql.types.{ LongType, StructField, StructType }
 import org.apache.spark.sql.{ DataFrame, Row, SparkSession }
 import org.apache.spark.unsafe.types.UTF8String
 
+import scala.collection.mutable.ArrayBuffer
+
 object Cassandra {
   val log = LogManager.getLogger("com.scylladb.migrator.readers.Cassandra")
 
@@ -222,12 +224,15 @@ object Cassandra {
       .select(selection.columnRefs: _*)
       .asInstanceOf[RDD[Row]]
       .map { row =>
-        // We're using a low-level API of the Cassandra connector which produces UTF8String
-        // objects for the various textual data types in Cassandra. Spark forbids this type
-        // from showing up in DataFrames (it usually converts it internally), so we need to
-        // convert it to a String ourselves. Unfortunately we need to also recurse through the
-        // composite data types that can be produced from Cassandra, so this logic is slightly
-        // more involved than simply mapping.
+        // We need to handle three conversions here that are not done for us:
+        // - UTF8Strings to plain Strings
+        // - UDTValue to Row
+        // - TupleValue to Row
+        //
+        // We're using the RDD API of the Cassandra connector, and these conversions are
+        // done in the SourceRelation connector of the Dataframe API. So we have to replicate
+        // them here. Future versions of the migrator will use the DataFrame API directly to
+        // avoid this replication.
         lazy val convertUTF8String: Any => AnyRef = {
           case x: UTF8String => x.toString
           case set: Set[_]   => set.map(convertUTF8String)
@@ -236,9 +241,10 @@ object Cassandra {
             map.map {
               case (k, v) => convertUTF8String(k) -> convertUTF8String(v)
             }
-          case UDTValue(names, values) => UDTValue(names, values map convertUTF8String)
-          case tuple: TupleValue       => TupleValue(tuple.values.map(convertUTF8String): _*)
-          case x                       => x.asInstanceOf[AnyRef]
+          case ab: ArrayBuffer[_] => ab.map(convertUTF8String)
+          case udt: UDTValue      => Row.fromSeq(udt.columnValues.map(convertUTF8String))
+          case tuple: TupleValue  => Row.fromSeq(tuple.values.map(convertUTF8String))
+          case x                  => x.asInstanceOf[AnyRef]
         }
 
         Row.fromSeq(row.toSeq.map(convertUTF8String))
