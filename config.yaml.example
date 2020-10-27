@@ -91,6 +91,11 @@ target:
   table: stocks
   # Number of connections to use to Scylla when copying
   connections: 16
+  # Spark pads decimals with zeros appropriate to their scale. This causes values
+  # like '3.5' to be copied as '3.5000000000...' to the target. There's no good way
+  # currently to preserve the original value, so this flag can strip trailing zeros
+  # on decimal values before they are written.
+  stripTrailingZerosForDecimals: false
 
 # Example for loading into a DynamoDB target (for example, Scylla's Alternator):
 # target:
