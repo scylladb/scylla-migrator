@@ -6,7 +6,7 @@ import com.scylladb.migrator.Connectors
 import com.scylladb.migrator.config.{ CopyType, Rename, TargetSettings }
 import com.scylladb.migrator.readers.TimestampColumns
 import org.apache.log4j.LogManager
-import org.apache.spark.sql.{ DataFrame, SparkSession }
+import org.apache.spark.sql.{ DataFrame, Row, SparkSession }
 
 object Scylla {
   val log = LogManager.getLogger("com.scylladb.migrator.writer.Scylla")
@@ -42,13 +42,27 @@ object Scylla {
 
     val columnSelector = SomeColumns(renamedSchema.fields.map(_.name: ColumnRef): _*)
 
-    df.rdd.saveToCassandra(
-      target.keyspace,
-      target.table,
-      columnSelector,
-      writeConf,
-      tokenRangeAccumulator = tokenRangeAccumulator
-    )(connector, SqlRowWriter.Factory)
+    // Spark's conversion from its internal Decimal type to java.math.BigDecimal
+    // pads the resulting value with trailing zeros corresponding to the scale of the
+    // Decimal type. Some users don't like this so we conditionally strip those.
+    val rdd =
+      if (!target.stripTrailingZerosForDecimals) df.rdd
+      else
+        df.rdd.map { row =>
+          Row.fromSeq(row.toSeq.map {
+            case x: java.math.BigDecimal => x.stripTrailingZeros()
+            case x                       => x
+          })
+        }
+
+    rdd
+      .saveToCassandra(
+        target.keyspace,
+        target.table,
+        columnSelector,
+        writeConf,
+        tokenRangeAccumulator = tokenRangeAccumulator
+      )(connector, SqlRowWriter.Factory)
   }
 
 }
