@@ -12,8 +12,7 @@ object TargetSettings {
                     credentials: Option[Credentials],
                     keyspace: String,
                     table: String,
-                    connections: Option[Int],
-                    stripTrailingZerosForDecimals: Boolean)
+                    connections: Option[Int])
       extends TargetSettings
 
   case class DynamoDB(endpoint: Option[DynamoDBEndpoint],

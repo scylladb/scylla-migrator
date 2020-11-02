@@ -1,23 +1,6 @@
 version: '3'
 
 services:
-  scylla:
-    image: scylladb/scylla:latest
-    networks:
-      - scylla
-    volumes:
-      - ./data/scylla:/var/lib/scylla
-    ports:
-      - "8000:8000"
-    command: "--smp 2 --memory 2048M --alternator-port 8000 --alternator-write-isolation always_use_lwt"
-
-  cassandra:
-    image: cassandra:latest
-    networks:
-      - scylla
-    volumes:
-      - ./data/cassandra:/var/lib/cassandra
-
   spark-master:
     image: bde2020/spark-master:2.4.4-hadoop2.7
     container_name: spark-master
@@ -46,7 +29,6 @@ services:
     volumes:
       - ./data/spark-master:/tmp/data
       - ./target/scala-2.11:/jars
-      - ./parquet-data:/parquet-data
       - ./:/app
 
   spark-worker:
@@ -71,7 +53,6 @@ services:
       - 8081:8081
     volumes:
       - ./data/spark-worker:/tmp/data
-      - ./parquet-data:/parquet-data
     depends_on:
       - spark-master
 
