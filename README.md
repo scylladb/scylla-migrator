@@ -63,7 +63,7 @@ docker-compose exec scylla cqlsh
 
 6. Then, launch `spark-submit` in the master's container to run the job:
 ```shell
-docker-compose exec spark-master spark-submit --class com.scylladb.migrator.Migrator \
+docker-compose exec spark-master /spark/bin/spark-submit --class com.scylladb.migrator.Migrator \
   --master spark://spark-master:7077 \
   --conf spark.driver.host=spark-master \
   --conf spark.scylla.config=/app/config.yaml \
