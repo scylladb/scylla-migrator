@@ -11,7 +11,7 @@ import org.apache.log4j.LogManager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.cassandra.{ CassandraSQLRow, DataTypeConverter }
 import org.apache.spark.sql.catalyst.encoders.RowEncoder
-import org.apache.spark.sql.types.{ LongType, StructField, StructType }
+import org.apache.spark.sql.types.{ IntegerType, LongType, StructField, StructType }
 import org.apache.spark.sql.{ DataFrame, Row, SparkSession }
 import org.apache.spark.unsafe.types.UTF8String
 
@@ -63,7 +63,7 @@ object Cassandra {
           field <- if (isRegular)
                     List(
                       origField,
-                      StructField(s"${origField.name}_ttl", LongType, true),
+                      StructField(s"${origField.name}_ttl", IntegerType, true),
                       StructField(s"${origField.name}_writetime", LongType, true))
                   else List(origField)
         } yield field)
@@ -105,7 +105,7 @@ object Cassandra {
                 if (row.isNullAt(ordinal)) CassandraOption.Null
                 else CassandraOption.Value(row.get(ordinal)),
                 if (row.isNullAt(ttlOrdinal)) None
-                else Some(row.getLong(ttlOrdinal)),
+                else Some(row.getInt(ttlOrdinal)),
                 row.getLong(writetimeOrdinal)))
 
           case _ =>
@@ -175,7 +175,7 @@ object Cassandra {
         val broadcastSchema = spark.sparkContext.broadcast(origSchema)
         val finalSchema = StructType(
           origSchema.fields ++
-            Seq(StructField(ttl, LongType, true), StructField(writeTime, LongType, true))
+            Seq(StructField(ttl, IntegerType, true), StructField(writeTime, LongType, true))
         )
 
         log.info("Schema that'll be used for writing to Scylla:")
@@ -233,7 +233,7 @@ object Cassandra {
         // done in the SourceRelation connector of the Dataframe API. So we have to replicate
         // them here. Future versions of the migrator will use the DataFrame API directly to
         // avoid this replication.
-        lazy val convertRowTypes: Any => AnyRef = {
+        lazy val convertRowTypes: Any => Any = {
           case x: UTF8String => x.toString
           case set: Set[_]   => set.map(convertRowTypes)
           case list: List[_] => list.map(convertRowTypes)
@@ -244,7 +244,7 @@ object Cassandra {
           case ab: ArrayBuffer[_] => ab.map(convertRowTypes)
           case udt: UDTValue      => Row.fromSeq(udt.columnValues.map(convertRowTypes))
           case tuple: TupleValue  => Row.fromSeq(tuple.values.map(convertRowTypes))
-          case x                  => x.asInstanceOf[AnyRef]
+          case x                  => x
         }
 
         Row.fromSeq(row.toSeq.map(convertRowTypes))
