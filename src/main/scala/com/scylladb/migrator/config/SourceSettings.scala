@@ -24,7 +24,8 @@ object SourceSettings {
                        splitCount: Option[Int],
                        connections: Option[Int],
                        fetchSize: Int,
-                       preserveTimestamps: Boolean)
+                       preserveTimestamps: Boolean,
+                       where: Option[String])
       extends SourceSettings
   case class DynamoDB(endpoint: Option[DynamoDBEndpoint],
                       region: Option[String],
@@ -41,7 +42,7 @@ object SourceSettings {
     cursor.get[String]("type").flatMap {
       case "cassandra" | "scylla" =>
         Decoder
-          .forProduct9(
+          .forProduct10(
             "host",
             "port",
             "credentials",
@@ -50,7 +51,8 @@ object SourceSettings {
             "splitCount",
             "connections",
             "fetchSize",
-            "preserveTimestamps")(Cassandra.apply)
+            "preserveTimestamps",
+            "where")(Cassandra.apply)
           .apply(cursor)
       case "parquet" =>
         Decoder
@@ -66,7 +68,7 @@ object SourceSettings {
   implicit val encoder: Encoder[SourceSettings] = Encoder.instance {
     case s: Cassandra =>
       Encoder
-        .forProduct9(
+        .forProduct10(
           "host",
           "port",
           "credentials",
@@ -75,7 +77,8 @@ object SourceSettings {
           "splitCount",
           "connections",
           "fetchSize",
-          "preserveTimestamps")(Cassandra.unapply(_: Cassandra).get)
+          "preserveTimestamps",
+          "where")(Cassandra.unapply(_: Cassandra).get)
         .encodeObject(s)
         .add("type", Json.fromString("cassandra"))
         .asJson
