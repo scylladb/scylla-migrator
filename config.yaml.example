@@ -19,6 +19,8 @@ source:
   connections: 8
   # Number of rows to fetch in each read
   fetchSize: 1000
+  # Optional condition to filter source table data that will be migrated
+  # where: race_start_date = '2015-05-27' AND race_end_date = '2015-05-27'
 
 # Example for loading from Parquet:
 # source:
