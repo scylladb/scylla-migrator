@@ -214,7 +214,7 @@ object Cassandra {
 
     val selection = createSelection(tableDef, origSchema, preserveTimes).fold(throw _, identity)
 
-    val rdd = spark.sparkContext
+    val selectCassandraRDD = spark.sparkContext
       .cassandraTable[CassandraSQLRow](
         source.keyspace,
         source.table,
@@ -222,6 +222,13 @@ object Cassandra {
       .withConnector(connector)
       .withReadConf(readConf)
       .select(selection.columnRefs: _*)
+
+    val finalCassandraRDD = source.where match {
+      case Some(filter) => selectCassandraRDD.where(filter)
+      case None         => selectCassandraRDD
+    }
+
+    val rdd = finalCassandraRDD
       .asInstanceOf[RDD[Row]]
       .map { row =>
         // We need to handle three conversions here that are not done for us:
