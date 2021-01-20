@@ -106,7 +106,7 @@ object Cassandra {
                 if (row.isNullAt(ttlOrdinal)) None
                 else Some(row.getInt(ttlOrdinal)),
                 if (row.isNullAt(writetimeOrdinal)) None
-                else Some(row.getInt(writetimeOrdinal)))
+                else Some(row.getLong(writetimeOrdinal)))
           }
           .groupBy {
             case (fieldName, value, ttl, writetime) => (ttl, writetime)
