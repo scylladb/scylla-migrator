@@ -19,6 +19,7 @@ object SourceSettings {
   case class Cassandra(host: String,
                        port: Int,
                        credentials: Option[Credentials],
+                       sslOptions: Option[SSLOptions],
                        keyspace: String,
                        table: String,
                        splitCount: Option[Int],
@@ -41,23 +42,9 @@ object SourceSettings {
   implicit val decoder: Decoder[SourceSettings] = Decoder.instance { cursor =>
     cursor.get[String]("type").flatMap {
       case "cassandra" | "scylla" =>
-        Decoder
-          .forProduct10(
-            "host",
-            "port",
-            "credentials",
-            "keyspace",
-            "table",
-            "splitCount",
-            "connections",
-            "fetchSize",
-            "preserveTimestamps",
-            "where")(Cassandra.apply)
-          .apply(cursor)
+        deriveDecoder[Cassandra].apply(cursor)
       case "parquet" =>
-        Decoder
-          .forProduct2("path", "credentials")(Parquet.apply)
-          .apply(cursor)
+        deriveDecoder[Parquet].apply(cursor)
       case "dynamo" | "dynamodb" =>
         deriveDecoder[DynamoDB].apply(cursor)
       case otherwise =>
@@ -67,18 +54,7 @@ object SourceSettings {
 
   implicit val encoder: Encoder[SourceSettings] = Encoder.instance {
     case s: Cassandra =>
-      Encoder
-        .forProduct10(
-          "host",
-          "port",
-          "credentials",
-          "keyspace",
-          "table",
-          "splitCount",
-          "connections",
-          "fetchSize",
-          "preserveTimestamps",
-          "where")(Cassandra.unapply(_: Cassandra).get)
+      deriveEncoder[Cassandra]
         .encodeObject(s)
         .add("type", Json.fromString("cassandra"))
         .asJson
@@ -88,8 +64,7 @@ object SourceSettings {
         .add("type", Json.fromString("dynamodb"))
         .asJson
     case s: Parquet =>
-      Encoder
-        .forProduct2("path", "credentials")(Parquet.unapply(_: Parquet).get)
+      deriveEncoder[Parquet]
         .encodeObject(s)
         .add("type", Json.fromString("parquet"))
         .asJson
