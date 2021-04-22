@@ -10,6 +10,7 @@ object TargetSettings {
   case class Scylla(host: String,
                     port: Int,
                     credentials: Option[Credentials],
+                    sslOptions: Option[SSLOptions],
                     keyspace: String,
                     table: String,
                     connections: Option[Int],

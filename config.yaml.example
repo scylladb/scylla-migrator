@@ -6,6 +6,21 @@ source:
   # credentials:
   #   username: <user>
   #   password: <pass>
+  # SSL as per https://github.com/scylladb/spark-cassandra-connector/blob/master/doc/reference.md#cassandra-ssl-connection-options
+  # SSLOptions:
+  #   clientAuthEnabled: false
+  #   enabled: false
+  #   all below are optional! (generally just trustStorePassword and trustStorePath is needed)
+  #   trustStorePassword: <pass>
+  #   trustStorePath: <path>
+  #   trustStoreType: JKS
+  #   keyStorePassword: <pass>
+  #   keyStorePath: <path>
+  #   keyStoreType: JKS
+  #   enabledAlgorithms:
+  #    - TLS_RSA_WITH_AES_128_CBC_SHA
+  #    - TLS_RSA_WITH_AES_256_CBC_SHA
+  #   protocol: TLS
   keyspace: stocks
   table: stocks
   # Preserve TTLs and WRITETIMEs of cells in the source database. Note that this
@@ -87,6 +102,21 @@ target:
   # credentials:
   #   username: <user>
   #   password: <pass>
+  # SSL as per https://github.com/scylladb/spark-cassandra-connector/blob/master/doc/reference.md#cassandra-ssl-connection-options
+  # SSLOptions:
+  #   clientAuthEnabled: false
+  #   enabled: false
+  #   all below are optional! (generally just trustStorePassword and trustStorePath is needed)
+  #   trustStorePassword: <pass>
+  #   trustStorePath: <path>
+  #   trustStoreType: JKS
+  #   keyStorePassword: <pass>
+  #   keyStorePath: <path>
+  #   keyStoreType: JKS
+  #   enabledAlgorithms:
+  #    - TLS_RSA_WITH_AES_128_CBC_SHA
+  #    - TLS_RSA_WITH_AES_256_CBC_SHA
+  #   protocol: TLS
   # NOTE: The destination table must have the same schema as the source table.
   # If you'd like to rename columns, that's ok - see the renames parameter below.
   keyspace: stocks
