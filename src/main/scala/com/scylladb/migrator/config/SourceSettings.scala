@@ -18,6 +18,7 @@ sealed trait SourceSettings
 object SourceSettings {
   case class Cassandra(host: String,
                        port: Int,
+                       localDC: Option[String],
                        credentials: Option[Credentials],
                        sslOptions: Option[SSLOptions],
                        keyspace: String,

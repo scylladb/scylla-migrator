@@ -23,6 +23,15 @@ spark-submit --class com.scylladb.migrator.Migrator \
   <path to scylla-migrator-assembly-0.0.1.jar>
 ```
 
+If you pass on the truststore file or ssl related files use `--files` option:
+```shell
+spark-submit --class com.scylladb.migrator.Migrator \
+  --master spark://<spark-master-hostname>:7077 \
+  --conf spark.scylla.config=<path to config.yaml> \
+  --files truststorefilename \
+  <path to scylla-migrator-assembly-0.0.1.jar>
+```
+
 # Running the validator
 
 This project also includes an entrypoint for comparing the source

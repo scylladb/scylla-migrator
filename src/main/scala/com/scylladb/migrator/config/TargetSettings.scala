@@ -9,6 +9,7 @@ sealed trait TargetSettings
 object TargetSettings {
   case class Scylla(host: String,
                     port: Int,
+                    localDC: Option[String],
                     credentials: Option[Credentials],
                     sslOptions: Option[SSLOptions],
                     keyspace: String,
