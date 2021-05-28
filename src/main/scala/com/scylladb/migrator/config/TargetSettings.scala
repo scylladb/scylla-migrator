@@ -16,24 +16,24 @@ object TargetSettings {
                     stripTrailingZerosForDecimals: Boolean)
       extends TargetSettings
 
-  case class DynamoDB(endpoint: Option[DynamoDBEndpoint],
-                      region: Option[String],
-                      credentials: Option[AWSCredentials],
-                      table: String,
-                      scanSegments: Option[Int],
-                      writeThroughput: Option[Int],
-                      throughputWritePercent: Option[Float],
-                      maxMapTasks: Option[Int],
-                      streamChanges: Boolean)
-      extends TargetSettings
+//  case class DynamoDB(endpoint: Option[DynamoDBEndpoint],
+//                      region: Option[String],
+//                      credentials: Option[AWSCredentials],
+//                      table: String,
+//                      scanSegments: Option[Int],
+//                      writeThroughput: Option[Int],
+//                      throughputWritePercent: Option[Float],
+//                      maxMapTasks: Option[Int],
+//                      streamChanges: Boolean)
+//      extends TargetSettings
 
   implicit val decoder: Decoder[TargetSettings] =
     Decoder.instance { cursor =>
       cursor.get[String]("type").flatMap {
         case "scylla" | "cassandra" =>
           deriveDecoder[Scylla].apply(cursor)
-        case "dynamodb" | "dynamo" =>
-          deriveDecoder[DynamoDB].apply(cursor)
+//        case "dynamodb" | "dynamo" =>
+//          deriveDecoder[DynamoDB].apply(cursor)
         case otherwise =>
           Left(DecodingFailure(s"Invalid target type: ${otherwise}", cursor.history))
       }
@@ -44,7 +44,7 @@ object TargetSettings {
       case t: Scylla =>
         deriveEncoder[Scylla].encodeObject(t).add("type", Json.fromString("scylla")).asJson
 
-      case t: DynamoDB =>
-        deriveEncoder[DynamoDB].encodeObject(t).add("type", Json.fromString("dynamodb")).asJson
+//      case t: DynamoDB =>
+//        deriveEncoder[DynamoDB].encodeObject(t).add("type", Json.fromString("dynamodb")).asJson
     }
 }

@@ -60,8 +60,8 @@ object Scylla {
         target.keyspace,
         target.table,
         columnSelector,
-        writeConf,
-        tokenRangeAccumulator = tokenRangeAccumulator
+        writeConf
+//        tokenRangeAccumulator = tokenRangeAccumulator
       )(connector, SqlRowWriter.Factory)
   }
 

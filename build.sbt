@@ -1,10 +1,18 @@
 import sbt.librarymanagement.InclExclRule
 
+
+assemblyMergeStrategy in assembly := {
+  case "module-info.class" => MergeStrategy.discard
+  case x =>
+    val oldStrategy = (assemblyMergeStrategy in assembly).value
+    oldStrategy(x)
+}
+
 lazy val root = (project in file(".")).settings(
   inThisBuild(
     List(
       organization := "com.scylladb",
-      scalaVersion := "2.11.12"
+      scalaVersion := "2.12.11"
     )),
   name      := "scylla-migrator",
   version   := "0.0.1",
@@ -20,13 +28,14 @@ lazy val root = (project in file(".")).settings(
   fork                      := true,
   scalafmtOnCompile         := true,
   libraryDependencies ++= Seq(
-    "org.apache.spark" %% "spark-streaming"      % "2.4.4" % "provided",
-    "org.apache.spark" %% "spark-sql"            % "2.4.4" % "provided",
-    "org.apache.spark" %% "spark-sql"            % "2.4.4" % "provided",
-    "com.amazonaws"    % "aws-java-sdk-sts"      % "1.11.728",
-    "com.amazonaws"    % "aws-java-sdk-dynamodb" % "1.11.728",
-    ("com.amazonaws" % "dynamodb-streams-kinesis-adapter" % "1.5.2")
-      .excludeAll(InclExclRule("com.fasterxml.jackson.core")),
+    "org.apache.spark" %% "spark-streaming"      % "3.0.1" % "provided",
+    "org.apache.spark" %% "spark-sql"            % "3.0.1" % "provided",
+    "org.apache.spark" %% "spark-sql"            % "3.0.1" % "provided",
+    "com.datastax.spark" %% "spark-cassandra-connector-assembly" % "3.0.1",
+//    "com.amazonaws"    % "aws-java-sdk-sts"      % "1.11.728",
+//    "com.amazonaws"    % "aws-java-sdk-dynamodb" % "1.11.728",
+//    ("com.amazonaws" % "dynamodb-streams-kinesis-adapter" % "1.5.2")
+//      .excludeAll(InclExclRule("com.fasterxml.jackson.core")),
     "org.yaml"       % "snakeyaml"      % "1.23",
     "io.circe"       %% "circe-yaml"    % "0.9.0",
     "io.circe"       %% "circe-generic" % "0.9.0",

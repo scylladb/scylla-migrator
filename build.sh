@@ -6,7 +6,7 @@ set -x
 #workaround for number exceptions, once new sbt will be used + 2.12 scala below won't be needed
 export TERM=xterm-color 
 
-git submodule update --init --recursive
+#git submodule update --init --recursive
 
 TMPDIR="$PWD"/tmpexec
 mkdir -p "$TMPDIR"

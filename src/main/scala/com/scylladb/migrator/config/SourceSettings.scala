@@ -54,12 +54,12 @@ object SourceSettings {
             "preserveTimestamps",
             "where")(Cassandra.apply)
           .apply(cursor)
-      case "parquet" =>
-        Decoder
-          .forProduct2("path", "credentials")(Parquet.apply)
-          .apply(cursor)
-      case "dynamo" | "dynamodb" =>
-        deriveDecoder[DynamoDB].apply(cursor)
+//      case "parquet" =>
+//        Decoder
+//          .forProduct2("path", "credentials")(Parquet.apply)
+//          .apply(cursor)
+//      case "dynamo" | "dynamodb" =>
+//        deriveDecoder[DynamoDB].apply(cursor)
       case otherwise =>
         Left(DecodingFailure(s"Unknown source type: ${otherwise}", cursor.history))
     }

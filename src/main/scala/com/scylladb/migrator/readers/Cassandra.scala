@@ -222,10 +222,8 @@ object Cassandra {
     val selection = createSelection(tableDef, origSchema, preserveTimes).fold(throw _, identity)
 
     val selectCassandraRDD = spark.sparkContext
-      .cassandraTable[CassandraSQLRow](
-        source.keyspace,
-        source.table,
-        (s, e) => !tokenRangesToSkip.contains((s, e)))
+      .cassandraTable[CassandraSQLRow](source.keyspace, source.table)
+//        (s, e) => !tokenRangesToSkip.contains((s, e)))
       .withConnector(connector)
       .withReadConf(readConf)
       .select(selection.columnRefs: _*)
