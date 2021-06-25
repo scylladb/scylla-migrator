@@ -1,8 +1,7 @@
 package com.scylladb.migrator.config
 
 import io.circe.syntax._
-import io.circe.{Decoder, DecodingFailure, Encoder, Json}
-
+import io.circe.{ Decoder, DecodingFailure, Encoder, Json }
 
 sealed trait SourceSettings
 
@@ -17,7 +16,7 @@ object SourceSettings {
                        fetchSize: Int,
                        preserveTimestamps: Boolean,
                        where: Option[String])
-    extends SourceSettings
+      extends SourceSettings
 
   implicit val decoder: Decoder[SourceSettings] = Decoder.instance { cursor =>
     cursor.get[String]("type").flatMap {
