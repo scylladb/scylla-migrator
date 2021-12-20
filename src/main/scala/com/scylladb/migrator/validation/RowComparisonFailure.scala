@@ -40,6 +40,7 @@ object RowComparisonFailure {
 
   def compareRows(left: CassandraRow,
                   right: Option[CassandraRow],
+                  writetimeCutoff: Long,
                   floatingPointTolerance: Double,
                   ttlToleranceMillis: Long,
                   writetimeToleranceMillis: Long,
@@ -69,10 +70,11 @@ object RowComparisonFailure {
           for {
             name <- names
             if !name.endsWith("_ttl") && !name.endsWith("_writetime")
+
             leftValue  = leftMap.get(name)
             rightValue = rightMap.get(name)
 
-            result = (rightValue, leftValue) match {
+            hasDiff = (rightValue, leftValue) match {
               // All floating-point-like types need to be compared with a configured tolerance
               case (Some(l: Float), Some(r: Float)) =>
                 !DoubleMath.fuzzyEquals(l, r, floatingPointTolerance)
@@ -113,12 +115,27 @@ object RowComparisonFailure {
                 .map(_ > ttlToleranceMillis)
                 .getOrElse(true)
               }
-              */
+               */
               // All remaining types get compared with standard equality
               case (Some(l), Some(r)) => l != r
               case (Some(_), None)    => true
               case (None, Some(_))    => true
               case (None, None)       => false
+            }
+
+            // Diffs are ignored if the column was written to before the cutoff.
+            // This is because reading from the two clusters is not atomic, and
+            // any updates during validation could result in a false diff.
+            writetimeName = name + "_writetime"
+            result = if (hasDiff && !compareTimestamps && left.contains(writetimeName)) {
+              val leftWritetimeValue = left.getLongOption(writetimeName)
+              val rightWritetimeValue = right.getLongOption(writetimeName)
+              (leftWritetimeValue, rightWritetimeValue) match {
+                case (Some(l), Some(r)) => l < writetimeCutoff && r < writetimeCutoff
+                case _                  => hasDiff
+              }
+            } else {
+              hasDiff
             }
             if result
           } yield name

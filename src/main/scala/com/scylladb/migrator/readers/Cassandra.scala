@@ -27,8 +27,8 @@ object Cassandra {
   def determineCopyType(tableDef: TableDef,
                         preserveTimesRequest: Boolean): Either[Throwable, CopyType] =
     if (tableDef.columnTypes.exists(_.isCollection) && preserveTimesRequest)
-      Left(
-        new Exception("TTL/Writetime preservation is unsupported for tables with collection types. Please check in your config the option 'preserveTimestamps' and set it to false to continue."))
+      Left(new Exception(
+        "TTL/Writetime preservation is unsupported for tables with collection types. Please check in your config the option 'preserveTimestamps' and set it to false to continue."))
     else if (preserveTimesRequest && tableDef.regularColumns.nonEmpty)
       Right(CopyType.WithTimestampPreservation)
     else if (preserveTimesRequest && tableDef.regularColumns.isEmpty) {
