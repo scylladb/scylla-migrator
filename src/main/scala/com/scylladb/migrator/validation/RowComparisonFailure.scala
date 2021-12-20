@@ -45,7 +45,16 @@ object RowComparisonFailure {
                   writetimeToleranceMillis: Long,
                   compareTimestamps: Boolean): Option[RowComparisonFailure] =
     right match {
-      case None => Some(RowComparisonFailure(left, right, List(Item.MissingTargetRow)))
+      case None =>
+        // If we're checking timestamps, check if the item could have already expired
+        // (e.g. if the tolerance is 2s and left has a TTL of 1s, don't indicate a failure)
+        val ttlColumnValues =
+          left.metaData.columnNames.filter(_.endsWith("_ttl")).flatMap(left.getLongOption(_))
+        val rightRowCouldHaveExpired =
+          if (!compareTimestamps || ttlColumnValues.isEmpty) false
+          else ttlColumnValues.forall(_ <= ttlToleranceMillis)
+        if (rightRowCouldHaveExpired) None
+        else Some(RowComparisonFailure(left, right, List(Item.MissingTargetRow)))
       case Some(right) if left.columnValues.size != right.columnValues.size =>
         Some(RowComparisonFailure(left, Some(right), List(Item.MismatchedColumnCount)))
       case Some(right) if left.metaData.columnNames != right.metaData.columnNames =>
@@ -80,7 +89,31 @@ object RowComparisonFailure {
               // with `sameElements`.
               case (Some(l: Array[_]), Some(r: Array[_])) =>
                 !l.sameElements(r)
-
+              /*
+              // If a null value is encountered, ensure the non-null TTL isn't within the threshold
+              // (if it is, it's perfectly reasonable to expect that the opposing value would be null)
+              case (Some(null), Some(null)) => false
+              case (Some(_), Some(null)) => {
+              log.info(
+                s"HELLO ${left} ${left.getLongOption(name + "_ttl")} ${ttlToleranceMillis} ${left
+                  .getLongOption(name + "_ttl")
+                  .map(_ > ttlToleranceMillis)}")
+              !compareTimestamps || left
+                .getLongOption(name + "_ttl")
+                .map(_ > ttlToleranceMillis)
+                .getOrElse(true)
+              }
+              case (Some(null), Some(_)) => {
+              log.info(
+                s"HELLO ${right} ${right.getLongOption(name + "_ttl")} ${ttlToleranceMillis} ${right
+                  .getLongOption(name + "_ttl")
+                  .map(_ > ttlToleranceMillis)}")
+              !compareTimestamps || right
+                .getLongOption(name + "_ttl")
+                .map(_ > ttlToleranceMillis)
+                .getOrElse(true)
+              }
+              */
               // All remaining types get compared with standard equality
               case (Some(l), Some(r)) => l != r
               case (Some(_), None)    => true
