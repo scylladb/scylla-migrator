@@ -3,7 +3,7 @@ package com.scylladb.migrator
 import com.datastax.spark.connector._
 import com.datastax.spark.connector.cql._
 import com.datastax.spark.connector.rdd.ReadConf
-import com.datastax.spark.connector.writer.{ CassandraRowWriter, WriteConf }
+import com.datastax.spark.connector.writer.{ CassandraRowWriter, TokenRangeAccumulator, WriteConf }
 import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
 import com.scylladb.migrator.validation.RowComparisonFailure
 import org.apache.log4j.{ Level, LogManager, Logger }
@@ -59,7 +59,8 @@ object Validator {
           else if (!colDef.isCollection)
             List(
               ColumnName(colDef.columnName, Some(alias)),
-              WriteTime(colDef.columnName, Some(alias + "_writetime"))
+              WriteTime(colDef.columnName, Some(alias + "_writetime")),
+              TTL(colDef.columnName, Some(alias + "_ttl"))
             )
           else List(ColumnName(colDef.columnName))
         }
@@ -96,7 +97,8 @@ object Validator {
           else if (!colDef.isCollection)
             List(
               ColumnName(renamedColName),
-              WriteTime(renamedColName, Some(renamedColName + "_writetime"))
+              WriteTime(renamedColName, Some(renamedColName + "_writetime")),
+              TTL(colDef.columnName, Some(renamedColName + "_ttl"))
             )
           else
             List(ColumnName(renamedColName))
@@ -133,70 +135,60 @@ object Validator {
       }
   }
 
-  def remediateValidation(config: MigratorConfig, rdd: RDD[RowComparisonFailure])(
-    implicit spark: SparkSession): RDD[CassandraRow] = {
-    val sourceSettings = config.source match {
-      case s: SourceSettings.Cassandra => s
-      case otherwise =>
-        throw new RuntimeException(
-          s"Validation only supports validating against Cassandra/Scylla " +
-            s"(found ${otherwise.getClass.getSimpleName} settings)")
-    }
-
-    val targetSettings = config.target match {
-      case s: TargetSettings.Scylla => s
-      case otherwise =>
-        throw new RuntimeException(
-          s"Validation only supports validating against Cassandra/Scylla " +
-            s"(found ${otherwise.getClass.getSimpleName} settings)")
-
-    }
-
-    val sourceConnector: CassandraConnector =
-      Connectors.sourceConnector(spark.sparkContext.getConf, sourceSettings)
-    val targetConnector: CassandraConnector =
-      Connectors.targetConnector(spark.sparkContext.getConf, targetSettings)
-    val writeConf = WriteConf.fromSparkConf(spark.sparkContext.getConf)
-    val columnRefs = targetConnector
-      .withSessionDo(Schema.tableFromCassandra(_, targetSettings.keyspace, targetSettings.table))
-      .columnRefs
-
-    // get all repairable rows
-    val rows = rdd
-      .flatMap { failure =>
-        (failure) match {
-          case RowComparisonFailure(row, _, List(RowComparisonFailure.Item.MissingTargetRow)) =>
-            Some(row)
-          case RowComparisonFailure(
-              row,
-              _,
-              List(RowComparisonFailure.Item.DifferingFieldValues(_))) =>
-            Some(row)
-          case default => {
-            log.error("Unrepairable comparison failure:\n${default.mkString()}")
-            None
-          }
-        }
-      }
-
-    val newRows = rows
-      .joinWithCassandraTable(
-        targetSettings.keyspace,
-        targetSettings.table
-      )
-      .withConnector(sourceConnector)
-      .withReadConf(ReadConf.fromSparkConf(spark.sparkContext.getConf))
-      .map { case (_, row) => row }
-
-    newRows
-      .saveToCassandra(
-        targetSettings.keyspace,
-        targetSettings.table,
-        AllColumns,
-        WriteConf.fromSparkConf(spark.sparkContext.getConf)
-      )(targetConnector, CassandraRowWriter.Factory)
-    newRows
-  }
+//  def remediateValidation(migratorConfig: MigratorConfig, rdd: RDD[RowComparisonFailure])(
+//    implicit spark: SparkSession): RDD[CassandraRow] = {
+//    // get all repairable rows
+//    val newRDD: RDD[CassandraRow] = rdd
+//      .flatMap { failure =>
+//        (failure) match {
+//          case RowComparisonFailure(row, _, List(RowComparisonFailure.Item.MissingTargetRow)) =>
+//            Some(row) //new CassandraSQLRow(row.metaData, row.columnValues))
+//          case RowComparisonFailure(
+//              row,
+//              _,
+//              List(RowComparisonFailure.Item.DifferingFieldValues(_))) =>
+//            Some(row) //new CassandraSQLRow(row.metaData, row.columnValues))
+//          case default => {
+//            log.error("Unrepairable comparison failure:\n${default.mkString()}")
+//            None
+//          }
+//        }
+//      }
+//
+//    val sourceDF =
+//      migratorConfig.source match {
+//        case cassandraSource: SourceSettings.Cassandra =>
+//          readers.Cassandra.readDataframe(
+//            spark,
+//            cassandraSource,
+//            cassandraSource.preserveTimestamps,
+//            migratorConfig.skipTokenRanges)
+//        case parquetSource: SourceSettings.Parquet =>
+//          readers.Parquet.readDataFrame(spark, parquetSource)
+//        case dynamoSource: SourceSettings.DynamoDB =>
+//          val tableDesc = DynamoUtils
+//            .buildDynamoClient(dynamoSource.endpoint, dynamoSource.credentials, dynamoSource.region)
+//            .describeTable(dynamoSource.table)
+//            .getTable
+//
+//          readers.DynamoDB.readDataFrame(spark, dynamoSource, tableDesc)
+//      }
+//
+//    val tokenRangeAccumulator = TokenRangeAccumulator.empty
+//    spark.sparkContext.register(tokenRangeAccumulator, "Token ranges copied")
+//
+//    migratorConfig.target match {
+//      case target: TargetSettings.Scylla =>
+//        writers.Scylla.writeDataframe(
+//          target,
+//          migratorConfig.renames,
+//          sourceDF.dataFrame,
+//          sourceDF.timestampColumns,
+//          Some(tokenRangeAccumulator));
+//      case target_ => {}
+//    }
+//
+//  }
 
   def main(args: Array[String]): Unit = {
     implicit val spark = SparkSession
@@ -234,7 +226,7 @@ object Validator {
         case _ => {}
       }
 
-      remediateValidation(migratorConfig, failures)
+//      remediateValidation(migratorConfig, failures)
     }
   }
 }
