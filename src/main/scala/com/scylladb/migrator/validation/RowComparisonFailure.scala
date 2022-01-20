@@ -69,7 +69,7 @@ object RowComparisonFailure {
             result = (rightValue, leftValue) match {
               // All timestamp types need to be compared with a configured tolerance
               case (Some(l: java.time.Instant), Some(r: java.time.Instant)) =>
-                !(Math.abs(r.until(l, ChronoUnit.MILLIS)) <= timestampMsTolerance)
+                !(timestampMsTolerance<=0) && !(Math.abs(r.until(l, ChronoUnit.MILLIS)) <= timestampMsTolerance)
               // All floating-point-like types need to be compared with a configured tolerance
               case (Some(l: Float), Some(r: Float)) =>
                 !DoubleMath.fuzzyEquals(l, r, floatingPointTolerance)

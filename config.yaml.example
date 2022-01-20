@@ -198,4 +198,4 @@ validation:
   # What difference should we allow between floating point numbers?
   floatingPointTolerance: 0.001
   # What difference in ms should we allow between timestamps?
-  timestampMsTolerance: 20
+  timestampMsTolerance: 0
