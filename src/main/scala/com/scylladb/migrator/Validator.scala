@@ -109,6 +109,7 @@ object Validator {
             l,
             r,
             config.validation.floatingPointTolerance,
+            config.validation.timestampMsTolerance,
             config.validation.ttlToleranceMillis,
             config.validation.writetimeToleranceMillis,
             config.validation.compareTimestamps
