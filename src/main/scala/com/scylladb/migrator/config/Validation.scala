@@ -7,7 +7,8 @@ case class Validation(compareTimestamps: Boolean,
                       ttlToleranceMillis: Long,
                       writetimeToleranceMillis: Long,
                       failuresToFetch: Int,
-                      floatingPointTolerance: Double)
+                      floatingPointTolerance: Double,
+                      timestampMsTolerance: Double)
 object Validation {
   implicit val encoder: Encoder[Validation] = deriveEncoder[Validation]
   implicit val decoder: Decoder[Validation] = deriveDecoder[Validation]

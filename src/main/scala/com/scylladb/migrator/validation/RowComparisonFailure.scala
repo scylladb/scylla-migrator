@@ -3,6 +3,8 @@ package com.scylladb.migrator.validation
 import com.datastax.spark.connector.CassandraRow
 import com.google.common.math.DoubleMath
 
+import java.time.temporal.ChronoUnit
+
 case class RowComparisonFailure(row: CassandraRow,
                                 other: Option[CassandraRow],
                                 items: List[RowComparisonFailure.Item]) {
@@ -41,6 +43,7 @@ object RowComparisonFailure {
   def compareRows(left: CassandraRow,
                   right: Option[CassandraRow],
                   floatingPointTolerance: Double,
+                  timestampMsTolerance: Double,
                   ttlToleranceMillis: Long,
                   writetimeToleranceMillis: Long,
                   compareTimestamps: Boolean): Option[RowComparisonFailure] =
@@ -64,6 +67,9 @@ object RowComparisonFailure {
             rightValue = rightMap.get(name)
 
             result = (rightValue, leftValue) match {
+              // All timestamp types need to be compared with a configured tolerance
+              case (Some(l: java.time.Instant), Some(r: java.time.Instant)) =>
+                !(Math.abs(r.until(l, ChronoUnit.MILLIS)) <= timestampMsTolerance)
               // All floating-point-like types need to be compared with a configured tolerance
               case (Some(l: Float), Some(r: Float)) =>
                 !DoubleMath.fuzzyEquals(l, r, floatingPointTolerance)
