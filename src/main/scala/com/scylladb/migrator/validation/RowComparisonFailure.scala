@@ -43,7 +43,7 @@ object RowComparisonFailure {
   def compareRows(left: CassandraRow,
                   right: Option[CassandraRow],
                   floatingPointTolerance: Double,
-                  timestampMsTolerance: Double,
+                  timestampMsTolerance: Long,
                   ttlToleranceMillis: Long,
                   writetimeToleranceMillis: Long,
                   compareTimestamps: Boolean): Option[RowComparisonFailure] =
