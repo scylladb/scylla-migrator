@@ -155,20 +155,22 @@ object Migrator {
 
           sourceAndDescriptions.foreach {
             case (source, sourceDesc, targetDesc) =>
-              log.info("Done transferring table snapshot. Starting to transfer changes")
+              if (target.streamChanges) {
+                log.info("Done transferring table snapshot. Starting to transfer changes")
 
-              DynamoStreamReplication.createDStream(
-                spark,
-                streamingContext,
-                source,
-                target,
-                sourceDF.dataFrame.schema,
-                sourceDesc,
-                targetDesc,
-                migratorConfig.renames)
+                DynamoStreamReplication.createDStream(
+                  spark,
+                  streamingContext,
+                  source,
+                  target,
+                  sourceDF.dataFrame.schema,
+                  sourceDesc,
+                  targetDesc,
+                  migratorConfig.renames)
 
-              streamingContext.start()
-              streamingContext.awaitTermination()
+                streamingContext.start()
+                streamingContext.awaitTermination()
+              }
           }
       }
     } catch {
