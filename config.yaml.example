@@ -28,6 +28,10 @@ source:
   # Preserve TTLs and WRITETIMEs of cells in the source database. Note that this
   # option is *incompatible* when copying tables with collections (lists, maps, sets).
   preserveTimestamps: true
+  # optional, default TTL in seconds to use if source.preserveTimestamps AND IF original TTL is null, final TTL to be set, if 0 or unset it will be ignored
+  # final write TTL set will be relative to writetimestamp, so: defaultTTL - now - writetimestamp , rounded to milliseconds
+  # it assumes writetimestamps are in UTC
+  #defaultTTL: 0
   # Number of splits to use - this should be at minimum the amount of cores
   # available in the Spark cluster, and optimally more; higher splits will lead
   # to more fine-grained resumes. Aim for 8 * (Spark cores).

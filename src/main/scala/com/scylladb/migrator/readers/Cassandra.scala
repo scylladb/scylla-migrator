@@ -15,6 +15,7 @@ import org.apache.spark.sql.types.{ IntegerType, LongType, StructField, StructTy
 import org.apache.spark.sql.{ DataFrame, Row, SparkSession }
 import org.apache.spark.unsafe.types.UTF8String
 
+import java.time.Instant
 import scala.collection.mutable.ArrayBuffer
 
 object Cassandra {
@@ -92,7 +93,8 @@ object Cassandra {
   def explodeRow(row: Row,
                  schema: StructType,
                  primaryKeyOrdinals: Map[String, Int],
-                 regularKeyOrdinals: Map[String, (Int, Int, Int)]) =
+                 regularKeyOrdinals: Map[String, (Int, Int, Int)],
+                 defaultTTL: Long) =
     if (regularKeyOrdinals.isEmpty) List(row)
     else {
       val rowTimestampsToFields =
@@ -126,7 +128,17 @@ object Cassandra {
 
       timestampsToFields
         .map {
-          case ((ttl, writetime), fields) =>
+          case ((ttl, writetime), fields) => {
+            val writetimestamp = writetime.getOrElse(CassandraOption.Unset)
+            val baseTTL = if (defaultTTL > 0) defaultTTL else 0L
+            val deltaTTL = if (writetimestamp == CassandraOption.Unset) {
+              0
+            } else {
+              baseTTL - (System.currentTimeMillis - writetimestamp.asInstanceOf[Long] / 1000) / 1000
+            }
+            // expire the record in 1s in case delta is negative, use given TTL if write timestamp wasn't found
+            val finalttl =
+              if (deltaTTL > 0) deltaTTL else if (deltaTTL == 0) baseTTL else 1L
             val newValues = schema.fields.map { field =>
               primaryKeyOrdinals
                 .get(field.name)
@@ -135,9 +147,10 @@ object Cassandra {
                   else Some(row.get(ord))
                 }
                 .getOrElse(fields.getOrElse(field.name, CassandraOption.Unset))
-            } ++ Seq(ttl.getOrElse(0L), writetime.getOrElse(CassandraOption.Unset))
+            } ++ Seq(ttl.getOrElse(finalttl), writetimestamp)
 
             Row(newValues: _*)
+          }
         }
     }
 
@@ -168,7 +181,8 @@ object Cassandra {
                                               df: DataFrame,
                                               timestampColumns: Option[TimestampColumns],
                                               origSchema: StructType,
-                                              tableDef: TableDef): DataFrame =
+                                              tableDef: TableDef,
+                                              defaultTTL: Long): DataFrame =
     timestampColumns match {
       case None => df
       case Some(TimestampColumns(ttl, writeTime)) =>
@@ -193,7 +207,8 @@ object Cassandra {
             _,
             broadcastSchema.value,
             broadcastPrimaryKeyOrdinals.value,
-            broadcastRegularKeyOrdinals.value)
+            broadcastRegularKeyOrdinals.value,
+            defaultTTL)
         }(RowEncoder(finalSchema))
 
     }
@@ -269,7 +284,8 @@ object Cassandra {
       spark.createDataFrame(rdd, selection.schema),
       selection.timestampColumns,
       origSchema,
-      tableDef
+      tableDef,
+      source.defaultTTL.getOrElse(0L)
     )
 
     SourceDataFrame(resultingDataframe, selection.timestampColumns, true)
