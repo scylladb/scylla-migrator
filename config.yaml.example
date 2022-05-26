@@ -132,6 +132,17 @@ target:
   # currently to preserve the original value, so this flag can strip trailing zeros
   # on decimal values before they are written.
   stripTrailingZerosForDecimals: false
+  # if we cannot persist timestamps (so preserveTimestamps==false)
+  # we can enforce in writer a single TTL or writetimestamp for ALL written records
+  # such writetimestamp can be e.g. set to time BEFORE starting dual writes
+  # and this will make your migration safe from overwriting dual write
+  # even for collections
+  # ALL rows written will get the same TTL or writetimestamp or both
+  # (you can uncomment just one of them, or all or none)
+  # TTL in seconds (sample 7776000 is 90 days)
+  #writeTTLInS: 7776000
+  # writetime in microseconds (sample 1640998861000 is Saturday, January 1, 2022 2:01:01 AM GMT+01:00 )
+  #writeWritetimestampInuS: 1640998861000
 
 # Example for loading into a DynamoDB target (for example, Scylla's Alternator):
 # target:

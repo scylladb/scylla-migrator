@@ -3,13 +3,13 @@ package com.scylladb.migrator.writers
 import com.datastax.spark.connector.writer._
 import com.datastax.spark.connector._
 import com.scylladb.migrator.Connectors
-import com.scylladb.migrator.config.{ CopyType, Rename, TargetSettings }
+import com.scylladb.migrator.config.{Rename, TargetSettings}
 import com.scylladb.migrator.readers.TimestampColumns
-import org.apache.log4j.LogManager
-import org.apache.spark.sql.{ DataFrame, Row, SparkSession }
+import org.apache.log4j.{LogManager, Logger}
+import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 
 object Scylla {
-  val log = LogManager.getLogger("com.scylladb.migrator.writer.Scylla")
+  val log: Logger = LogManager.getLogger("com.scylladb.migrator.writer.Scylla")
 
   def writeDataframe(
     target: TargetSettings.Scylla,
@@ -18,14 +18,32 @@ object Scylla {
     timestampColumns: Option[TimestampColumns],
     tokenRangeAccumulator: Option[TokenRangeAccumulator])(implicit spark: SparkSession): Unit = {
     val connector = Connectors.targetConnector(spark.sparkContext.getConf, target)
-    val writeConf = WriteConf
+    val tempWriteConf = WriteConf
       .fromSparkConf(spark.sparkContext.getConf)
-      .copy(
-        ttl = timestampColumns.map(_.ttl).fold(TTLOption.defaultValue)(TTLOption.perRow),
-        timestamp = timestampColumns
-          .map(_.writeTime)
-          .fold(TimestampOption.defaultValue)(TimestampOption.perRow)
-      )
+
+    val writeConf = {
+      if (timestampColumns.nonEmpty) {
+        tempWriteConf.copy(
+          ttl = timestampColumns.map(_.ttl).fold(TTLOption.defaultValue)(TTLOption.perRow),
+          timestamp = timestampColumns
+            .map(_.writeTime)
+            .fold(TimestampOption.defaultValue)(TimestampOption.perRow)
+        )
+      } else if (target.writeTTLInS.nonEmpty || target.writeWritetimestampInuS.nonEmpty) {
+        var hardcodedTempWriteConf = tempWriteConf
+        if (target.writeTTLInS.nonEmpty) {
+          hardcodedTempWriteConf =
+            hardcodedTempWriteConf.copy(ttl = TTLOption.constant(target.writeTTLInS.get))
+        }
+        if (target.writeWritetimestampInuS.nonEmpty) {
+          hardcodedTempWriteConf = hardcodedTempWriteConf.copy(
+            timestamp = TimestampOption.constant(target.writeWritetimestampInuS.get))
+        }
+        hardcodedTempWriteConf
+      } else {
+        tempWriteConf
+      }
+    }
 
     // Similarly to createDataFrame, when using withColumnRenamed, Spark tries
     // to re-encode the dataset. Instead we just use the modified schema from this
