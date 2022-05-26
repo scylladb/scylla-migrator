@@ -4,7 +4,7 @@ lazy val root = (project in file(".")).settings(
   inThisBuild(
     List(
       organization := "com.scylladb",
-      scalaVersion := "2.11.12"
+      scalaVersion := "2.12.11"
     )),
   name      := "scylla-migrator",
   version   := "0.0.1",
@@ -20,9 +20,9 @@ lazy val root = (project in file(".")).settings(
   fork                      := true,
   scalafmtOnCompile         := true,
   libraryDependencies ++= Seq(
-    "org.apache.spark" %% "spark-streaming"      % "2.4.4" % "provided",
-    "org.apache.spark" %% "spark-sql"            % "2.4.4" % "provided",
-    "org.apache.spark" %% "spark-sql"            % "2.4.4" % "provided",
+    "org.apache.spark" %% "spark-streaming"      % "3.1.1" % "provided",
+    "org.apache.spark" %% "spark-sql"            % "3.1.1" % "provided",
+    "org.apache.spark" %% "spark-sql"            % "3.1.1" % "provided",
     "com.amazonaws"    % "aws-java-sdk-sts"      % "1.11.728",
     "com.amazonaws"    % "aws-java-sdk-dynamodb" % "1.11.728",
     ("com.amazonaws" % "dynamodb-streams-kinesis-adapter" % "1.5.2")
