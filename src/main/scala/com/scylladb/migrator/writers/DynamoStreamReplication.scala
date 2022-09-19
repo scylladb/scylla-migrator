@@ -40,7 +40,6 @@ object DynamoStreamReplication {
     KinesisInputDStream.builder
       .streamingContext(streamingContext)
       .streamName(src.table)
-      .dynamoStream(true)
       .kinesisCredentials(
         src.credentials.map {
           case AWSCredentials(accessKey, secretKey) =>

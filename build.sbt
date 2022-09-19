@@ -4,7 +4,7 @@ lazy val root = (project in file(".")).settings(
   inThisBuild(
     List(
       organization := "com.scylladb",
-      scalaVersion := "2.12.11"
+      scalaVersion := "2.12.10"
     )),
   name      := "scylla-migrator",
   version   := "0.0.1",
