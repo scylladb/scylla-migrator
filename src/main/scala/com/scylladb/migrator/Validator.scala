@@ -64,10 +64,15 @@ object Validator {
         case "QUORUM"       => ConsistencyLevel.QUORUM
         case "LOCAL_ONE"    => ConsistencyLevel.LOCAL_ONE
         case "ONE"          => ConsistencyLevel.ONE
-        case _              => ConsistencyLevel.LOCAL_ONE
+        case _              => ConsistencyLevel.LOCAL_QUORUM
       }
-      log.info(
-        s"Chosen consistencyLevel=${consistencyLevel} based on source config [${sourceSettings.consistencyLevel}]")
+      if (consistencyLevel.toString == sourceSettings.consistencyLevel) {
+        log.info(
+          s"Using consistencyLevel [${consistencyLevel}] for VALIDATOR SOURCE based on validator source config [${sourceSettings.consistencyLevel}]")
+      } else {
+        log.info(
+          s"Using DEFAULT consistencyLevel [${consistencyLevel}] for VALIDATOR SOURCE based on unrecognized validator source config [${sourceSettings.consistencyLevel}]")
+      }
 
       spark.sparkContext
         .cassandraTable(sourceSettings.keyspace, sourceSettings.table)

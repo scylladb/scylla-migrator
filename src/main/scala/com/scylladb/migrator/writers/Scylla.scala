@@ -25,7 +25,7 @@ object Scylla {
       case "QUORUM"       => ConsistencyLevel.QUORUM
       case "LOCAL_ONE"    => ConsistencyLevel.LOCAL_ONE
       case "ONE"          => ConsistencyLevel.ONE
-      case _              => ConsistencyLevel.LOCAL_QUORUM // Default for Targte is LOCAL_QUORUM
+      case _              => ConsistencyLevel.LOCAL_QUORUM // Default for Target is LOCAL_QUORUM
     }
     if (consistencyLevel.toString == target.consistencyLevel) {
       log.info(

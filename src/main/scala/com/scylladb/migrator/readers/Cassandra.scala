@@ -209,7 +209,7 @@ object Cassandra {
       case "QUORUM"       => ConsistencyLevel.QUORUM
       case "LOCAL_ONE"    => ConsistencyLevel.LOCAL_ONE
       case "ONE"          => ConsistencyLevel.ONE
-      case _              => ConsistencyLevel.LOCAL_ONE
+      case _              => ConsistencyLevel.LOCAL_QUORUM
     }
     if (consistencyLevel.toString == source.consistencyLevel) {
       log.info(
