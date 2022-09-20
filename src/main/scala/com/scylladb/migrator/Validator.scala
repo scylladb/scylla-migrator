@@ -7,6 +7,7 @@ import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSett
 import com.scylladb.migrator.validation.RowComparisonFailure
 import org.apache.log4j.{ Level, LogManager, Logger }
 import org.apache.spark.sql.SparkSession
+import com.datastax.oss.driver.api.core.ConsistencyLevel
 
 object Validator {
   val log = LogManager.getLogger("com.scylladb.migrator")
@@ -58,6 +59,16 @@ object Validator {
         (sourceTableDef.partitionKey ++ sourceTableDef.clusteringColumns)
           .map(colDef => ColumnName(colDef.columnName, renameMap.get(colDef.columnName)))
 
+      val consistencyLevel = sourceSettings.consistencyLevel match {
+        case "LOCAL_QUORUM" => ConsistencyLevel.LOCAL_QUORUM
+        case "QUORUM"       => ConsistencyLevel.QUORUM
+        case "LOCAL_ONE"    => ConsistencyLevel.LOCAL_ONE
+        case "ONE"          => ConsistencyLevel.ONE
+        case _              => ConsistencyLevel.LOCAL_ONE
+      }
+      log.info(
+        s"Chosen consistencyLevel=${consistencyLevel} based on source config [${sourceSettings.consistencyLevel}]")
+
       spark.sparkContext
         .cassandraTable(sourceSettings.keyspace, sourceSettings.table)
         .withConnector(sourceConnector)
@@ -65,8 +76,9 @@ object Validator {
           ReadConf
             .fromSparkConf(spark.sparkContext.getConf)
             .copy(
-              splitCount      = sourceSettings.splitCount,
-              fetchSizeInRows = sourceSettings.fetchSize
+              splitCount       = sourceSettings.splitCount,
+              fetchSizeInRows  = sourceSettings.fetchSize,
+              consistencyLevel = consistencyLevel
             )
         )
         .select(primaryKeyProjection ++ regularColumnsProjection: _*)

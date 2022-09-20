@@ -17,7 +17,8 @@ object TargetSettings {
                     connections: Option[Int],
                     stripTrailingZerosForDecimals: Boolean,
                     writeTTLInS: Option[Int],
-                    writeWritetimestampInuS: Option[Long])
+                    writeWritetimestampInuS: Option[Long],
+                    consistencyLevel: String)
       extends TargetSettings
 
   case class DynamoDB(endpoint: Option[DynamoDBEndpoint],
