@@ -34,7 +34,9 @@ lazy val root = (project in file(".")).settings(
     "org.scalacheck" %% "scalacheck"    % "1.13.4" % "test"
   ),
   assemblyShadeRules in assembly := Seq(
-    ShadeRule.rename("org.yaml.snakeyaml.**" -> "com.scylladb.shaded.@1").inAll
+    ShadeRule.rename("org.yaml.snakeyaml.**" -> "com.scylladb.shaded.@1").inAll,
+    ShadeRule.rename("com.typesafe.config.**" -> "shade.com.typesafe.config.@1").inAll,
+    ShadeRule.rename("com.typesafe.scalalogging.**" -> "shade.com.typesafe.scalalogging.@1").inAll,
   ),
   assemblyMergeStrategy in assembly := {
     case PathList("org", "joda", "time", _ @_*)                       => MergeStrategy.first
