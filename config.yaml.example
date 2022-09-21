@@ -25,6 +25,11 @@ source:
   #  protocol: TLS
   keyspace: stocks
   table: stocks
+  # Consistency Level for the source connection
+  # Options are: LOCAL_ONE, ONE, LOCAL_QUORUM, QUORUM.
+  # Connector driver default is LOCAL_ONE. Our recommendation is LOCAL_QUORUM.
+  # If using ONE or LOCAL_ONE, ensure the source system is fully repaired.
+  consistencyLevel: LOCAL_QUORUM
   # Preserve TTLs and WRITETIMEs of cells in the source database. Note that this
   # option is *incompatible* when copying tables with collections (lists, maps, sets).
   preserveTimestamps: true
@@ -125,6 +130,10 @@ target:
   # If you'd like to rename columns, that's ok - see the renames parameter below.
   keyspace: stocks
   table: stocks
+  # Consistency Level for the target connection
+  # Options are: LOCAL_ONE, ONE, LOCAL_QUORUM, QUORUM.
+  # Connector driver default is LOCAL_QUORUM.
+  consistencyLevel: LOCAL_QUORUM
   # Number of connections to use to Scylla when copying
   connections: 16
   # Spark pads decimals with zeros appropriate to their scale. This causes values
@@ -210,3 +219,4 @@ validation:
   floatingPointTolerance: 0.001
   # What difference in ms should we allow between timestamps?
   timestampMsTolerance: 0
+

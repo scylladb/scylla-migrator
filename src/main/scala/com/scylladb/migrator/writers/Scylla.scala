@@ -7,6 +7,7 @@ import com.scylladb.migrator.config.{Rename, TargetSettings}
 import com.scylladb.migrator.readers.TimestampColumns
 import org.apache.log4j.{LogManager, Logger}
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
+import com.datastax.oss.driver.api.core.ConsistencyLevel
 
 object Scylla {
   val log: Logger = LogManager.getLogger("com.scylladb.migrator.writer.Scylla")
@@ -18,8 +19,25 @@ object Scylla {
     timestampColumns: Option[TimestampColumns],
     tokenRangeAccumulator: Option[TokenRangeAccumulator])(implicit spark: SparkSession): Unit = {
     val connector = Connectors.targetConnector(spark.sparkContext.getConf, target)
+
+    val consistencyLevel = target.consistencyLevel match {
+      case "LOCAL_QUORUM" => ConsistencyLevel.LOCAL_QUORUM
+      case "QUORUM"       => ConsistencyLevel.QUORUM
+      case "LOCAL_ONE"    => ConsistencyLevel.LOCAL_ONE
+      case "ONE"          => ConsistencyLevel.ONE
+      case _              => ConsistencyLevel.LOCAL_QUORUM // Default for Target is LOCAL_QUORUM
+    }
+    if (consistencyLevel.toString == target.consistencyLevel) {
+      log.info(
+        s"Using consistencyLevel [${consistencyLevel}] for TARGET based on target config [${target.consistencyLevel}]")
+    } else {
+      log.info(
+        s"Using DEFAULT consistencyLevel [${consistencyLevel}] for TARGET based on unrecognized target config [${target.consistencyLevel}]")
+    }
+
     val tempWriteConf = WriteConf
       .fromSparkConf(spark.sparkContext.getConf)
+      .copy(consistencyLevel = consistencyLevel)
 
     val writeConf = {
       if (timestampColumns.nonEmpty) {
