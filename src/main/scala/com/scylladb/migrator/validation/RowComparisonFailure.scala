@@ -62,7 +62,7 @@ object RowComparisonFailure {
         val differingFieldValues =
           for {
             name <- names
-            if !name.endsWith("_ttl") && !name.endsWith("_writetime")
+            if !name.endsWith("_ttl") && !name.endsWith("_writetime") && !name.endsWith("timestamp")
             leftValue  = leftMap.get(name)
             rightValue = rightMap.get(name)
 
@@ -96,6 +96,24 @@ object RowComparisonFailure {
             }
             if result
           } yield name
+
+        val differingTimestamps =
+          if (!compareTimestamps) Nil
+          else
+            for {
+              name <- names
+              if name.endsWith("timestamp")
+              leftTime  = left.getLongOption(name)
+              rightTime = right.getLongOption(name)
+              result <- (leftTime, rightTime) match {
+                         case (Some(l), Some(r)) if math.abs(l - r) > timestampMsTolerance =>
+                           Some(name -> math.abs(l - r))
+                         case (Some(l), None)    => Some(name -> l)
+                         case (None, Some(r))    => Some(name -> r)
+                         case (Some(l), Some(r)) => None
+                         case (None, None)       => None
+                       }
+            } yield result
 
         val differingTtls =
           if (!compareTimestamps) Nil
@@ -135,7 +153,7 @@ object RowComparisonFailure {
                        }
             } yield result
 
-        if (differingFieldValues.isEmpty && differingTtls.isEmpty && differingWritetimes.isEmpty)
+        if (differingFieldValues.isEmpty && differingTimestamps.isEmpty && differingTtls.isEmpty && differingWritetimes.isEmpty)
           None
         else
           Some(
