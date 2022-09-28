@@ -16,6 +16,8 @@ mini-complete-example/sbt/*.jar
 .scala_dependencies
 
 #Emacs
+
+
 *~
 
 #ignore the metastore
