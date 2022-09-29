@@ -11,8 +11,7 @@ import org.apache.spark.sql.SparkSession
 object Validator {
   val log = LogManager.getLogger("com.scylladb.migrator")
 
-  def runValidation(config: MigratorConfig)(
-    implicit spark: SparkSession): List[RowComparisonFailure] = {
+  def runValidation(config: MigratorConfig)(implicit spark: SparkSession) = {
     val sourceSettings = config.source match {
       case s: SourceSettings.Cassandra => s
       case otherwise =>
@@ -115,8 +114,8 @@ object Validator {
             config.validation.compareTimestamps
           )
       }
-      .take(config.validation.failuresToFetch)
-      .toList
+//      .take(config.validation.failuresToFetch)
+//      .toList
   }
 
   def main(args: Array[String]): Unit = {
@@ -138,11 +137,12 @@ object Validator {
     log.info(s"Loaded config: ${migratorConfig}")
 
     val failures = runValidation(migratorConfig)
+    val count = failures.count()
 
     if (failures.isEmpty) log.info("No comparison failures found - enjoy your day!")
     else {
-      log.error("Found the following comparison failures:")
-      log.error(failures.mkString("\n"))
+      log.error(s"Found ${count} comparison failures. Samples:")
+      log.error(failures.take(migratorConfig.validation.failuresToFetch).mkString("\n"))
     }
   }
 }
