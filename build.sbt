@@ -37,14 +37,13 @@ lazy val root = (project in file(".")).settings(
     ShadeRule.rename("org.yaml.snakeyaml.**" -> "com.scylladb.shaded.@1").inAll
   ),
   assemblyMergeStrategy in assembly := {
+    case PathList("META-INF", xs @ _*) => MergeStrategy.discard
     case PathList("org", "joda", "time", _ @_*)                       => MergeStrategy.first
     case PathList("org", "apache", "commons", "logging", _ @_*)       => MergeStrategy.first
     case PathList("com", "fasterxml", "jackson", "annotation", _ @_*) => MergeStrategy.first
     case PathList("com", "fasterxml", "jackson", "core", _ @_*)       => MergeStrategy.first
     case PathList("com", "fasterxml", "jackson", "databind", _ @_*)   => MergeStrategy.first
-    case x =>
-      val oldStrategy = (assemblyMergeStrategy in assembly).value
-      oldStrategy(x)
+    case x => MergeStrategy.first
   },
   // uses compile classpath for the run task, including "provided" jar (cf http://stackoverflow.com/a/21803413/3827)
   run in Compile := Defaults
