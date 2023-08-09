@@ -151,50 +151,61 @@ object Validator {
   }
 
   // Additional function to copy missing data
-
   def copyMissingData(config: MigratorConfig, failures: List[RowComparisonFailure])(
     implicit spark: SparkSession): Unit = {
-
     val log = LogManager.getLogger("com.scylladb.migrator")
     val sourceSettings = config.source.asInstanceOf[SourceSettings.Cassandra]
     val targetSettings = config.target.asInstanceOf[TargetSettings.Scylla]
     val retryMaxAttempts = 5
     val retryBackoff = 10.seconds
 
-    val retryPolicy = RetryPolicy()
-      .withBackoff(retryBackoff)
-      .withMaxRetries(retryMaxAttempts)
-      .onRetry {
-        case (_, _, e) =>
-          log.warn(s"Retrying due to error: ${e.getMessage}")
-      }
-
     for (failure <- failures) {
-      val keyColumns = failure.primaryKeyColumns // Assuming this holds the key column names
+      val primaryKeyColumns = failure.primaryKeyColumns // Assuming this holds the key column names
 
       val sourceRows = spark.sparkContext
         .cassandraTable(sourceSettings.keyspace, sourceSettings.table)
-        .select(keyColumns: _*)
-        .where(failure.primaryKeyFilter) // Assuming this holds the filter conditions for the missing rows
+        .select(primaryKeyColumns: _*)
+        .where(failure.primaryKeyFilter) // Assuming this holds the filter conditions for the missing rows)
 
-      Try {
-        sourceRows.foreachPartition { partition =>
-          val retryableInsert = RetryableInsert.retryableInsert(
-            partition,
-            targetSettings.keyspace,
-            targetSettings.table,
-            targetSettings.columns.map(_.columnName),
-            retryPolicy,
-            log
-          )
+      var success = false
+      var attempt = 1
+      while (!success && attempt <= retryMaxAttempts) {
+        Try {
+          sourceRows
+            .foreachPartition { partition =>
+              // Collect rows to be written
+              val rowsToWrite = partition.map { row =>
+                targetSettings.columns.map { col =>
+                  col.columnName -> row.get(col.columnName)
+                }.toMap
+              }.toSeq
 
-          retryableInsert.run()
+              // Use the writing method from the original code to write rows
+              writers.Scylla.writeDataframe(
+                targetSettings,
+                Map.empty, // No renames needed
+                spark.createDataFrame(rowsToWrite, targetSettings.schema),
+                None // No token range accumulator for validation
+              )
+
+              success = true
+            }
+        } match {
+          case Success(_) =>
+            log.info(s"Copied missing data for primary key: ${failure.primaryKeyValues.mkString(", ")}")
+          case Failure(e) =>
+            log.error(s"Failed to copy missing data for primary key: ${failure.primaryKeyValues.mkString(", ")}", e)
         }
-      } match {
-        case Success(_) =>
-          log.info(s"Copied missing data for primary key: ${failure.primaryKeyValues.mkString(", ")}")
-        case Failure(e) =>
-          log.error(s"Failed to copy missing data for primary key: ${failure.primaryKeyValues.mkString(", ")}", e)
+
+        if (!success) {
+          log.warn(s"Write attempt $attempt failed. Retrying after sleeping for $retryBackoff...")
+          attempt += 1
+          Thread.sleep(retryBackoff.toMillis)
+        }
+      }
+
+      if (!success) {
+        log.error(s"Failed to copy missing data after $retryMaxAttempts attempts for primary key: ${failure.primaryKeyValues.mkString(", ")}")
       }
     }
   }
