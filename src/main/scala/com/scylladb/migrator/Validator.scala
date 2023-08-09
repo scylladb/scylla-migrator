@@ -150,12 +150,16 @@ object Validator {
     }
   }
 
-  // Additional function to copy missing data
   def copyMissingData(config: MigratorConfig, failures: List[RowComparisonFailure])(
     implicit spark: SparkSession): Unit = {
     val log = LogManager.getLogger("com.scylladb.migrator")
     val sourceSettings = config.source.asInstanceOf[SourceSettings.Cassandra]
-    val targetSettings = config.target.asInstanceOf[TargetSettings.Scylla]
+
+    val migratorConfig =
+      MigratorConfig.loadFrom(spark.conf.get("spark.scylla.config"))
+
+    val target = migratorConfig.target
+    val targetSettings = target.asInstanceOf[TargetSettings.Scylla]
     val retryMaxAttempts = 5
     val retryBackoff = 10.seconds
 
@@ -170,7 +174,7 @@ object Validator {
       var success = false
       var attempt = 1
       while (!success && attempt <= retryMaxAttempts) {
-        Try {
+        try {
           sourceRows
             .foreachPartition { partition =>
               // Collect rows to be written
@@ -180,11 +184,12 @@ object Validator {
                 }.toMap
               }.toSeq
 
-              // Use the writing method from the original code to write rows
+              // Use the writing method from the original code with the correct number of parameters
               writers.Scylla.writeDataframe(
-                targetSettings,
-                Map.empty, // No renames needed
+                target,
+                migratorConfig.renames, // Use the renames from the migratorConfig
                 spark.createDataFrame(rowsToWrite, targetSettings.schema),
+                Seq.empty, // Empty sequence for timestamp columns
                 None // No token range accumulator for validation
               )
 
