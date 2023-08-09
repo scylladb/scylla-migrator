@@ -139,10 +139,63 @@ object Validator {
 
     val failures = runValidation(migratorConfig)
 
-    if (failures.isEmpty) log.info("No comparison failures found - enjoy your day!")
-    else {
+    if (failures.isEmpty) {
+      log.info("No comparison failures found - enjoy your day!")
+    } else {
       log.error("Found the following comparison failures:")
       log.error(failures.mkString("\n"))
+
+      // Copy missing data here based on the discrepancies found
+      copyMissingData(migratorConfig, failures)
+    }
+  }
+
+  // Additional function to copy missing data
+
+  def copyMissingData(config: MigratorConfig, failures: List[RowComparisonFailure])(
+    implicit spark: SparkSession): Unit = {
+
+    val log = LogManager.getLogger("com.scylladb.migrator")
+    val sourceSettings = config.source.asInstanceOf[SourceSettings.Cassandra]
+    val targetSettings = config.target.asInstanceOf[TargetSettings.Scylla]
+    val retryMaxAttempts = 5
+    val retryBackoff = 10.seconds
+
+    val retryPolicy = RetryPolicy()
+      .withBackoff(retryBackoff)
+      .withMaxRetries(retryMaxAttempts)
+      .onRetry {
+        case (_, _, e) =>
+          log.warn(s"Retrying due to error: ${e.getMessage}")
+      }
+
+    for (failure <- failures) {
+      val keyColumns = failure.primaryKeyColumns // Assuming this holds the key column names
+
+      val sourceRows = spark.sparkContext
+        .cassandraTable(sourceSettings.keyspace, sourceSettings.table)
+        .select(keyColumns: _*)
+        .where(failure.primaryKeyFilter) // Assuming this holds the filter conditions for the missing rows
+
+      Try {
+        sourceRows.foreachPartition { partition =>
+          val retryableInsert = RetryableInsert.retryableInsert(
+            partition,
+            targetSettings.keyspace,
+            targetSettings.table,
+            targetSettings.columns.map(_.columnName),
+            retryPolicy,
+            log
+          )
+
+          retryableInsert.run()
+        }
+      } match {
+        case Success(_) =>
+          log.info(s"Copied missing data for primary key: ${failure.primaryKeyValues.mkString(", ")}")
+        case Failure(e) =>
+          log.error(s"Failed to copy missing data for primary key: ${failure.primaryKeyValues.mkString(", ")}", e)
+      }
     }
   }
 }
