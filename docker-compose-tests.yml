@@ -54,6 +54,8 @@ services:
     volumes:
       - ./migrator/target/scala-2.11:/jars
       - ./tests/src/test/configurations:/app/configurations
+      # Workaround for https://github.com/awslabs/emr-dynamodb-connector/issues/50
+      - ${PWD}/tests/docker/job-flow.json:/mnt/var/lib/info/job-flow.json
 
   spark-worker:
     image: bde2020/spark-worker:2.4.4-hadoop2.7

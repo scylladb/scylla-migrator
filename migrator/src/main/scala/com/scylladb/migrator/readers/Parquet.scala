@@ -1,8 +1,9 @@
 package com.scylladb.migrator.readers
 
 import com.scylladb.migrator.config.SourceSettings
+import com.scylladb.migrator.scylla.SourceDataFrame
 import org.apache.log4j.LogManager
-import org.apache.spark.sql.{ DataFrame, SparkSession }
+import org.apache.spark.sql.SparkSession
 
 object Parquet {
   val log = LogManager.getLogger("com.scylladb.migrator.readers.Parquet")
