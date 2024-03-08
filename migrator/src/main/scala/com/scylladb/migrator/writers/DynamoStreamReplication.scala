@@ -65,10 +65,11 @@ object DynamoStreamReplication {
         case _ => None
       }
       .foreachRDD { msgs =>
-        val rdd = msgs.collect {
-          case Some(item) => (new Text(), new DynamoDBItemWritable(item))
-        }
-        // FIXME re-partition by columns? msgs.repartition(???)
+        val rdd = msgs
+          .collect {
+            case Some(item) => (new Text(), new DynamoDBItemWritable(item))
+          }
+          .repartition(Runtime.getRuntime.availableProcessors() * 2)
 
         log.info("Changes to be applied:")
         rdd
