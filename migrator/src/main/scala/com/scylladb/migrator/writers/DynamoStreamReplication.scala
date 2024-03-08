@@ -2,7 +2,6 @@ package com.scylladb.migrator.writers
 
 import com.amazonaws.services.dynamodbv2.model.{ AttributeValue, TableDescription }
 import com.amazonaws.services.dynamodbv2.streamsadapter.model.RecordAdapter
-import com.audienceproject.spark.dynamodb.connector.ColumnSchema
 import com.scylladb.migrator.config.{ AWSCredentials, Rename, SourceSettings, TargetSettings }
 import org.apache.hadoop.dynamodb.DynamoDBItemWritable
 import org.apache.hadoop.io.Text
@@ -19,6 +18,10 @@ import java.util
 
 object DynamoStreamReplication {
   val log = LogManager.getLogger("com.scylladb.migrator.writers.DynamoStreamReplication")
+
+  private val operationTypeColumn = "_dynamo_op_type"
+  private val putOperation = new AttributeValue().withBOOL(true)
+  private val deleteOperation = new AttributeValue().withBOOL(false)
 
   def createDStream(spark: SparkSession,
                     streamingContext: StreamingContext,
@@ -56,7 +59,7 @@ object DynamoStreamReplication {
               case "INSERT" | "MODIFY" => putOperation
               case "REMOVE"            => deleteOperation
             }
-          newMap.put(ColumnSchema.OperationTypeColumn, operationType)
+          newMap.put(operationTypeColumn, operationType)
           Some(newMap)
 
         case _ => None
@@ -71,7 +74,7 @@ object DynamoStreamReplication {
         rdd
           .map(_._2) // Remove keys because they are not serializable
           .groupBy { itemWritable =>
-            itemWritable.getItem.get(ColumnSchema.OperationTypeColumn) match {
+            itemWritable.getItem.get(operationTypeColumn) match {
               case `putOperation`    => "UPSERT"
               case `deleteOperation` => "DELETE"
               case _                 => "UNKNOWN"
@@ -86,6 +89,4 @@ object DynamoStreamReplication {
         DynamoDB.writeRDD(target, renames, rdd, Some(targetTableDesc))(spark)
       }
 
-  private val putOperation = new AttributeValue().withBOOL(ColumnSchema.PutOperation)
-  private val deleteOperation = new AttributeValue().withBOOL(ColumnSchema.DeleteOperation)
 }
