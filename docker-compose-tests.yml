@@ -1,22 +1,30 @@
-version: '3'
+version: '3.8'
 
 services:
+
+  dynamodb:
+    command: "-jar DynamoDBLocal.jar -sharedDb -dbPath ./data"
+    image: "amazon/dynamodb-local:latest"
+    container_name: dynamodb
+    networks:
+      - scylla
+    expose:
+      - 8001
+    ports:
+      - "8001:8000"
+    volumes:
+      - "./tests/docker/dynamodb:/home/dynamodblocal/data"
+    working_dir: /home/dynamodblocal
+
   scylla:
     image: scylladb/scylla:latest
     networks:
       - scylla
     volumes:
-      - ./data/scylla:/var/lib/scylla
+      - "./tests/docker/scylla:/var/lib/scylla"
     ports:
       - "8000:8000"
     command: "--smp 2 --memory 2048M --alternator-port 8000 --alternator-write-isolation always_use_lwt"
-
-  cassandra:
-    image: cassandra:latest
-    networks:
-      - scylla
-    volumes:
-      - ./data/cassandra:/var/lib/cassandra
 
   spark-master:
     image: bde2020/spark-master:2.4.4-hadoop2.7
@@ -44,10 +52,8 @@ services:
       - 7077:7077
       - 8080:8080
     volumes:
-      - ./data/spark-master:/tmp/data
       - ./migrator/target/scala-2.11:/jars
-      - ./parquet-data:/parquet-data
-      - ./:/app
+      - ./tests/src/test/configurations:/app/configurations
 
   spark-worker:
     image: bde2020/spark-worker:2.4.4-hadoop2.7
@@ -69,9 +75,6 @@ services:
       - 8881
     ports:
       - 8081:8081
-    volumes:
-      - ./data/spark-worker:/tmp/data
-      - ./parquet-data:/parquet-data
     depends_on:
       - spark-master
 

@@ -1,0 +1,37 @@
+source:
+  type: dynamodb
+  table: BasicTest
+  endpoint:
+    host: http://dynamodb
+    port: 8000
+  credentials:
+    accessKey: dummy
+    secretKey: dummy
+  maxMapTasks: 1
+
+target:
+  type: dynamodb
+  table: BasicTest
+  endpoint:
+    host: http://scylla
+    port: 8000
+  credentials:
+    accessKey: dummy
+    secretKey: dummy
+  maxMapTasks: 1
+  streamChanges: false
+
+renames: []
+
+# Below are unused but mandatory settings
+savepoints:
+  path: /app/savepoints
+  intervalSeconds: 300
+skipTokenRanges: []
+validation:
+  compareTimestamps: true
+  ttlToleranceMillis: 60000
+  writetimeToleranceMillis: 1000
+  failuresToFetch: 100
+  floatingPointTolerance: 0.001
+  timestampMsTolerance: 0

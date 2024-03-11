@@ -13,7 +13,7 @@ Create a `config.yaml` for your migration using the template `config.yaml.exampl
 
 The Scylla Migrator is built against Spark 2.4.4, so you'll need to run that version on your cluster.
 
-After running `build.sh`, copy the jar from `./target/scala-2.11/scylla-migrator-assembly-0.0.1.jar` and the `config.yaml` you've created to the Spark master server.
+After running `build.sh`, copy the jar from `./migrator/target/scala-2.11/scylla-migrator-assembly-0.0.1.jar` and the `config.yaml` you've created to the Spark master server.
 
 Then, run this command on the Spark master server:
 ```shell
@@ -51,18 +51,18 @@ To run in the local Docker-based setup:
 
 1. First start the environment:
 ```shell
-docker-compose up -d
+docker compose up -d
 ```
 
 2. Launch `cqlsh` in Cassandra's container and create a keyspace and a table with some data:
 ```shell
-docker-compose exec cassandra cqlsh
+docker compose exec cassandra cqlsh
 <create stuff>
 ```
 
 3. Launch `cqlsh` in Scylla's container and create the destination keyspace and table with the same schema as the source table:
 ```shell
-docker-compose exec scylla cqlsh
+docker compose exec scylla cqlsh
 <create stuff>
 ```
 
@@ -72,11 +72,11 @@ docker-compose exec scylla cqlsh
 
 6. Then, launch `spark-submit` in the master's container to run the job:
 ```shell
-docker-compose exec spark-master /spark/bin/spark-submit --class com.scylladb.migrator.Migrator \
+docker compose exec spark-master /spark/bin/spark-submit --class com.scylladb.migrator.Migrator \
   --master spark://spark-master:7077 \
   --conf spark.driver.host=spark-master \
   --conf spark.scylla.config=/app/config.yaml \
   /jars/scylla-migrator-assembly-0.0.1.jar
 ```
 
-The `spark-master` container mounts the `./target/scala-2.11` dir on `/jars` and the repository root on `/app`. To update the jar with new code, just run `build.sh` and then run `spark-submit` again.
+The `spark-master` container mounts the `./migrator/target/scala-2.11` dir on `/jars` and the repository root on `/app`. To update the jar with new code, just run `build.sh` and then run `spark-submit` again.

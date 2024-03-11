@@ -21,12 +21,12 @@ pushd spark-kinesis
 sbt assembly
 popd
 
-if [ ! -d "./lib" ]; then
-    mkdir lib
+if [ ! -d "./migrator/lib" ]; then
+    mkdir migrator/lib
 fi
 
-cp ./spark-cassandra-connector/connector/target/scala-2.11/spark-cassandra-connector-assembly-*.jar ./lib
-cp ./spark-dynamodb/target/scala-2.11/spark-dynamodb-assembly-*.jar ./lib
-cp ./spark-kinesis/target/scala-2.11/spark-streaming-kinesis-asl-assembly-*.jar ./lib
+cp ./spark-cassandra-connector/connector/target/scala-2.11/spark-cassandra-connector-assembly-*.jar ./migrator/lib
+cp ./spark-dynamodb/target/scala-2.11/spark-dynamodb-assembly-*.jar ./migrator/lib
+cp ./spark-kinesis/target/scala-2.11/spark-streaming-kinesis-asl-assembly-*.jar ./migrator/lib
 
-sbt -Djava.io.tmpdir="$TMPDIR" assembly
+sbt -Djava.io.tmpdir="$TMPDIR" migrator/assembly
