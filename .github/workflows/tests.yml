@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - master
+      - actions-test
   pull_request:
 
 jobs:
