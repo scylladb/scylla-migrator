@@ -3,7 +3,7 @@ version: '3.8'
 services:
 
   dynamodb:
-    command: "-jar DynamoDBLocal.jar -sharedDb -dbPath ./data"
+    command: "-jar DynamoDBLocal.jar -sharedDb -inMemory"
     image: "amazon/dynamodb-local:latest"
     container_name: dynamodb
     networks:
@@ -12,8 +12,6 @@ services:
       - 8001
     ports:
       - "8001:8000"
-    volumes:
-      - "./tests/docker/dynamodb:/home/dynamodblocal/data"
     working_dir: /home/dynamodblocal
 
   scylla:

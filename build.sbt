@@ -75,6 +75,7 @@ lazy val tests = project.in(file("tests")).settings(
     "org.scala-lang.modules" %% "scala-collection-compat" % "2.11.0"
   ),
   testFrameworks += new TestFramework("munit.Framework"),
+  Test / parallelExecution := false
 )
 
 lazy val root = project.in(file("."))
