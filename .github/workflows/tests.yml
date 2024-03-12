@@ -24,7 +24,9 @@ jobs:
       - name: Build migrator
         run: ./build.sh
       - name: Set up services
-        run: docker compose -f docker-compose-tests.yml up --wait
+        run: |
+          docker compose -f docker-compose-tests.yml up --wait
+          sleep 30 # in practice, --wait is not enough
       - name: Run tests
         run: sbt test
       - name: Stop services
