@@ -1,0 +1,31 @@
+name: Tests
+on:
+  push:
+    branches:
+      - master
+      - actions-test
+  pull_request:
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Cache Docker images
+        uses: ScribeMD/docker-cache@0.3.7
+        with:
+          key: docker-${{ runner.os }}-${{ hashFiles('docker-compose-tests.yml') }}
+      - uses: actions/setup-java@v3
+        with:
+          distribution: temurin
+          java-version: 8
+          cache: sbt
+      - name: Build migrator
+        run: ./build.sh
+      - name: Set up services
+        run: docker compose -f docker-compose-tests.yml up --wait
+      - name: Run tests
+        run: sbt test
+      - name: Stop services
+        run: docker compose -f docker-compose-tests.yml down

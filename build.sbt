@@ -1,6 +1,9 @@
 import sbt.librarymanagement.InclExclRule
 
-lazy val root = (project in file(".")).settings(
+val awsSdkVersion = "1.11.728"
+val sparkVersion = "2.4.4"
+
+lazy val migrator = (project in file("migrator")).settings(
   inThisBuild(
     List(
       organization := "com.scylladb",
@@ -20,18 +23,16 @@ lazy val root = (project in file(".")).settings(
   fork                      := true,
   scalafmtOnCompile         := true,
   libraryDependencies ++= Seq(
-    "org.apache.spark" %% "spark-streaming"      % "2.4.4" % "provided",
-    "org.apache.spark" %% "spark-sql"            % "2.4.4" % "provided",
-    "org.apache.spark" %% "spark-sql"            % "2.4.4" % "provided",
-    "com.amazonaws"    % "aws-java-sdk-sts"      % "1.11.728",
-    "com.amazonaws"    % "aws-java-sdk-dynamodb" % "1.11.728",
+    "org.apache.spark" %% "spark-streaming"      % sparkVersion % "provided",
+    "org.apache.spark" %% "spark-sql"            % sparkVersion % "provided",
+    "org.apache.spark" %% "spark-sql"            % sparkVersion % "provided",
+    "com.amazonaws"    % "aws-java-sdk-sts"      % awsSdkVersion,
+    "com.amazonaws"    % "aws-java-sdk-dynamodb" % awsSdkVersion,
     ("com.amazonaws" % "dynamodb-streams-kinesis-adapter" % "1.5.2")
       .excludeAll(InclExclRule("com.fasterxml.jackson.core")),
     "org.yaml"       % "snakeyaml"      % "1.23",
     "io.circe"       %% "circe-yaml"    % "0.9.0",
     "io.circe"       %% "circe-generic" % "0.9.0",
-    "org.scalatest"  %% "scalatest"     % "3.0.1" % "test",
-    "org.scalacheck" %% "scalacheck"    % "1.13.4" % "test"
   ),
   assemblyShadeRules in assembly := Seq(
     ShadeRule.rename("org.yaml.snakeyaml.**" -> "com.scylladb.shaded.@1").inAll
@@ -54,12 +55,6 @@ lazy val root = (project in file(".")).settings(
   pomIncludeRepository := { x =>
     false
   },
-  resolvers ++= Seq(
-    "sonatype-releases" at "https://oss.sonatype.org/content/repositories/releases/",
-    "Typesafe repository" at "http://repo.typesafe.com/typesafe/releases/",
-    "Second Typesafe repo" at "http://repo.typesafe.com/typesafe/maven-releases/",
-    Resolver.sonatypeRepo("public")
-  ),
   pomIncludeRepository := { x =>
     false
   },
@@ -72,3 +67,16 @@ lazy val root = (project in file(".")).settings(
       Some("releases" at nexus + "service/local/staging/deploy/maven2")
   }
 )
+
+lazy val tests = project.in(file("tests")).settings(
+  libraryDependencies ++= Seq(
+    "com.amazonaws" % "aws-java-sdk-dynamodb" % awsSdkVersion,
+    "org.scalameta" %% "munit" % "0.7.29",
+    "org.scala-lang.modules" %% "scala-collection-compat" % "2.11.0"
+  ),
+  testFrameworks += new TestFramework("munit.Framework"),
+  Test / parallelExecution := false
+)
+
+lazy val root = project.in(file("."))
+  .aggregate(migrator, tests)
