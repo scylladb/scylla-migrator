@@ -1,5 +1,6 @@
 package com.scylladb.migrator
 
+import com.amazonaws.auth.{AWSCredentials, AWSStaticCredentialsProvider, BasicAWSCredentials}
 import com.amazonaws.client.builder.AwsClientBuilder.EndpointConfiguration
 import com.amazonaws.services.dynamodbv2.model._
 import com.amazonaws.services.dynamodbv2.{AmazonDynamoDB, AmazonDynamoDBClientBuilder}
@@ -14,18 +15,20 @@ import scala.util.chaining._
  * It expects external services (DynamoDB, Scylla, Spark, etc.) to be running.
  * See the files `CONTRIBUTING.md` and `docker-compose-tests.yml` for more information.
  */
-class MigratorSuite extends munit.FunSuite {
+trait MigratorSuite extends munit.FunSuite {
 
   /** Client of a source DynamoDB instance */
   val sourceDDb: AmazonDynamoDB = AmazonDynamoDBClientBuilder
     .standard()
     .withEndpointConfiguration(new EndpointConfiguration("http://localhost:8001", "eu-central-1"))
+    .withCredentials(new AWSStaticCredentialsProvider(new BasicAWSCredentials("dummy", "dummy")))
     .build()
 
   /** Client of a target Alternator instance */
   val targetAlternator: AmazonDynamoDB = AmazonDynamoDBClientBuilder
     .standard()
     .withEndpointConfiguration(new EndpointConfiguration("http://localhost:8000", "eu-central-1"))
+    .withCredentials(new AWSStaticCredentialsProvider(new BasicAWSCredentials("dummy", "dummy")))
     .build()
 
   /**
