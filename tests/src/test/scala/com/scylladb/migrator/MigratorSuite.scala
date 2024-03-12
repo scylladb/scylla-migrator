@@ -113,6 +113,9 @@ trait MigratorSuite extends munit.FunSuite {
         "--master", "spark://spark-master:7077",
         "--conf", "spark.driver.host=spark-master",
         "--conf", s"spark.scylla.config=/app/configurations/${migratorConfigFile}",
+        // Uncomment one of the following lines to plug a remote debugger on the Spark master or worker.
+        // "--conf", "spark.driver.extraJavaOptions=-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=5005",
+        // "--conf", "spark.executor.extraJavaOptions=-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=5006",
         "/jars/scylla-migrator-assembly-0.0.1.jar"
       )
     ).run().exitValue().tap { statusCode =>
