@@ -2,8 +2,7 @@ name: Tests
 on:
   push:
     branches:
-      - master
-      - actions-test
+      - master      
   pull_request:
 
 jobs:
