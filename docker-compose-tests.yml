@@ -36,6 +36,7 @@ services:
     networks:
       - scylla
     expose:
+      - 5005
       - 7001
       - 7002
       - 7003
@@ -46,6 +47,7 @@ services:
       - 6066
     ports:
       - 4040:4040
+      - 5005:5005
       - 6066:6066
       - 7077:7077
       - 8080:8080
@@ -65,6 +67,7 @@ services:
     networks:
       - scylla
     expose:
+      - 5006
       - 7012
       - 7013
       - 7014
@@ -72,6 +75,7 @@ services:
       - 7016
       - 8881
     ports:
+      - 5006:5006
       - 8081:8081
     depends_on:
       - spark-master

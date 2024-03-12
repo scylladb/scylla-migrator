@@ -41,3 +41,38 @@ sbt migrator/assembly
 ~~~
 
 And then re-run the tests.
+
+## Debugging
+
+The tests involve the execution of code on several locations:
+- locally (ie, on the machine where you invoke `sbt test`): tests initialization and assertions
+- on the Spark master node: the `Migrator` entry point
+- on the Spark worker node: RDD operations
+
+In all those cases, it is possible to debug them by using the Java Debug Wire Protocol.
+
+### Local Debugging
+
+Follow the procedure documented [here](https://stackoverflow.com/a/15505308/561721).
+
+### Debugging on the Spark Master Node
+
+1. In the file `MigratorSuite.scala`, uncomment the line that sets the
+   `spark.driver.extraJavaOptions`.
+2. Set up the remote debugger of your IDE to listen to the port 5005.
+3. Run a test
+4. When the test starts a Spark job, it waits for the remote debugger
+5. Start the remote debugger from your IDE.
+6. The test execution resumes, and you can interact with it from your debugger.
+
+### Debugging on the Spark Worker Node
+
+1. In the file `MigratorSuite.scala`, uncomment the line that sets the
+   `spark.executor.extraJavaOptions`.
+2. Set up the remote debugger of your IDE to listen to the port 5006.
+3. Run a test
+4. When the test starts an RDD operation, it waits for the remote debugger.
+   Note that the Spark master node will not display the output of the worker node,
+   but you can see it in the worker web UI: http://localhost:8081/.
+5. Start the remote debugger from your IDE.
+6. The test execution resumes, and you can interact with it from your debugger.
