@@ -30,7 +30,7 @@ lazy val migrator = (project in file("migrator")).settings(
     "com.amazonaws"    % "aws-java-sdk-dynamodb" % awsSdkVersion,
     ("com.amazonaws" % "dynamodb-streams-kinesis-adapter" % "1.5.2")
       .excludeAll(InclExclRule("com.fasterxml.jackson.core")),
-    "com.amazon.emr" % "emr-dynamodb-hadoop" % "4.8.0",
+    "com.amazon.emr" % "emr-dynamodb-hadoop" % "4.16.0",
     "org.yaml"       % "snakeyaml"      % "1.23",
     "io.circe"       %% "circe-yaml"    % "0.9.0",
     "io.circe"       %% "circe-generic" % "0.9.0",
