@@ -64,7 +64,8 @@ object DynamoUtils {
 
   def enableDynamoStream(source: SourceSettings.DynamoDB): Unit = {
     val sourceClient = buildDynamoClient(source.endpoint, source.credentials, source.region)
-    val sourceStreamsClient = buildDynamoStreamsClient(source.credentials, source.region)
+    val sourceStreamsClient =
+      buildDynamoStreamsClient(source.endpoint, source.credentials, source.region)
 
     sourceClient
       .updateTable(
@@ -114,9 +115,18 @@ object DynamoUtils {
     builder.build()
   }
 
-  def buildDynamoStreamsClient(creds: Option[AWSCredentialsProvider], region: Option[String]) = {
+  def buildDynamoStreamsClient(endpoint: Option[DynamoDBEndpoint],
+                               creds: Option[AWSCredentialsProvider],
+                               region: Option[String]) = {
     val builder = AmazonDynamoDBStreamsClientBuilder.standard()
 
+    endpoint.foreach { endpoint =>
+      builder
+        .withEndpointConfiguration(
+          new AwsClientBuilder.EndpointConfiguration(
+            endpoint.renderEndpoint,
+            region.getOrElse("empty")))
+    }
     creds.foreach(builder.withCredentials)
     region.foreach(builder.withRegion)
 

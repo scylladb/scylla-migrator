@@ -66,26 +66,30 @@ object DynamoStreamReplication {
       }
       .foreachRDD { msgs =>
         val rdd = msgs
-          .collect {
-            case Some(item) => (new Text(), new DynamoDBItemWritable(item))
-          }
+          .collect { case Some(item) => new DynamoDBItemWritable(item) }
           .repartition(Runtime.getRuntime.availableProcessors() * 2)
+          .map(item => (new Text, item)) // Create the key after repartitioning to avoid Serialization issues
 
-        log.info("Changes to be applied:")
-        rdd
-          .map(_._2) // Remove keys because they are not serializable
-          .groupBy { itemWritable =>
-            itemWritable.getItem.get(operationTypeColumn) match {
-              case `putOperation`    => "UPSERT"
-              case `deleteOperation` => "DELETE"
-              case _                 => "UNKNOWN"
+        val changes =
+          rdd
+            .map(_._2) // Remove keys because they are not serializable
+            .groupBy { itemWritable =>
+              itemWritable.getItem.get(operationTypeColumn) match {
+                case `putOperation`    => "UPSERT"
+                case `deleteOperation` => "DELETE"
+                case _                 => "UNKNOWN"
+              }
             }
+            .mapValues(_.size)
+            .collect()
+        if (changes.nonEmpty) {
+          log.info("Changes to be applied:")
+          for ((operation, count) <- changes) {
+            log.info(s"${operation}: ${count}")
           }
-          .mapValues(_.size)
-          .foreach {
-            case (operation, count) =>
-              log.info(s"${operation}: ${count}")
-          }
+        } else {
+          log.info("No changes to apply")
+        }
 
         DynamoDB.writeRDD(target, renames, rdd, Some(targetTableDesc))(spark)
       }
