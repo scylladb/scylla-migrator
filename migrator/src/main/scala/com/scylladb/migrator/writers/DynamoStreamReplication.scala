@@ -1,42 +1,34 @@
 package com.scylladb.migrator.writers
 
-import java.util
-
-import com.amazonaws.services.dynamodbv2.document.ItemUtils
 import com.amazonaws.services.dynamodbv2.model.{ AttributeValue, TableDescription }
 import com.amazonaws.services.dynamodbv2.streamsadapter.model.RecordAdapter
-import com.audienceproject.spark.dynamodb.connector.ColumnSchema
-import com.audienceproject.spark.dynamodb.datasource.TypeConverter
 import com.scylladb.migrator.config.{ AWSCredentials, Rename, SourceSettings, TargetSettings }
+import org.apache.hadoop.dynamodb.DynamoDBItemWritable
+import org.apache.hadoop.io.Text
 import org.apache.log4j.LogManager
-import org.apache.spark.sql.types.{ BooleanType, StringType, StructType }
-import org.apache.spark.sql.{ Row, SparkSession }
+import org.apache.spark.sql.SparkSession
 import org.apache.spark.streaming.StreamingContext
 import org.apache.spark.streaming.kinesis.{
   KinesisInitialPositions,
   KinesisInputDStream,
   SparkAWSCredentials
 }
-import org.apache.spark.unsafe.types.UTF8String
-import org.apache.spark.sql.{ functions => f }
 
-import scala.collection.JavaConverters._
+import java.util
 
 object DynamoStreamReplication {
   val log = LogManager.getLogger("com.scylladb.migrator.writers.DynamoStreamReplication")
+
+  private val operationTypeColumn = "_dynamo_op_type"
+  private val putOperation = new AttributeValue().withBOOL(true)
+  private val deleteOperation = new AttributeValue().withBOOL(false)
 
   def createDStream(spark: SparkSession,
                     streamingContext: StreamingContext,
                     src: SourceSettings.DynamoDB,
                     target: TargetSettings.DynamoDB,
-                    inferredSchema: StructType,
-                    sourceTableDesc: TableDescription,
                     targetTableDesc: TableDescription,
-                    renames: List[Rename]) = {
-    val typeConverter = TypeConverter.fromStructType(inferredSchema)
-    val partitionColumns =
-      sourceTableDesc.getKeySchema.asScala.map(keyElement => f.col(keyElement.getAttributeName))
-
+                    renames: List[Rename]): Unit =
     KinesisInputDStream.builder
       .streamingContext(streamingContext)
       .streamName(src.table)
@@ -62,54 +54,44 @@ object DynamoStreamReplication {
 
           newMap.putAll(rec.getDynamodb.getKeys)
 
-          val row =
-            Row.fromSeq {
-              typeConverter
-                .readInternalRow(ItemUtils.toItem(newMap))
-                .toSeq(inferredSchema)
-                .map {
-                  case s: UTF8String => s.toString
-                  case x             => x
-                } ++
-                Seq(
-                  rec.getEventName match {
-                    case "INSERT" | "MODIFY" => ColumnSchema.PutOperation
-                    case "REMOVE"            => ColumnSchema.DeleteOperation
-                  }
-                )
+          val operationType =
+            rec.getEventName match {
+              case "INSERT" | "MODIFY" => putOperation
+              case "REMOVE"            => deleteOperation
             }
-
-          Some(row)
+          newMap.put(operationTypeColumn, operationType)
+          Some(newMap)
 
         case _ => None
       }
       .foreachRDD { msgs =>
-        val df = spark
-          .createDataFrame(
-            msgs
-              .collect {
-                case Some(row) => row
-              },
-            inferredSchema.add(ColumnSchema.OperationTypeColumn, BooleanType)
-          )
-          .repartition(partitionColumns: _*)
+        val rdd = msgs
+          .collect { case Some(item) => new DynamoDBItemWritable(item) }
+          .repartition(Runtime.getRuntime.availableProcessors() * 2)
+          .map(item => (new Text, item)) // Create the key after repartitioning to avoid Serialization issues
 
-        log.info("Changes to be applied:")
-        df.select(
-            f.when(
-                f.col(ColumnSchema.OperationTypeColumn) === f.lit(ColumnSchema.PutOperation),
-                f.lit("UPSERT"))
-              .when(
-                f.col(ColumnSchema.OperationTypeColumn) === f.lit(ColumnSchema.DeleteOperation),
-                f.lit("DELETE"))
-              .otherwise(f.lit("UNKNOWN"))
-              .as(ColumnSchema.OperationTypeColumn)
-          )
-          .groupBy(ColumnSchema.OperationTypeColumn)
-          .count()
-          .show()
+        val changes =
+          rdd
+            .map(_._2) // Remove keys because they are not serializable
+            .groupBy { itemWritable =>
+              itemWritable.getItem.get(operationTypeColumn) match {
+                case `putOperation`    => "UPSERT"
+                case `deleteOperation` => "DELETE"
+                case _                 => "UNKNOWN"
+              }
+            }
+            .mapValues(_.size)
+            .collect()
+        if (changes.nonEmpty) {
+          log.info("Changes to be applied:")
+          for ((operation, count) <- changes) {
+            log.info(s"${operation}: ${count}")
+          }
+        } else {
+          log.info("No changes to apply")
+        }
 
-        DynamoDB.writeDataframe(target, renames, df, Some(targetTableDesc))(spark)
+        DynamoDB.writeRDD(target, renames, rdd, Some(targetTableDesc))(spark)
       }
-  }
+
 }
