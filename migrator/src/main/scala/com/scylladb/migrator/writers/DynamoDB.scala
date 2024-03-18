@@ -1,6 +1,7 @@
 package com.scylladb.migrator.writers
 
 import com.amazonaws.services.dynamodbv2.model.TableDescription
+import com.scylladb.migrator.DynamoUtils.{ setDynamoDBJobConf, setOptionalConf }
 import com.scylladb.migrator.config.{ Rename, TargetSettings }
 import org.apache.hadoop.dynamodb.{ DynamoDBConstants, DynamoDBItemWritable }
 import org.apache.hadoop.io.Text
@@ -26,26 +27,19 @@ object DynamoDB {
 
     val jobConf = new JobConf(spark.sparkContext.hadoopConfiguration)
 
-    def setOptionalConf(name: String, maybeValue: Option[String]): Unit =
-      for (value <- maybeValue) {
-        jobConf.set(name, value)
-      }
-
+    setDynamoDBJobConf(
+      jobConf,
+      target.region,
+      target.endpoint,
+      target.scanSegments,
+      target.maxMapTasks,
+      target.credentials)
     jobConf.set(DynamoDBConstants.OUTPUT_TABLE_NAME, target.table)
-    setOptionalConf(DynamoDBConstants.REGION, target.region)
-    setOptionalConf(DynamoDBConstants.ENDPOINT, target.endpoint.map(_.renderEndpoint))
-    setOptionalConf(DynamoDBConstants.READ_THROUGHPUT, throughput)
+    setOptionalConf(jobConf, DynamoDBConstants.WRITE_THROUGHPUT, throughput)
     setOptionalConf(
+      jobConf,
       DynamoDBConstants.THROUGHPUT_WRITE_PERCENT,
       target.throughputWritePercent.map(_.toString))
-    setOptionalConf(DynamoDBConstants.SCAN_SEGMENTS, target.scanSegments.map(_.toString))
-    setOptionalConf(DynamoDBConstants.MAX_MAP_TASKS, target.maxMapTasks.map(_.toString))
-    setOptionalConf(DynamoDBConstants.DYNAMODB_ACCESS_KEY_CONF, target.credentials.map(_.accessKey))
-    setOptionalConf(DynamoDBConstants.DYNAMODB_SECRET_KEY_CONF, target.credentials.map(_.secretKey))
-    jobConf.set(
-      "mapred.output.format.class",
-      "org.apache.hadoop.dynamodb.write.DynamoDBOutputFormat")
-    jobConf.set("mapred.input.format.class", "org.apache.hadoop.dynamodb.read.DynamoDBInputFormat")
 
     rdd
       .mapValues { itemWritable =>
