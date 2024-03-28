@@ -14,6 +14,17 @@ services:
       - "8001:8000"
     working_dir: /home/dynamodblocal
 
+  cassandra:
+    image: cassandra:latest
+    networks:
+      - scylla
+    volumes:
+      - ./tests/docker/cassandra:/var/lib/cassandra
+    ports:
+      - "9043:9042"
+    expose:
+      - 9043
+
   scylla:
     image: scylladb/scylla:latest
     networks:
@@ -22,6 +33,7 @@ services:
       - "./tests/docker/scylla:/var/lib/scylla"
     ports:
       - "8000:8000"
+      - "9042:9042"
     command: "--smp 2 --memory 2048M --alternator-port 8000 --alternator-write-isolation always_use_lwt"
 
   spark-master:
@@ -54,6 +66,7 @@ services:
     volumes:
       - ./migrator/target/scala-2.11:/jars
       - ./tests/src/test/configurations:/app/configurations
+      - ./tests/docker/spark-master:/app/savepoints
       # Workaround for https://github.com/awslabs/emr-dynamodb-connector/issues/50
       - ${PWD}/tests/docker/job-flow.json:/mnt/var/lib/info/job-flow.json
 
