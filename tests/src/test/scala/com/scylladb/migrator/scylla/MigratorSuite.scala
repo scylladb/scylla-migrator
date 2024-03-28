@@ -1,34 +1,38 @@
-package com.scylladb.migrator.alternator
+package com.scylladb.migrator.scylla
 
-import com.amazonaws.auth.{AWSCredentials, AWSStaticCredentialsProvider, BasicAWSCredentials}
-import com.amazonaws.client.builder.AwsClientBuilder.EndpointConfiguration
-import com.amazonaws.services.dynamodbv2.model._
-import com.amazonaws.services.dynamodbv2.{AmazonDynamoDB, AmazonDynamoDBClientBuilder}
+import com.datastax.oss.driver.api.core.CqlSession
+import com.datastax.oss.driver.api.core.`type`.DataTypes
+import com.datastax.oss.driver.api.querybuilder.SchemaBuilder
 
-import scala.collection.JavaConverters._
+import java.net.InetSocketAddress
 import scala.sys.process.Process
+import scala.jdk.CollectionConverters._
 import scala.util.chaining._
 
 /**
  * Base class for implementing end-to-end tests.
  *
- * It expects external services (DynamoDB, Scylla, Spark, etc.) to be running.
+ * It expects external services (Cassandra, Scylla, Spark, etc.) to be running.
  * See the files `CONTRIBUTING.md` and `docker-compose-tests.yml` for more information.
  */
 trait MigratorSuite extends munit.FunSuite {
 
-  /** Client of a source DynamoDB instance */
-  val sourceDDb: AmazonDynamoDB = AmazonDynamoDBClientBuilder
-    .standard()
-    .withEndpointConfiguration(new EndpointConfiguration("http://localhost:8001", "eu-central-1"))
-    .withCredentials(new AWSStaticCredentialsProvider(new BasicAWSCredentials("dummy", "dummy")))
+  val keyspace = "test"
+
+  /** Client of a source Cassandra instance */
+  val sourceCassandra: CqlSession = CqlSession
+    .builder()
+    .addContactPoint(new InetSocketAddress("localhost", 9043))
+    .withLocalDatacenter("datacenter1")
+    .withAuthCredentials("dummy", "dummy")
     .build()
 
-  /** Client of a target Alternator instance */
-  val targetAlternator: AmazonDynamoDB = AmazonDynamoDBClientBuilder
-    .standard()
-    .withEndpointConfiguration(new EndpointConfiguration("http://localhost:8000", "eu-central-1"))
-    .withCredentials(new AWSStaticCredentialsProvider(new BasicAWSCredentials("dummy", "dummy")))
+  /** Client of a target ScyllaDB instance */
+  val targetScylla: CqlSession = CqlSession
+    .builder()
+    .addContactPoint(new InetSocketAddress("localhost", 9042))
+    .withLocalDatacenter("datacenter1")
+    .withAuthCredentials("dummy", "dummy")
     .build()
 
   /**
@@ -44,50 +48,40 @@ trait MigratorSuite extends munit.FunSuite {
    */
   def withTable(name: String): FunFixture[String] = FunFixture(
     setup = { _ =>
-      def deleteTableIfExists(database: AmazonDynamoDB): Unit =
+      def deleteTableIfExists(database: CqlSession): Unit =
         try {
-          database.deleteTable(name).ensuring { result =>
-            result.getSdkHttpMetadata.getHttpStatusCode == 200
-          }
-          // Wait for the table to be effectively deleted
-          // TODO After we upgrade the AWS SDK version, we could use “waiters”
-          // https://aws.amazon.com/fr/blogs/developer/using-waiters-in-the-aws-sdk-for-java-2-x/
-          Thread.sleep(5000)
+          val query = SchemaBuilder.dropTable(keyspace, name).ifExists().build()
+          database
+            .execute(query)
+            .ensuring(_.wasApplied())
         } catch {
-          case _: ResourceNotFoundException =>
-            // OK, the table was not existing
-            ()
           case any: Throwable =>
-            fail(s"Something did not work as expected: ${any}")
+            fail(s"Something did not work as expected", any)
         }
       // Make sure the target database does not contain the table already
-      deleteTableIfExists(sourceDDb)
-      deleteTableIfExists(targetAlternator)
+      deleteTableIfExists(sourceCassandra)
+      deleteTableIfExists(targetScylla)
       try {
         // Create the table in the source database
         val createTableRequest =
-          new CreateTableRequest()
-            .withTableName(name)
-            .withKeySchema(new KeySchemaElement("id", "HASH"))
-            .withAttributeDefinitions(new AttributeDefinition("id", "S"))
-            .withProvisionedThroughput(new ProvisionedThroughput(5L, 5L))
-        sourceDDb.createTable(createTableRequest)
-        // TODO Replace with “waiters” after we upgrade the AWS SDK
-        Thread.sleep(5000)
-        sourceDDb.describeTable(name).tap { result =>
-          println(s"Table status is ${result.getTable.getTableStatus}")
-        }
+          SchemaBuilder
+            .createTable(keyspace, name)
+            .withPartitionKey("id", DataTypes.TEXT)
+            .withColumn("foo", DataTypes.TEXT)
+            .build()
+        sourceCassandra.execute(createTableRequest)
       } catch {
         case any: Throwable =>
-          fail(s"Failed to created table ${name} in database ${sourceDDb}", any)
+          fail(s"Failed to created table ${name} in database ${sourceCassandra}: ${any}")
       }
       name
     },
     teardown = { _ =>
       // Clean-up both the source and target databases because we assume the test did replicate the table
       // to the target database
-      targetAlternator.deleteTable(name)
-      sourceDDb.deleteTable(name)
+      val dropTableQuery = SchemaBuilder.dropTable(keyspace, name).build()
+      targetScylla.execute(dropTableQuery)
+      sourceCassandra.execute(dropTableQuery)
       ()
     }
   )
@@ -122,6 +116,22 @@ trait MigratorSuite extends munit.FunSuite {
       assertEquals(statusCode, 0, "Spark job failed")
     }
     ()
+  }
+
+  override def beforeAll(): Unit = {
+    val keyspaceStatement =
+      SchemaBuilder
+        .createKeyspace(keyspace)
+        .ifNotExists()
+        .withReplicationOptions(Map[String, AnyRef]("class" -> "SimpleStrategy", "replication_factor" -> new Integer(1)).asJava)
+        .build()
+    sourceCassandra.execute(keyspaceStatement)
+    targetScylla.execute(keyspaceStatement)
+  }
+
+  override def afterAll(): Unit = {
+    sourceCassandra.close()
+    targetScylla.close()
   }
 
 }
