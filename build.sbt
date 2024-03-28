@@ -3,12 +3,15 @@ import sbt.librarymanagement.InclExclRule
 val awsSdkVersion = "1.11.728"
 val sparkVersion = "2.4.4"
 
+inThisBuild(
+  List(
+    organization := "com.scylladb",
+    scalaVersion := "2.11.12",
+    scalacOptions += "-target:jvm-1.8"
+  )
+)
+
 lazy val migrator = (project in file("migrator")).settings(
-  inThisBuild(
-    List(
-      organization := "com.scylladb",
-      scalaVersion := "2.11.12"
-    )),
   name      := "scylla-migrator",
   version   := "0.0.1",
   mainClass := Some("com.scylladb.migrator.Migrator"),
@@ -72,6 +75,7 @@ lazy val migrator = (project in file("migrator")).settings(
 lazy val tests = project.in(file("tests")).settings(
   libraryDependencies ++= Seq(
     "com.amazonaws" % "aws-java-sdk-dynamodb" % awsSdkVersion,
+    "org.apache.cassandra" % "java-driver-query-builder" % "4.18.0",
     "org.scalameta" %% "munit" % "0.7.29",
     "org.scala-lang.modules" %% "scala-collection-compat" % "2.11.0"
   ),

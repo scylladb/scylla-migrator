@@ -1,4 +1,4 @@
-package com.scylladb.migrator
+package com.scylladb.migrator.alternator
 
 import com.amazonaws.auth.{AWSCredentials, AWSStaticCredentialsProvider, BasicAWSCredentials}
 import com.amazonaws.client.builder.AwsClientBuilder.EndpointConfiguration
@@ -79,7 +79,7 @@ trait MigratorSuite extends munit.FunSuite {
         }
       } catch {
         case any: Throwable =>
-          fail(s"Failed to created table ${name} in database ${sourceDDb}: ${any}")
+          fail(s"Failed to created table ${name} in database ${sourceDDb}", any)
       }
       name
     },
