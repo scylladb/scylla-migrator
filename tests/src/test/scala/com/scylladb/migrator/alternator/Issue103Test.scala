@@ -1,4 +1,4 @@
-package com.scylladb.migrator
+package com.scylladb.migrator.alternator
 
 import com.amazonaws.services.dynamodbv2.model.{AttributeValue, GetItemRequest}
 
