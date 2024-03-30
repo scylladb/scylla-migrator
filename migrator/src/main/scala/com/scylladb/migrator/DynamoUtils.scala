@@ -176,6 +176,9 @@ object DynamoUtils {
       jobConf.set(DynamoDBConstants.DYNAMODB_SECRET_KEY_CONF, credentials.secretKey)
     }
     jobConf.set(
+      DynamoDBConstants.CUSTOM_CREDENTIALS_PROVIDER_CONF,
+      "com.amazonaws.auth.profile.ProfileCredentialsProvider")
+    jobConf.set(
       "mapred.output.format.class",
       "org.apache.hadoop.dynamodb.write.DynamoDBOutputFormat")
     jobConf.set("mapred.input.format.class", "org.apache.hadoop.dynamodb.read.DynamoDBInputFormat")
