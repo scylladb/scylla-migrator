@@ -46,9 +46,9 @@ trait MigratorSuite extends munit.FunSuite {
    *
    * @param name Name of the table
    */
-  def withTable(name: String): FunFixture[String] = FunFixture(
+  def withTable(name: String, renames: Map[String, String] = Map.empty): FunFixture[String] = FunFixture(
     setup = { _ =>
-      def dropAndRecreateTable(database: CqlSession): Unit =
+      def dropAndRecreateTable(database: CqlSession, columnName: String => String): Unit =
         try {
           val dropTableStatement =
             SchemaBuilder
@@ -62,7 +62,8 @@ trait MigratorSuite extends munit.FunSuite {
             SchemaBuilder
               .createTable(keyspace, name)
               .withPartitionKey("id", DataTypes.TEXT)
-              .withColumn("foo", DataTypes.TEXT)
+              .withColumn(columnName("foo"), DataTypes.TEXT)
+              .withColumn(columnName("bar"), DataTypes.INT)
               .build()
           database
             .execute(createTableStatement)
@@ -72,8 +73,8 @@ trait MigratorSuite extends munit.FunSuite {
             fail(s"Something did not work as expected", any)
         }
       // Make sure the source and target databases do not contain the table already
-      dropAndRecreateTable(sourceCassandra)
-      dropAndRecreateTable(targetScylla)
+      dropAndRecreateTable(sourceCassandra, columnName = identity)
+      dropAndRecreateTable(targetScylla, columnName = originalName => renames.getOrElse(originalName, originalName))
       name
     },
     teardown = { _ =>
