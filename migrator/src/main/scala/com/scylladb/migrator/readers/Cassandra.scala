@@ -15,6 +15,7 @@ import org.apache.spark.sql.types.{ IntegerType, LongType, StructField, StructTy
 import org.apache.spark.sql.{ DataFrame, Row, SparkSession }
 import org.apache.spark.unsafe.types.UTF8String
 import com.datastax.oss.driver.api.core.ConsistencyLevel
+import com.scylladb.migrator.scylla.SourceDataFrame
 
 import scala.collection.mutable.ArrayBuffer
 

@@ -2,8 +2,7 @@ name: Tests
 on:
   push:
     branches:
-      - master
-      - actions-test
+      - master      
   pull_request:
 
 jobs:
@@ -24,7 +23,12 @@ jobs:
       - name: Build migrator
         run: ./build.sh
       - name: Set up services
-        run: docker compose -f docker-compose-tests.yml up --wait
+        run: |
+          docker compose -f docker-compose-tests.yml up -d
+          .github/wait-for-port.sh 8000 # ScyllaDB
+          .github/wait-for-port.sh 8001 # DynamoDB
+          .github/wait-for-port.sh 8080 # Spark master
+          .github/wait-for-port.sh 8081 # Spark worker
       - name: Run tests
         run: sbt test
       - name: Stop services

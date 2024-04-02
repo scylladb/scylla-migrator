@@ -36,6 +36,7 @@ services:
     networks:
       - scylla
     expose:
+      - 5005
       - 7001
       - 7002
       - 7003
@@ -46,12 +47,15 @@ services:
       - 6066
     ports:
       - 4040:4040
+      - 5005:5005
       - 6066:6066
       - 7077:7077
       - 8080:8080
     volumes:
       - ./migrator/target/scala-2.11:/jars
       - ./tests/src/test/configurations:/app/configurations
+      # Workaround for https://github.com/awslabs/emr-dynamodb-connector/issues/50
+      - ${PWD}/tests/docker/job-flow.json:/mnt/var/lib/info/job-flow.json
 
   spark-worker:
     image: bde2020/spark-worker:2.4.4-hadoop2.7
@@ -65,6 +69,7 @@ services:
     networks:
       - scylla
     expose:
+      - 5006
       - 7012
       - 7013
       - 7014
@@ -72,6 +77,7 @@ services:
       - 7016
       - 8881
     ports:
+      - 5006:5006
       - 8081:8081
     depends_on:
       - spark-master

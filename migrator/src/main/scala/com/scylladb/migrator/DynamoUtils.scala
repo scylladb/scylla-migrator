@@ -4,7 +4,6 @@ import com.amazonaws.auth.AWSCredentialsProvider
 import com.amazonaws.client.builder.AwsClientBuilder
 import com.amazonaws.services.dynamodbv2.{
   AmazonDynamoDBClientBuilder,
-  AmazonDynamoDBStreamsClient,
   AmazonDynamoDBStreamsClientBuilder
 }
 import com.amazonaws.services.dynamodbv2.model.{
@@ -17,7 +16,14 @@ import com.amazonaws.services.dynamodbv2.model.{
   TableDescription,
   UpdateTableRequest
 }
-import com.scylladb.migrator.config.{ DynamoDBEndpoint, SourceSettings, TargetSettings }
+import com.scylladb.migrator.config.{
+  AWSCredentials,
+  DynamoDBEndpoint,
+  SourceSettings,
+  TargetSettings
+}
+import org.apache.hadoop.dynamodb.DynamoDBConstants
+import org.apache.hadoop.mapred.JobConf
 import org.apache.log4j.LogManager
 
 import scala.util.{ Failure, Success, Try }
@@ -64,7 +70,8 @@ object DynamoUtils {
 
   def enableDynamoStream(source: SourceSettings.DynamoDB): Unit = {
     val sourceClient = buildDynamoClient(source.endpoint, source.credentials, source.region)
-    val sourceStreamsClient = buildDynamoStreamsClient(source.credentials, source.region)
+    val sourceStreamsClient =
+      buildDynamoStreamsClient(source.endpoint, source.credentials, source.region)
 
     sourceClient
       .updateTable(
@@ -114,12 +121,67 @@ object DynamoUtils {
     builder.build()
   }
 
-  def buildDynamoStreamsClient(creds: Option[AWSCredentialsProvider], region: Option[String]) = {
+  def buildDynamoStreamsClient(endpoint: Option[DynamoDBEndpoint],
+                               creds: Option[AWSCredentialsProvider],
+                               region: Option[String]) = {
     val builder = AmazonDynamoDBStreamsClientBuilder.standard()
 
+    endpoint.foreach { endpoint =>
+      builder
+        .withEndpointConfiguration(
+          new AwsClientBuilder.EndpointConfiguration(
+            endpoint.renderEndpoint,
+            region.getOrElse("empty")))
+    }
     creds.foreach(builder.withCredentials)
     region.foreach(builder.withRegion)
 
     builder.build()
   }
+
+  /**
+    * Optionally set a configuration. If `maybeValue` is empty, nothing is done. Otherwise,
+    * its value is set to the `name` property on the `jobConf`.
+    *
+    * @param jobConf    Target JobConf to configure
+    * @param name       Name of the Hadoop configuration key
+    * @param maybeValue Optional value to set.
+    */
+  def setOptionalConf(jobConf: JobConf, name: String, maybeValue: Option[String]): Unit =
+    for (value <- maybeValue) {
+      jobConf.set(name, value)
+    }
+
+  /**
+    * Set the common configuration of both read and write DynamoDB jobs.
+    * @param jobConf             Target JobConf to configure
+    * @param maybeRegion         AWS region
+    * @param maybeEndpoint       AWS endpoint
+    * @param maybeScanSegments   Scan segments
+    * @param maybeMaxMapTasks    Max map tasks
+    * @param maybeAwsCredentials AWS credentials
+    */
+  def setDynamoDBJobConf(jobConf: JobConf,
+                         maybeRegion: Option[String],
+                         maybeEndpoint: Option[DynamoDBEndpoint],
+                         maybeScanSegments: Option[Int],
+                         maybeMaxMapTasks: Option[Int],
+                         maybeAwsCredentials: Option[AWSCredentials]): Unit = {
+    setOptionalConf(jobConf, DynamoDBConstants.REGION, maybeRegion)
+    setOptionalConf(jobConf, DynamoDBConstants.ENDPOINT, maybeEndpoint.map(_.renderEndpoint))
+    setOptionalConf(jobConf, DynamoDBConstants.SCAN_SEGMENTS, maybeScanSegments.map(_.toString))
+    setOptionalConf(jobConf, DynamoDBConstants.MAX_MAP_TASKS, maybeMaxMapTasks.map(_.toString))
+    for (credentials <- maybeAwsCredentials) {
+      jobConf.set(DynamoDBConstants.DYNAMODB_ACCESS_KEY_CONF, credentials.accessKey)
+      jobConf.set(DynamoDBConstants.DYNAMODB_SECRET_KEY_CONF, credentials.secretKey)
+    }
+    jobConf.set(
+      DynamoDBConstants.CUSTOM_CREDENTIALS_PROVIDER_CONF,
+      "com.amazonaws.auth.profile.ProfileCredentialsProvider")
+    jobConf.set(
+      "mapred.output.format.class",
+      "org.apache.hadoop.dynamodb.write.DynamoDBOutputFormat")
+    jobConf.set("mapred.input.format.class", "org.apache.hadoop.dynamodb.read.DynamoDBInputFormat")
+  }
+
 }
