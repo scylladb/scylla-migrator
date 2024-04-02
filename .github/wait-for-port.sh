@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 port=$1
-echo "Waiting for port ${port}"
+echo "Waiting for successful HTTP status code on port ${port}"
 attempts=0
 max_attempts=60
 while ! curl -s "http://127.0.0.1:$port" > /dev/null ; do
