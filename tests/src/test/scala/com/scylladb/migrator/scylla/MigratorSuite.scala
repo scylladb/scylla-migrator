@@ -14,15 +14,17 @@ import scala.util.chaining._
  *
  * It expects external services (Cassandra, Scylla, Spark, etc.) to be running.
  * See the files `CONTRIBUTING.md` and `docker-compose-tests.yml` for more information.
+ *
+ * @param sourcePort TCP port of the source database. See docker-compose-test.yml.
  */
-trait MigratorSuite extends munit.FunSuite {
+abstract class MigratorSuite(sourcePort: Int) extends munit.FunSuite {
 
   val keyspace = "test"
 
   /** Client of a source Cassandra instance */
   val sourceCassandra: CqlSession = CqlSession
     .builder()
-    .addContactPoint(new InetSocketAddress("localhost", 9043))
+    .addContactPoint(new InetSocketAddress("localhost", sourcePort))
     .withLocalDatacenter("datacenter1")
     .withAuthCredentials("dummy", "dummy")
     .build()

@@ -7,16 +7,15 @@ import com.datastax.oss.driver.api.querybuilder.term.Term
 import scala.jdk.CollectionConverters._
 import scala.util.chaining._
 
-class RenamedItemsTest extends MigratorSuite(sourcePort = 9043) {
+class ScyllaToScyllaBasicMigrationTest extends MigratorSuite(sourcePort = 9044) {
 
-  withTable("RenamedItems", renames = Map("bar" -> "quux")).test("Read from source and write to target") { tableName =>
+  withTable("BasicTest").test("Read from source and write to target") { tableName =>
     val insertStatement =
       QueryBuilder
         .insertInto(keyspace, tableName)
         .values(Map[String, Term](
           "id" -> literal("12345"),
-          "foo" -> literal("bar"),
-          "bar" -> literal(42)
+          "foo" -> literal("bar")
         ).asJava)
         .build()
 
@@ -24,7 +23,7 @@ class RenamedItemsTest extends MigratorSuite(sourcePort = 9043) {
     sourceCassandra.execute(insertStatement)
 
     // Perform the migration
-    submitSparkJob("cassandra-to-scylla-renames.yaml")
+    submitSparkJob("scylla-to-scylla-basic.yaml")
 
     // Check that the item has been migrated to the target table
     val selectAllStatement = QueryBuilder
@@ -37,7 +36,6 @@ class RenamedItemsTest extends MigratorSuite(sourcePort = 9043) {
       val row = rows.head
       assertEquals(row.getString("id"), "12345")
       assertEquals(row.getString("foo"), "bar")
-      assertEquals(row.getInt("quux"), 42)
     }
   }
 

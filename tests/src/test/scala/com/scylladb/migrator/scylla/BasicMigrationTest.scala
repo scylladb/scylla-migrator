@@ -7,7 +7,7 @@ import com.datastax.oss.driver.api.querybuilder.term.Term
 import scala.jdk.CollectionConverters._
 import scala.util.chaining._
 
-class BasicMigrationTest extends MigratorSuite {
+class BasicMigrationTest extends MigratorSuite(sourcePort = 9043) {
 
   withTable("BasicTest").test("Read from source and write to target") { tableName =>
     val insertStatement =

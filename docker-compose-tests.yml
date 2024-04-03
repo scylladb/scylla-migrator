@@ -25,6 +25,19 @@ services:
     expose:
       - 9043
 
+  scylla-source:
+    image: scylladb/scylla:latest
+    networks:
+      - scylla
+    volumes:
+      - "./tests/docker/scylla-source:/var/lib/scylla"
+    ports:
+      - "8002:8000"
+      - "9044:9042"
+    expose:
+      - 9044
+    command: "--smp 1 --memory 2048M --alternator-port 8000 --alternator-write-isolation always_use_lwt"
+
   scylla:
     image: scylladb/scylla:latest
     networks:
@@ -34,7 +47,7 @@ services:
     ports:
       - "8000:8000"
       - "9042:9042"
-    command: "--smp 2 --memory 2048M --alternator-port 8000 --alternator-write-isolation always_use_lwt"
+    command: "--smp 1 --memory 2048M --alternator-port 8000 --alternator-write-isolation always_use_lwt"
 
   spark-master:
     image: bde2020/spark-master:2.4.4-hadoop2.7
