@@ -24,7 +24,7 @@ jobs:
         run: ./build.sh
       - name: Set up services
         run: |
-          docker compose -f docker-compose-tests.yml up -d
+          docker compose -f docker-compose-tests.yml up &
           .github/wait-for-port.sh 9042 # ScyllaDB
           .github/wait-for-port.sh 8000 # ScyllaDB Alternator
           .github/wait-for-port.sh 8001 # DynamoDB
