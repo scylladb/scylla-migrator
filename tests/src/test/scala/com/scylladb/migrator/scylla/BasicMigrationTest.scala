@@ -3,6 +3,7 @@ package com.scylladb.migrator.scylla
 import com.datastax.oss.driver.api.querybuilder.QueryBuilder
 import com.datastax.oss.driver.api.querybuilder.QueryBuilder.literal
 import com.datastax.oss.driver.api.querybuilder.term.Term
+import com.scylladb.migrator.SparkUtils.submitMigrationJob
 
 import scala.jdk.CollectionConverters._
 import scala.util.chaining._
@@ -23,7 +24,7 @@ class BasicMigrationTest extends MigratorSuite(sourcePort = 9043) {
     sourceCassandra.execute(insertStatement)
 
     // Perform the migration
-    submitSparkJob("cassandra-to-scylla-basic.yaml")
+    submitMigrationJob("cassandra-to-scylla-basic.yaml")
 
     // Check that the item has been migrated to the target table
     val selectAllStatement = QueryBuilder

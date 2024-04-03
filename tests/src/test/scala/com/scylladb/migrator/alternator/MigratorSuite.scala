@@ -1,12 +1,10 @@
 package com.scylladb.migrator.alternator
 
-import com.amazonaws.auth.{AWSCredentials, AWSStaticCredentialsProvider, BasicAWSCredentials}
+import com.amazonaws.auth.{AWSStaticCredentialsProvider, BasicAWSCredentials}
 import com.amazonaws.client.builder.AwsClientBuilder.EndpointConfiguration
 import com.amazonaws.services.dynamodbv2.model._
 import com.amazonaws.services.dynamodbv2.{AmazonDynamoDB, AmazonDynamoDBClientBuilder}
 
-import scala.collection.JavaConverters._
-import scala.sys.process.Process
 import scala.util.chaining._
 
 /**
@@ -91,37 +89,5 @@ trait MigratorSuite extends munit.FunSuite {
       ()
     }
   )
-
-  /**
-   * Run a migration by submitting a Spark job to the Spark cluster.
-   * @param migratorConfigFile Configuration file to use. Write your
-   *                           configuration files in the directory
-   *                           `src/test/configurations`, which is
-   *                           automatically mounted to the Spark
-   *                           cluster by Docker Compose.
-   */
-  def submitSparkJob(migratorConfigFile: String): Unit = {
-    Process(
-      Seq(
-        "docker",
-        "compose",
-        "-f", "docker-compose-tests.yml",
-        "exec",
-        "spark-master",
-        "/spark/bin/spark-submit",
-        "--class", "com.scylladb.migrator.Migrator",
-        "--master", "spark://spark-master:7077",
-        "--conf", "spark.driver.host=spark-master",
-        "--conf", s"spark.scylla.config=/app/configurations/${migratorConfigFile}",
-        // Uncomment one of the following lines to plug a remote debugger on the Spark master or worker.
-        // "--conf", "spark.driver.extraJavaOptions=-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=5005",
-        // "--conf", "spark.executor.extraJavaOptions=-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=5006",
-        "/jars/scylla-migrator-assembly-0.0.1.jar"
-      )
-    ).run().exitValue().tap { statusCode =>
-      assertEquals(statusCode, 0, "Spark job failed")
-    }
-    ()
-  }
 
 }

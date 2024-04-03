@@ -1,6 +1,8 @@
 package com.scylladb.migrator.alternator
 
 import com.amazonaws.services.dynamodbv2.model.{AttributeValue, GetItemRequest}
+import com.scylladb.migrator.SparkUtils.submitMigrationJob
+
 import scala.collection.JavaConverters._
 import scala.util.chaining._
 
@@ -23,7 +25,7 @@ class RenamedItemsTest extends MigratorSuite {
     sourceDDb.putItem(tableName, item2Data.asJava)
 
     // Perform the migration
-    submitSparkJob("dynamodb-to-alternator-renames.yaml")
+    submitMigrationJob("dynamodb-to-alternator-renames.yaml")
 
     val renamedItem1Data =
       item1Data + ("quux" -> item1Data("foo")) - "foo"

@@ -1,13 +1,11 @@
 package com.scylladb.migrator.scylla
 
 import com.datastax.oss.driver.api.core.CqlSession
-import com.datastax.oss.driver.api.core.`type`.DataTypes
 import com.datastax.oss.driver.api.querybuilder.SchemaBuilder
+import com.scylladb.migrator.CassandraUtils.dropAndRecreateTable
 
 import java.net.InetSocketAddress
-import scala.sys.process.Process
 import scala.jdk.CollectionConverters._
-import scala.util.chaining._
 
 /**
  * Base class for implementing end-to-end tests.
@@ -50,33 +48,14 @@ abstract class MigratorSuite(sourcePort: Int) extends munit.FunSuite {
    */
   def withTable(name: String, renames: Map[String, String] = Map.empty): FunFixture[String] = FunFixture(
     setup = { _ =>
-      def dropAndRecreateTable(database: CqlSession, columnName: String => String): Unit =
-        try {
-          val dropTableStatement =
-            SchemaBuilder
-              .dropTable(keyspace, name)
-              .ifExists()
-              .build()
-          database
-            .execute(dropTableStatement)
-            .ensuring(_.wasApplied())
-          val createTableStatement =
-            SchemaBuilder
-              .createTable(keyspace, name)
-              .withPartitionKey("id", DataTypes.TEXT)
-              .withColumn(columnName("foo"), DataTypes.TEXT)
-              .withColumn(columnName("bar"), DataTypes.INT)
-              .build()
-          database
-            .execute(createTableStatement)
-            .ensuring(_.wasApplied())
-        } catch {
-          case any: Throwable =>
-            fail(s"Something did not work as expected", any)
-        }
       // Make sure the source and target databases do not contain the table already
-      dropAndRecreateTable(sourceCassandra, columnName = identity)
-      dropAndRecreateTable(targetScylla, columnName = originalName => renames.getOrElse(originalName, originalName))
+      try {
+        dropAndRecreateTable(sourceCassandra, keyspace, name, columnName = identity)
+        dropAndRecreateTable(targetScylla, keyspace, name, columnName = originalName => renames.getOrElse(originalName, originalName))
+      } catch {
+        case any: Throwable =>
+          fail(s"Something did not work as expected", any)
+      }
       name
     },
     teardown = { _ =>
@@ -87,38 +66,6 @@ abstract class MigratorSuite(sourcePort: Int) extends munit.FunSuite {
       ()
     }
   )
-
-  /**
-   * Run a migration by submitting a Spark job to the Spark cluster.
-   * @param migratorConfigFile Configuration file to use. Write your
-   *                           configuration files in the directory
-   *                           `src/test/configurations`, which is
-   *                           automatically mounted to the Spark
-   *                           cluster by Docker Compose.
-   */
-  def submitSparkJob(migratorConfigFile: String): Unit = {
-    Process(
-      Seq(
-        "docker",
-        "compose",
-        "-f", "docker-compose-tests.yml",
-        "exec",
-        "spark-master",
-        "/spark/bin/spark-submit",
-        "--class", "com.scylladb.migrator.Migrator",
-        "--master", "spark://spark-master:7077",
-        "--conf", "spark.driver.host=spark-master",
-        "--conf", s"spark.scylla.config=/app/configurations/${migratorConfigFile}",
-        // Uncomment one of the following lines to plug a remote debugger on the Spark master or worker.
-        // "--conf", "spark.driver.extraJavaOptions=-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=5005",
-        // "--conf", "spark.executor.extraJavaOptions=-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=5006",
-        "/jars/scylla-migrator-assembly-0.0.1.jar"
-      )
-    ).run().exitValue().tap { statusCode =>
-      assertEquals(statusCode, 0, "Spark job failed")
-    }
-    ()
-  }
 
   override def beforeAll(): Unit = {
     val keyspaceStatement =

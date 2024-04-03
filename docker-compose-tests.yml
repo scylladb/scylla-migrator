@@ -80,6 +80,7 @@ services:
       - ./migrator/target/scala-2.11:/jars
       - ./tests/src/test/configurations:/app/configurations
       - ./tests/docker/spark-master:/app/savepoints
+      - ./tests/docker/parquet:/app/parquet
       # Workaround for https://github.com/awslabs/emr-dynamodb-connector/issues/50
       - ${PWD}/tests/docker/job-flow.json:/mnt/var/lib/info/job-flow.json
 
@@ -104,6 +105,8 @@ services:
     ports:
       - 5006:5006
       - 8081:8081
+    volumes:
+      - ./tests/docker/parquet:/app/parquet
     depends_on:
       - spark-master
 

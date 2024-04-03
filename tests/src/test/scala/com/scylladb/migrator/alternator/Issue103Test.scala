@@ -1,6 +1,7 @@
 package com.scylladb.migrator.alternator
 
 import com.amazonaws.services.dynamodbv2.model.{AttributeValue, GetItemRequest}
+import com.scylladb.migrator.SparkUtils.submitMigrationJob
 
 import scala.collection.JavaConverters._
 import scala.util.chaining._
@@ -29,7 +30,7 @@ class Issue103Test extends MigratorSuite {
     sourceDDb.putItem(tableName, item2Data.asJava)
 
     // Perform the migration
-    submitSparkJob("dynamodb-to-alternator-issue-103.yaml")
+    submitMigrationJob("dynamodb-to-alternator-issue-103.yaml")
 
     // Check that both items have been correctly migrated to the target table
     targetAlternator

@@ -76,6 +76,8 @@ lazy val tests = project.in(file("tests")).settings(
   libraryDependencies ++= Seq(
     "com.amazonaws" % "aws-java-sdk-dynamodb" % awsSdkVersion,
     "org.apache.cassandra" % "java-driver-query-builder" % "4.18.0",
+    "com.github.mjakubowski84" %% "parquet4s-core" % "1.9.4",
+    "org.apache.hadoop" % "hadoop-client" % "2.9.2",
     "org.scalameta" %% "munit" % "0.7.29",
     "org.scala-lang.modules" %% "scala-collection-compat" % "2.11.0"
   ),
