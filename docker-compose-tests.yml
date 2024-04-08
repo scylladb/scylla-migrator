@@ -36,7 +36,7 @@ services:
       - "9044:9042"
     expose:
       - 9044
-    command: "--smp 1 --memory 2048M --alternator-port 8000 --alternator-write-isolation always_use_lwt"
+    command: "--smp 1 --memory 2048M --alternator-port 8000 --alternator-write-isolation only_rmw_uses_lwt"
 
   scylla:
     image: scylladb/scylla:latest
@@ -47,7 +47,7 @@ services:
     ports:
       - "8000:8000"
       - "9042:9042"
-    command: "--smp 1 --memory 2048M --alternator-port 8000 --alternator-write-isolation always_use_lwt"
+    command: "--smp 1 --memory 2048M --alternator-port 8000 --alternator-write-isolation only_rmw_uses_lwt"
 
   spark-master:
     image: bde2020/spark-master:2.4.4-hadoop2.7
