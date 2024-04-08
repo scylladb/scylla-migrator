@@ -2,7 +2,7 @@
 
 port=$1
 
-source .github/insist.sh
+source .github/attempt.sh
 
 echo "Waiting for successful HTTP status code on port ${port}"
-insist 'curl -s "http://127.0.0.1:$port" > /dev/null'
+attempt 'curl -s "http://127.0.0.1:$port" > /dev/null'

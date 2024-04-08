@@ -1,4 +1,4 @@
-insist () {
+attempt () {
   command=$1
   attempts=0
   max_attempts=240
