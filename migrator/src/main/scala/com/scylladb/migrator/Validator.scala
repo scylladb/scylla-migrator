@@ -1,140 +1,23 @@
 package com.scylladb.migrator
 
-import com.datastax.spark.connector._
-import com.datastax.spark.connector.cql._
-import com.datastax.spark.connector.rdd.ReadConf
 import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
 import com.scylladb.migrator.validation.RowComparisonFailure
 import org.apache.log4j.{ Level, LogManager, Logger }
 import org.apache.spark.sql.SparkSession
-import com.datastax.oss.driver.api.core.ConsistencyLevel
+import com.scylladb.migrator.scylla.ScyllaValidator
 
 object Validator {
   val log = LogManager.getLogger("com.scylladb.migrator")
 
   def runValidation(config: MigratorConfig)(
-    implicit spark: SparkSession): List[RowComparisonFailure] = {
-    val sourceSettings = config.source match {
-      case s: SourceSettings.Cassandra => s
-      case otherwise =>
-        throw new RuntimeException(
-          s"Validation only supports validating against Cassandra/Scylla " +
-            s"(found ${otherwise.getClass.getSimpleName} settings)")
+    implicit spark: SparkSession): List[RowComparisonFailure] =
+    (config.source, config.target) match {
+      case (cassandraSource: SourceSettings.Cassandra, scyllaTarget: TargetSettings.Scylla) =>
+        ScyllaValidator.runValidation(cassandraSource, scyllaTarget, config)
+      case _ =>
+        sys.error("Validation only supports validating against Cassandra/Scylla " +
+          s"(found ${config.source.getClass.getSimpleName} and ${config.target.getClass.getSimpleName} settings)")
     }
-
-    val targetSettings = config.target match {
-      case s: TargetSettings.Scylla => s
-      case otherwise =>
-        throw new RuntimeException(
-          s"Validation only supports validating against Cassandra/Scylla " +
-            s"(found ${otherwise.getClass.getSimpleName} settings)")
-
-    }
-
-    val sourceConnector: CassandraConnector =
-      Connectors.sourceConnector(spark.sparkContext.getConf, sourceSettings)
-    val targetConnector: CassandraConnector =
-      Connectors.targetConnector(spark.sparkContext.getConf, targetSettings)
-
-    val renameMap = config.renames.map(rename => rename.from -> rename.to).toMap
-    val sourceTableDef =
-      sourceConnector.withSessionDo(
-        Schema.tableFromCassandra(_, sourceSettings.keyspace, sourceSettings.table))
-
-    val source = {
-      val regularColumnsProjection =
-        sourceTableDef.regularColumns.flatMap { colDef =>
-          val alias = renameMap.getOrElse(colDef.columnName, colDef.columnName)
-
-          if (sourceSettings.preserveTimestamps)
-            List(
-              ColumnName(colDef.columnName, Some(alias)),
-              WriteTime(colDef.columnName, Some(alias + "_writetime")),
-              TTL(colDef.columnName, Some(alias + "_ttl"))
-            )
-          else List(ColumnName(colDef.columnName, Some(alias)))
-        }
-
-      val primaryKeyProjection =
-        (sourceTableDef.partitionKey ++ sourceTableDef.clusteringColumns)
-          .map(colDef => ColumnName(colDef.columnName, renameMap.get(colDef.columnName)))
-
-      val consistencyLevel = sourceSettings.consistencyLevel match {
-        case "LOCAL_QUORUM" => ConsistencyLevel.LOCAL_QUORUM
-        case "QUORUM"       => ConsistencyLevel.QUORUM
-        case "LOCAL_ONE"    => ConsistencyLevel.LOCAL_ONE
-        case "ONE"          => ConsistencyLevel.ONE
-        case _              => ConsistencyLevel.LOCAL_QUORUM
-      }
-      if (consistencyLevel.toString == sourceSettings.consistencyLevel) {
-        log.info(
-          s"Using consistencyLevel [${consistencyLevel}] for VALIDATOR SOURCE based on validator source config [${sourceSettings.consistencyLevel}]")
-      } else {
-        log.info(
-          s"Using DEFAULT consistencyLevel [${consistencyLevel}] for VALIDATOR SOURCE based on unrecognized validator source config [${sourceSettings.consistencyLevel}]")
-      }
-
-      spark.sparkContext
-        .cassandraTable(sourceSettings.keyspace, sourceSettings.table)
-        .withConnector(sourceConnector)
-        .withReadConf(
-          ReadConf
-            .fromSparkConf(spark.sparkContext.getConf)
-            .copy(
-              splitCount       = sourceSettings.splitCount,
-              fetchSizeInRows  = sourceSettings.fetchSize,
-              consistencyLevel = consistencyLevel
-            )
-        )
-        .select(primaryKeyProjection ++ regularColumnsProjection: _*)
-    }
-
-    val joined = {
-      val regularColumnsProjection =
-        sourceTableDef.regularColumns.flatMap { colDef =>
-          val renamedColName = renameMap.getOrElse(colDef.columnName, colDef.columnName)
-
-          if (sourceSettings.preserveTimestamps)
-            List(
-              ColumnName(renamedColName),
-              WriteTime(renamedColName, Some(renamedColName + "_writetime")),
-              TTL(renamedColName, Some(renamedColName + "_ttl"))
-            )
-          else List(ColumnName(renamedColName))
-        }
-
-      val primaryKeyProjection =
-        (sourceTableDef.partitionKey ++ sourceTableDef.clusteringColumns)
-          .map(colDef => ColumnName(renameMap.getOrElse(colDef.columnName, colDef.columnName)))
-
-      val joinKey = (sourceTableDef.partitionKey ++ sourceTableDef.clusteringColumns)
-        .map(colDef => ColumnName(renameMap.getOrElse(colDef.columnName, colDef.columnName)))
-
-      source
-        .leftJoinWithCassandraTable(
-          targetSettings.keyspace,
-          targetSettings.table,
-          SomeColumns(primaryKeyProjection ++ regularColumnsProjection: _*),
-          SomeColumns(joinKey: _*))
-        .withConnector(targetConnector)
-    }
-
-    joined
-      .flatMap {
-        case (l, r) =>
-          RowComparisonFailure.compareRows(
-            l,
-            r,
-            config.validation.floatingPointTolerance,
-            config.validation.timestampMsTolerance,
-            config.validation.ttlToleranceMillis,
-            config.validation.writetimeToleranceMillis,
-            config.validation.compareTimestamps
-          )
-      }
-      .take(config.validation.failuresToFetch)
-      .toList
-  }
 
   def main(args: Array[String]): Unit = {
     implicit val spark = SparkSession
