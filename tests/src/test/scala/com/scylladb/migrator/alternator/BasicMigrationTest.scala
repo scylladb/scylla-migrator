@@ -1,6 +1,7 @@
-package com.scylladb.migrator
+package com.scylladb.migrator.alternator
 
 import com.amazonaws.services.dynamodbv2.model.{AttributeValue, GetItemRequest}
+import com.scylladb.migrator.SparkUtils.submitMigrationJob
 
 import scala.collection.JavaConverters._
 import scala.util.chaining._
@@ -16,7 +17,7 @@ class BasicMigrationTest extends MigratorSuite {
     sourceDDb.putItem(tableName, itemData.asJava)
 
     // Perform the migration
-    submitSparkJob("dynamodb-to-alternator-basic.yaml")
+    submitMigrationJob("dynamodb-to-alternator-basic.yaml")
 
     // Check that the schema has been replicated to the target table
     val sourceTableDesc = sourceDDb.describeTable(tableName).getTable

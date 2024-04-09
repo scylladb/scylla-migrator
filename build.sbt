@@ -6,7 +6,8 @@ val sparkVersion = "2.4.4"
 inThisBuild(
   List(
     organization := "com.scylladb",
-    scalaVersion := "2.11.12"
+    scalaVersion := "2.11.12",
+    scalacOptions += "-target:jvm-1.8"
   )
 )
 
@@ -74,6 +75,9 @@ lazy val migrator = (project in file("migrator")).settings(
 lazy val tests = project.in(file("tests")).settings(
   libraryDependencies ++= Seq(
     "com.amazonaws" % "aws-java-sdk-dynamodb" % awsSdkVersion,
+    "org.apache.cassandra" % "java-driver-query-builder" % "4.18.0",
+    "com.github.mjakubowski84" %% "parquet4s-core" % "1.9.4",
+    "org.apache.hadoop" % "hadoop-client" % "2.9.2",
     "org.scalameta" %% "munit" % "0.7.29",
     "org.scala-lang.modules" %% "scala-collection-compat" % "2.11.0"
   ),
