@@ -30,7 +30,6 @@ object ScyllaValidator {
     val targetConnector: CassandraConnector =
       Connectors.targetConnector(spark.sparkContext.getConf, targetSettings)
 
-    val renameMap = config.renames.map(rename => rename.from -> rename.to).toMap
     val sourceTableDef =
       sourceConnector.withSessionDo(
         Schema.tableFromCassandra(_, sourceSettings.keyspace, sourceSettings.table))
@@ -38,7 +37,7 @@ object ScyllaValidator {
     val source = {
       val regularColumnsProjection =
         sourceTableDef.regularColumns.flatMap { colDef =>
-          val alias = renameMap.getOrElse(colDef.columnName, colDef.columnName)
+          val alias = config.renamesMap(colDef.columnName)
 
           if (sourceSettings.preserveTimestamps)
             List(
@@ -51,7 +50,7 @@ object ScyllaValidator {
 
       val primaryKeyProjection =
         (sourceTableDef.partitionKey ++ sourceTableDef.clusteringColumns)
-          .map(colDef => ColumnName(colDef.columnName, renameMap.get(colDef.columnName)))
+          .map(colDef => ColumnName(colDef.columnName, config.renamesMap.get(colDef.columnName)))
 
       val consistencyLevel = sourceSettings.consistencyLevel match {
         case "LOCAL_QUORUM" => ConsistencyLevel.LOCAL_QUORUM
@@ -86,7 +85,7 @@ object ScyllaValidator {
     val joined = {
       val regularColumnsProjection =
         sourceTableDef.regularColumns.flatMap { colDef =>
-          val renamedColName = renameMap.getOrElse(colDef.columnName, colDef.columnName)
+          val renamedColName = config.renamesMap(colDef.columnName)
 
           if (sourceSettings.preserveTimestamps)
             List(
@@ -99,10 +98,10 @@ object ScyllaValidator {
 
       val primaryKeyProjection =
         (sourceTableDef.partitionKey ++ sourceTableDef.clusteringColumns)
-          .map(colDef => ColumnName(renameMap.getOrElse(colDef.columnName, colDef.columnName)))
+          .map(colDef => ColumnName(config.renamesMap(colDef.columnName)))
 
       val joinKey = (sourceTableDef.partitionKey ++ sourceTableDef.clusteringColumns)
-        .map(colDef => ColumnName(renameMap.getOrElse(colDef.columnName, colDef.columnName)))
+        .map(colDef => ColumnName(config.renamesMap(colDef.columnName)))
 
       source
         .leftJoinWithCassandraTable(
@@ -116,7 +115,7 @@ object ScyllaValidator {
     joined
       .flatMap {
         case (l, r) =>
-          RowComparisonFailure.compareRows(
+          RowComparisonFailure.compareCassandraRows(
             l,
             r,
             config.validation.floatingPointTolerance,

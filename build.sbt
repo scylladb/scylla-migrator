@@ -82,7 +82,7 @@ lazy val tests = project.in(file("tests")).settings(
     "org.scala-lang.modules" %% "scala-collection-compat" % "2.11.0"
   ),
   Test / parallelExecution := false
-)
+).dependsOn(migrator)
 
 lazy val root = project.in(file("."))
   .aggregate(migrator, tests)

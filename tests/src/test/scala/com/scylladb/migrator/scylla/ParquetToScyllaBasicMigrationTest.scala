@@ -1,10 +1,10 @@
 package com.scylladb.migrator.scylla
 
 import com.datastax.oss.driver.api.core.CqlSession
-import com.datastax.oss.driver.api.querybuilder.{QueryBuilder, SchemaBuilder}
+import com.datastax.oss.driver.api.querybuilder.{ QueryBuilder, SchemaBuilder }
 import com.github.mjakubowski84.parquet4s.ParquetWriter
 import com.scylladb.migrator.CassandraUtils.dropAndRecreateTable
-import com.scylladb.migrator.SparkUtils.submitMigrationJob
+import com.scylladb.migrator.SparkUtils.successfullyPerformMigration
 import com.scylladb.migrator.scylla.ParquetToScyllaBasicMigrationTest.BasicTestSchema
 import org.apache.parquet.hadoop.ParquetFileWriter
 
@@ -29,7 +29,9 @@ class ParquetToScyllaBasicMigrationTest extends munit.FunSuite {
       SchemaBuilder
         .createKeyspace(keyspace)
         .ifNotExists()
-        .withReplicationOptions(Map[String, AnyRef]("class" -> "SimpleStrategy", "replication_factor" -> new Integer(1)).asJava)
+        .withReplicationOptions(Map[String, AnyRef](
+          "class"              -> "SimpleStrategy",
+          "replication_factor" -> new Integer(1)).asJava)
         .build()
     targetScylla.execute(keyspaceStatement)
 
@@ -44,7 +46,7 @@ class ParquetToScyllaBasicMigrationTest extends munit.FunSuite {
     dropAndRecreateTable(targetScylla, keyspace, tableName, identity)
 
     // Perform the migration
-    submitMigrationJob("parquet-to-scylla-basic.yaml")
+    successfullyPerformMigration("parquet-to-scylla-basic.yaml")
 
     // Check that the item has been migrated to the target table
     val selectAllStatement = QueryBuilder

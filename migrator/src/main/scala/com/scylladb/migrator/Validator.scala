@@ -1,5 +1,6 @@
 package com.scylladb.migrator
 
+import com.scylladb.migrator.alternator.AlternatorValidator
 import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
 import com.scylladb.migrator.validation.RowComparisonFailure
 import org.apache.log4j.{ Level, LogManager, Logger }
@@ -14,8 +15,10 @@ object Validator {
     (config.source, config.target) match {
       case (cassandraSource: SourceSettings.Cassandra, scyllaTarget: TargetSettings.Scylla) =>
         ScyllaValidator.runValidation(cassandraSource, scyllaTarget, config)
+      case (dynamoSource: SourceSettings.DynamoDB, alternatorTarget: TargetSettings.DynamoDB) =>
+        AlternatorValidator.runValidation(dynamoSource, alternatorTarget, config)
       case _ =>
-        sys.error("Validation only supports validating against Cassandra/Scylla " +
+        sys.error("Unsupported combination of source and target " +
           s"(found ${config.source.getClass.getSimpleName} and ${config.target.getClass.getSimpleName} settings)")
     }
 
@@ -43,6 +46,7 @@ object Validator {
     else {
       log.error("Found the following comparison failures:")
       log.error(failures.mkString("\n"))
+      System.exit(1)
     }
   }
 }

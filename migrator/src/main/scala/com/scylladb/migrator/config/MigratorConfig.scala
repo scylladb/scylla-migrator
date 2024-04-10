@@ -15,6 +15,10 @@ case class MigratorConfig(source: SourceSettings,
                           skipTokenRanges: Set[(Token[_], Token[_])],
                           validation: Validation) {
   def render: String = this.asJson.asYaml.spaces2
+
+  /** The list of renames modelled as a Map from the old column name to the new column name */
+  lazy val renamesMap: Map[String, String] =
+    renames.map(rename => rename.from -> rename.to).toMap.withDefault(identity)
 }
 object MigratorConfig {
   implicit val tokenEncoder: Encoder[Token[_]] = Encoder.instance {
