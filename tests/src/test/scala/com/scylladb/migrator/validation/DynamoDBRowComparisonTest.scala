@@ -4,7 +4,7 @@ import com.amazonaws.services.dynamodbv2.model.AttributeValue
 import com.scylladb.migrator.AttributeValueUtils.{ numericalValue, stringValue }
 import com.scylladb.migrator.validation.RowComparisonFailure.{ dynamoDBRowComparisonFailure, Item }
 
-class RowComparisonTest extends munit.FunSuite {
+class DynamoDBRowComparisonTest extends munit.FunSuite {
 
   val sameColumns: String => String = identity
   val floatingPointTolerance: Double = 0.01
