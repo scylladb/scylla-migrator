@@ -39,7 +39,7 @@ import org.apache.spark.internal.Logging
  * @param receiver Kinesis receiver
  * @param workerId for logging purposes
  */
-private[kinesis] class KinesisRecordProcessor[T](receiver: KinesisReceiver[T], workerId: String)
+private[kinesis] class KinesisDynamoDBRecordProcessor[T](receiver: KinesisDynamoDBReceiver[T], workerId: String)
   extends IRecordProcessor with Logging {
 
   // shardId populated during initialize()

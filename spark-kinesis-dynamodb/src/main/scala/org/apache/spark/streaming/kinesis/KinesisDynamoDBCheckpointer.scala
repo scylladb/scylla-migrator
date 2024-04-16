@@ -36,8 +36,8 @@ import org.apache.spark.util.{Clock, SystemClock}
  * @param workerId Worker Id of KCL worker for logging purposes
  * @param clock In order to use ManualClocks for the purpose of testing
  */
-private[kinesis] class KinesisCheckpointer(
-    receiver: KinesisReceiver[_],
+private[kinesis] class KinesisDynamoDBCheckpointer(
+    receiver: KinesisDynamoDBReceiver[_],
     checkpointInterval: Duration,
     workerId: String,
     clock: Clock = new SystemClock) extends Logging {

@@ -2,6 +2,3 @@
 	path = spark-cassandra-connector
 	url = https://github.com/scylladb/spark-cassandra-connector
 	branch = feature/track-token-ranges
-[submodule "spark-kinesis"]
-	path = spark-kinesis
-	url = https://github.com/scylladb/spark-kinesis

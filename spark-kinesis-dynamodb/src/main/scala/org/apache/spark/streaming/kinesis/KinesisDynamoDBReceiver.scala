@@ -23,7 +23,12 @@ import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.util.control.NonFatal
 
-import com.amazonaws.services.kinesis.clientlibrary.interfaces.{IRecordProcessor, IRecordProcessorCheckpointer, IRecordProcessorFactory}
+import com.amazonaws.services.cloudwatch.AmazonCloudWatchClientBuilder
+import com.amazonaws.services.dynamodbv2.{AmazonDynamoDBClientBuilder, AmazonDynamoDBStreamsClient}
+import com.amazonaws.services.dynamodbv2.model.DescribeTableRequest
+import com.amazonaws.services.dynamodbv2.streamsadapter.{AmazonDynamoDBStreamsAdapterClient, StreamsWorkerFactory}
+import com.amazonaws.services.kinesis.clientlibrary.interfaces.IRecordProcessorCheckpointer
+import com.amazonaws.services.kinesis.clientlibrary.interfaces.v2
 import com.amazonaws.services.kinesis.clientlibrary.lib.worker.{KinesisClientLibConfiguration, Worker}
 import com.amazonaws.services.kinesis.model.Record
 
@@ -81,7 +86,7 @@ import org.apache.spark.util.Utils
  *                      AWSCredentialsProvider passed to the KCL to authorize DynamoDB API calls.
  *                      Will use kinesisCreds if value is None.
  */
-private[kinesis] class KinesisReceiver[T](
+private[kinesis] class KinesisDynamoDBReceiver[T](
     val streamName: String,
     endpointUrl: String,
     regionName: String,
@@ -132,7 +137,7 @@ private[kinesis] class KinesisReceiver[T](
   /**
    * The centralized kinesisCheckpointer that checkpoints based on the given checkpointInterval.
    */
-  @volatile private var kinesisCheckpointer: KinesisCheckpointer = null
+  @volatile private var kinesisCheckpointer: KinesisDynamoDBCheckpointer = null
 
   /**
    * Latest sequence number ranges that have been stored successfully.
@@ -148,13 +153,27 @@ private[kinesis] class KinesisReceiver[T](
 
     workerId = Utils.localHostName() + ":" + UUID.randomUUID()
 
-    kinesisCheckpointer = new KinesisCheckpointer(receiver, checkpointInterval, workerId)
+    kinesisCheckpointer =
+      new KinesisDynamoDBCheckpointer(receiver, checkpointInterval, workerId)
     val kinesisProvider = kinesisCreds.provider
+
+    val dynamoDBClient =
+      AmazonDynamoDBClientBuilder
+        .standard()
+        .withCredentials(dynamoDBCreds.fold(kinesisProvider)(_.provider))
+        .withRegion(regionName)
+        .build()
+
+    val actualStreamName =
+      dynamoDBClient
+        .describeTable(new DescribeTableRequest(streamName))
+        .getTable
+        .getLatestStreamArn
 
     val kinesisClientLibConfiguration = {
       val baseClientLibConfiguration = new KinesisClientLibConfiguration(
         checkpointAppName,
-        streamName,
+        actualStreamName,
         kinesisProvider,
         dynamoDBCreds.map(_.provider).getOrElse(kinesisProvider),
         cloudWatchCreds.map(_.provider).getOrElse(kinesisProvider),
@@ -162,6 +181,10 @@ private[kinesis] class KinesisReceiver[T](
         .withKinesisEndpoint(endpointUrl)
         .withTaskBackoffTimeMillis(500)
         .withRegionName(regionName)
+        .withIdleTimeBetweenReadsInMillis(500)
+        .withMaxRecords(1000)
+        .withFailoverTimeMillis(60000)
+        .withParentShardPollIntervalMillis(10000)
 
       // Update the Kinesis client lib config with timestamp
       // if InitialPositionInStream.AT_TIMESTAMP is passed
@@ -179,12 +202,36 @@ private[kinesis] class KinesisReceiver[T](
     *  IRecordProcessor.processRecords() method.
     *  We're using our custom KinesisRecordProcessor in this case.
     */
-    val recordProcessorFactory = new IRecordProcessorFactory {
-      override def createProcessor: IRecordProcessor =
-        new KinesisRecordProcessor(receiver, workerId)
+    val recordProcessorFactory = new v2.IRecordProcessorFactory {
+      override def createProcessor(): v2.IRecordProcessor =
+        new V1ToV2RecordProcessor(new KinesisDynamoDBRecordProcessor(receiver, workerId))
     }
 
-    worker = new Worker(recordProcessorFactory, kinesisClientLibConfiguration)
+    worker = {
+      val streamsAdapter = new AmazonDynamoDBStreamsAdapterClient(
+        AmazonDynamoDBStreamsClient.builder()
+          .withCredentials(kinesisProvider)
+          .withRegion(regionName)
+          .build()
+      )
+
+      val cloudWatchClient = AmazonCloudWatchClientBuilder.standard
+        .withCredentials(cloudWatchCreds.map(_.provider).getOrElse(kinesisProvider))
+        .withRegion(regionName)
+        .withClientConfiguration(
+          kinesisClientLibConfiguration.getCloudWatchClientConfiguration
+        )
+        .build
+
+      StreamsWorkerFactory.createDynamoDbStreamsWorker(
+        recordProcessorFactory,
+        kinesisClientLibConfiguration,
+        streamsAdapter,
+        dynamoDBClient,
+        cloudWatchClient
+      )
+    }
+
     workerThread = new Thread() {
       override def run(): Unit = {
         try {
