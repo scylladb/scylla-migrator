@@ -11,6 +11,11 @@ inThisBuild(
   )
 )
 
+// Adaptation of spark-streaming-kinesis-asl to work with DynamoDB Streams
+lazy val `spark-kinesis-dynamodb` = project.in(file("spark-kinesis-dynamodb")).settings(
+  libraryDependencies += "org.apache.spark" %% "spark-streaming-kinesis-asl" % sparkVersion,
+)
+
 lazy val migrator = (project in file("migrator")).settings(
   name      := "scylla-migrator",
   version   := "0.0.1",
@@ -27,7 +32,6 @@ lazy val migrator = (project in file("migrator")).settings(
   scalafmtOnCompile         := true,
   libraryDependencies ++= Seq(
     "org.apache.spark" %% "spark-streaming"      % sparkVersion % "provided",
-    "org.apache.spark" %% "spark-sql"            % sparkVersion % "provided",
     "org.apache.spark" %% "spark-sql"            % sparkVersion % "provided",
     "com.amazonaws"    % "aws-java-sdk-sts"      % awsSdkVersion,
     "com.amazonaws"    % "aws-java-sdk-dynamodb" % awsSdkVersion,
@@ -69,7 +73,7 @@ lazy val migrator = (project in file("migrator")).settings(
     else
       Some("releases" at nexus + "service/local/staging/deploy/maven2")
   }
-)
+).dependsOn(`spark-kinesis-dynamodb`)
 
 lazy val tests = project.in(file("tests")).settings(
   libraryDependencies ++= Seq(
@@ -84,4 +88,4 @@ lazy val tests = project.in(file("tests")).settings(
 ).dependsOn(migrator)
 
 lazy val root = project.in(file("."))
-  .aggregate(migrator, tests)
+  .aggregate(migrator, `spark-kinesis-dynamodb`, tests)
