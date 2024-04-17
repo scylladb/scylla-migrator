@@ -184,4 +184,13 @@ object DynamoUtils {
     jobConf.set("mapred.input.format.class", "org.apache.hadoop.dynamodb.read.DynamoDBInputFormat")
   }
 
+  def tableThroughput(tableDesc: Option[TableDescription]): Option[String] = {
+    val provisionedThroughput = tableDesc.flatMap(p => Option(p.getProvisionedThroughput))
+    val readThroughput = provisionedThroughput.flatMap(p => Option(p.getReadCapacityUnits))
+    val writeThroughput = provisionedThroughput.flatMap(p => Option(p.getWriteCapacityUnits))
+
+    if (readThroughput.isEmpty || writeThroughput.isEmpty) Some("25")
+    else None
+  }
+
 }

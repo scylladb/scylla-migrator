@@ -1,7 +1,8 @@
 package com.scylladb.migrator.alternator
 
-import com.amazonaws.services.dynamodbv2.model.{AttributeValue, GetItemRequest}
-import com.scylladb.migrator.SparkUtils.submitMigrationJob
+import com.amazonaws.services.dynamodbv2.model.GetItemRequest
+import com.scylladb.migrator.AttributeValueUtils.{ mapValue, numericalValue, stringValue }
+import com.scylladb.migrator.SparkUtils.successfullyPerformMigration
 
 import scala.collection.JavaConverters._
 import scala.util.chaining._
@@ -11,17 +12,17 @@ class Issue103Test extends MigratorSuite {
 
   withTable("Issue103Items").test("Issue #103 is fixed") { tableName =>
     // Insert two items
-    val keys1 = Map("id" -> new AttributeValue().withS("4"))
+    val keys1 = Map("id" -> stringValue("4"))
     val attrs1 = Map(
-      "AlbumTitle" -> new AttributeValue().withS("aaaaa"),
-      "Awards" -> new AttributeValue().withN("4")
+      "AlbumTitle" -> stringValue("aaaaa"),
+      "Awards"     -> numericalValue("4")
     )
     val item1Data = keys1 ++ attrs1
 
-    val keys2 = Map("id" -> new AttributeValue().withS("999"))
+    val keys2 = Map("id" -> stringValue("999"))
     val attrs2 = Map(
-      "asdfg" -> new AttributeValue().withM(
-        Map("fffff" -> new AttributeValue().withS("asdfasdfs")).asJava
+      "asdfg" -> mapValue(
+        "fffff" -> stringValue("asdfasdfs")
       )
     )
     val item2Data = keys2 ++ attrs2
@@ -30,7 +31,7 @@ class Issue103Test extends MigratorSuite {
     sourceDDb.putItem(tableName, item2Data.asJava)
 
     // Perform the migration
-    submitMigrationJob("dynamodb-to-alternator-issue-103.yaml")
+    successfullyPerformMigration("dynamodb-to-alternator-issue-103.yaml")
 
     // Check that both items have been correctly migrated to the target table
     targetAlternator

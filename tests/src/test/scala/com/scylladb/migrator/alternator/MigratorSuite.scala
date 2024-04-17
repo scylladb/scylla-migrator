@@ -1,18 +1,18 @@
 package com.scylladb.migrator.alternator
 
-import com.amazonaws.auth.{AWSStaticCredentialsProvider, BasicAWSCredentials}
+import com.amazonaws.auth.{ AWSStaticCredentialsProvider, BasicAWSCredentials }
 import com.amazonaws.client.builder.AwsClientBuilder.EndpointConfiguration
 import com.amazonaws.services.dynamodbv2.model._
-import com.amazonaws.services.dynamodbv2.{AmazonDynamoDB, AmazonDynamoDBClientBuilder}
+import com.amazonaws.services.dynamodbv2.{ AmazonDynamoDB, AmazonDynamoDBClientBuilder }
 
 import scala.util.chaining._
 
 /**
- * Base class for implementing end-to-end tests.
- *
- * It expects external services (DynamoDB, Scylla, Spark, etc.) to be running.
- * See the files `CONTRIBUTING.md` and `docker-compose-tests.yml` for more information.
- */
+  * Base class for implementing end-to-end tests.
+  *
+  * It expects external services (DynamoDB, Scylla, Spark, etc.) to be running.
+  * See the files `CONTRIBUTING.md` and `docker-compose-tests.yml` for more information.
+  */
 trait MigratorSuite extends munit.FunSuite {
 
   /** Client of a source DynamoDB instance */
@@ -30,16 +30,16 @@ trait MigratorSuite extends munit.FunSuite {
     .build()
 
   /**
-   * Fixture automating the house-keeping work when migrating a table.
-   *
-   * It deletes the table from both the source and target databases in case it was already
-   * existing, and then recreates it in the source database.
-   *
-   * After the test is executed, it deletes the table from both the source and target
-   * databases.
-   *
-   * @param name Name of the table
-   */
+    * Fixture automating the house-keeping work when migrating a table.
+    *
+    * It deletes the table from both the source and target databases in case it was already
+    * existing, and then recreates it in the source database.
+    *
+    * After the test is executed, it deletes the table from both the source and target
+    * databases.
+    *
+    * @param name Name of the table
+    */
   def withTable(name: String): FunFixture[String] = FunFixture(
     setup = { _ =>
       def deleteTableIfExists(database: AmazonDynamoDB): Unit =

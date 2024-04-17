@@ -11,19 +11,13 @@ import org.apache.spark.streaming.{ Seconds, StreamingContext }
 import scala.util.control.NonFatal
 
 object AlternatorMigrator {
-  val log = LogManager.getLogger("com.scylladb.migrator.alternator")
+  private val log = LogManager.getLogger("com.scylladb.migrator.alternator")
 
   def migrate(source: SourceSettings.DynamoDB,
               target: TargetSettings.DynamoDB,
               renames: List[Rename])(implicit spark: SparkSession): Unit = {
 
-    val sourceTableDesc = DynamoUtils
-      .buildDynamoClient(source.endpoint, source.credentials, source.region)
-      .describeTable(source.table)
-      .getTable
-
-    val sourceRDD =
-      readers.DynamoDB.readRDD(spark, source, sourceTableDesc)
+    val (sourceRDD, sourceTableDesc) = readers.DynamoDB.readRDD(spark, source)
 
     log.info("We need to transfer: " + sourceRDD.getNumPartitions + " partitions in total")
 

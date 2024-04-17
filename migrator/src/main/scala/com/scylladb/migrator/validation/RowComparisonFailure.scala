@@ -1,18 +1,21 @@
 package com.scylladb.migrator.validation
 
+import com.amazonaws.services.dynamodbv2.model.AttributeValue
 import com.datastax.spark.connector.CassandraRow
 import com.google.common.math.DoubleMath
 
 import java.time.temporal.ChronoUnit
+import scala.collection.JavaConverters._
 
-case class RowComparisonFailure(row: CassandraRow,
-                                other: Option[CassandraRow],
+case class RowComparisonFailure(rowRepr: String,
+                                otherRepr: Option[String],
                                 items: List[RowComparisonFailure.Item]) {
+
   override def toString: String =
     s"""
        |Row failure:
-       |* Source row: ${row}
-       |* Target row: ${other.map(_.toString).getOrElse("<MISSING>")}
+       |* Source row: ${rowRepr}
+       |* Target row: ${otherRepr.getOrElse("<MISSING>")}
        |* Failures:
        |${items.map(item => s"  - ${item.description}").mkString("\n")}
      """.stripMargin
@@ -40,19 +43,24 @@ object RowComparisonFailure {
           .mkString(", ")}")
   }
 
-  def compareRows(left: CassandraRow,
-                  right: Option[CassandraRow],
-                  floatingPointTolerance: Double,
-                  timestampMsTolerance: Long,
-                  ttlToleranceMillis: Long,
-                  writetimeToleranceMillis: Long,
-                  compareTimestamps: Boolean): Option[RowComparisonFailure] =
+  def cassandraRowComparisonFailure(left: CassandraRow,
+                                    right: Option[CassandraRow],
+                                    items: List[Item]): RowComparisonFailure =
+    RowComparisonFailure(left.toString, right.map(_.toString), items)
+
+  def compareCassandraRows(left: CassandraRow,
+                           right: Option[CassandraRow],
+                           floatingPointTolerance: Double,
+                           timestampMsTolerance: Long,
+                           ttlToleranceMillis: Long,
+                           writetimeToleranceMillis: Long,
+                           compareTimestamps: Boolean): Option[RowComparisonFailure] =
     right match {
-      case None => Some(RowComparisonFailure(left, right, List(Item.MissingTargetRow)))
+      case None => Some(cassandraRowComparisonFailure(left, right, List(Item.MissingTargetRow)))
       case Some(right) if left.columnValues.size != right.columnValues.size =>
-        Some(RowComparisonFailure(left, Some(right), List(Item.MismatchedColumnCount)))
+        Some(cassandraRowComparisonFailure(left, Some(right), List(Item.MismatchedColumnCount)))
       case Some(right) if left.metaData.columnNames != right.metaData.columnNames =>
-        Some(RowComparisonFailure(left, Some(right), List(Item.MismatchedColumnNames)))
+        Some(cassandraRowComparisonFailure(left, Some(right), List(Item.MismatchedColumnNames)))
       case Some(right) =>
         val names = left.metaData.columnNames
 
@@ -65,36 +73,7 @@ object RowComparisonFailure {
             if !name.endsWith("_ttl") && !name.endsWith("_writetime")
             leftValue  = leftMap.get(name)
             rightValue = rightMap.get(name)
-
-            result = (rightValue, leftValue) match {
-              // All timestamp types need to be compared with a configured tolerance
-              case (Some(l: java.time.Instant), Some(r: java.time.Instant))
-                  if timestampMsTolerance > 0 =>
-                Math.abs(r.until(l, ChronoUnit.MILLIS)) > timestampMsTolerance
-              // All floating-point-like types need to be compared with a configured tolerance
-              case (Some(l: Float), Some(r: Float)) =>
-                !DoubleMath.fuzzyEquals(l, r, floatingPointTolerance)
-              case (Some(l: Double), Some(r: Double)) =>
-                !DoubleMath.fuzzyEquals(l, r, floatingPointTolerance)
-              case (Some(l: java.math.BigDecimal), Some(r: java.math.BigDecimal)) =>
-                l.subtract(r)
-                  .abs()
-                  .compareTo(new java.math.BigDecimal(floatingPointTolerance)) > 0
-
-              // CQL blobs get converted to byte buffers by the Java driver, and the
-              // byte buffers are converted to byte arrays by the Spark connector.
-              // Arrays can't be compared with standard equality and must be compared
-              // with `sameElements`.
-              case (Some(l: Array[_]), Some(r: Array[_])) =>
-                !l.sameElements(r)
-
-              // All remaining types get compared with standard equality
-              case (Some(l), Some(r)) => l != r
-              case (Some(_), None)    => true
-              case (None, Some(_))    => true
-              case (None, None)       => false
-            }
-            if result
+            if areDifferent(leftValue, rightValue, timestampMsTolerance, floatingPointTolerance)
           } yield name
 
         val differingTtls =
@@ -139,7 +118,7 @@ object RowComparisonFailure {
           None
         else
           Some(
-            RowComparisonFailure(
+            cassandraRowComparisonFailure(
               left,
               Some(right),
               (if (differingFieldValues.nonEmpty)
@@ -153,4 +132,102 @@ object RowComparisonFailure {
             )
           )
     }
+
+  def dynamoDBRowComparisonFailure(left: Map[String, AttributeValue],
+                                   maybeRight: Option[Map[String, AttributeValue]],
+                                   items: List[Item]): RowComparisonFailure =
+    RowComparisonFailure(left.toString, maybeRight.map(_.toString), items)
+
+  /**
+    * @param left                   The first item to compare
+    * @param maybeRight             The possible second item to compare
+    * @param renamedColumn          A function describing how the columns of the first items should be expected to be
+    *                               renamed in the second item
+    * @param floatingPointTolerance The tolerance to apply when comparing floating point values
+    * @return Some comparison failure if the compared items were different, otherwise `None`.
+    */
+  def compareDynamoDBRows(left: Map[String, AttributeValue],
+                          maybeRight: Option[Map[String, AttributeValue]],
+                          renamedColumn: String => String,
+                          floatingPointTolerance: Double): Option[RowComparisonFailure] =
+    maybeRight match {
+      case None => Some(dynamoDBRowComparisonFailure(left, maybeRight, List(Item.MissingTargetRow)))
+      case Some(right) if left.keySet.size != right.keySet.size =>
+        Some(dynamoDBRowComparisonFailure(left, maybeRight, List(Item.MismatchedColumnCount)))
+      case Some(right) if left.keySet.map(renamedColumn) != right.keySet =>
+        Some(dynamoDBRowComparisonFailure(left, maybeRight, List(Item.MismatchedColumnNames)))
+      case Some(right) =>
+        val differingFieldValues =
+          for {
+            (columnName, leftValue) <- left
+            rightValue = right.get(renamedColumn(columnName))
+            if areDifferent(
+              Some(leftValue),
+              rightValue,
+              0L, // There is no Timestamp type in DynamoDB
+              floatingPointTolerance)
+          } yield columnName
+        if (differingFieldValues.isEmpty) None
+        else
+          Some(
+            dynamoDBRowComparisonFailure(
+              left,
+              maybeRight,
+              List(Item.DifferingFieldValues(differingFieldValues.toList))))
+    }
+
+  /**
+    * @param leftValue              First value to compare
+    * @param rightValue             Second value to compare
+    * @param timestampMsTolerance   Tolerance when comparing instant values
+    * @param floatingPointTolerance Tolerance when comparing floating point values
+    * @return `true` if the `leftValue` is different from the `rightValue`
+    */
+  private def areDifferent(leftValue: Option[Any],
+                           rightValue: Option[Any],
+                           timestampMsTolerance: Long,
+                           floatingPointTolerance: Double): Boolean =
+    (rightValue, leftValue) match {
+      // All timestamp types need to be compared with a configured tolerance
+      case (Some(l: java.time.Instant), Some(r: java.time.Instant)) if timestampMsTolerance > 0 =>
+        Math.abs(r.until(l, ChronoUnit.MILLIS)) > timestampMsTolerance
+      // All floating-point-like types need to be compared with a configured tolerance
+      case (Some(l: Float), Some(r: Float)) =>
+        !DoubleMath.fuzzyEquals(l, r, floatingPointTolerance)
+      case (Some(l: Double), Some(r: Double)) =>
+        !DoubleMath.fuzzyEquals(l, r, floatingPointTolerance)
+      case (Some(l: java.math.BigDecimal), Some(r: java.math.BigDecimal)) =>
+        areNumericalValuesDifferent(l, r, floatingPointTolerance)
+
+      // CQL blobs get converted to byte buffers by the Java driver, and the
+      // byte buffers are converted to byte arrays by the Spark connector.
+      // Arrays can't be compared with standard equality and must be compared
+      // with `sameElements`.
+      case (Some(l: Array[_]), Some(r: Array[_])) =>
+        !l.sameElements(r)
+
+      // Special cases for DynamoDB’s AttributeValue
+      case (Some(l: AttributeValue), Some(r: AttributeValue)) if l.getN != null && r.getN != null =>
+        areNumericalValuesDifferent(BigDecimal(l.getN), BigDecimal(r.getN), floatingPointTolerance)
+      case (Some(l: AttributeValue), Some(r: AttributeValue))
+          if l.getNS != null && r.getN != null =>
+        val xs = l.getNS.asScala.map(BigDecimal(_))
+        val ys = r.getNS.asScala.map(BigDecimal(_))
+        xs.size != ys.size || xs.zip(ys).exists {
+          case (x, y) => areNumericalValuesDifferent(x, y, floatingPointTolerance)
+        }
+
+      // All remaining types get compared with standard equality
+      case (Some(l), Some(r)) => l != r
+      case (Some(_), None)    => true
+      case (None, Some(_))    => true
+      case (None, None)       => false
+    }
+
+  /** @return true iff the difference between `x` and `y` is greater than the `tolerance` */
+  private def areNumericalValuesDifferent(x: BigDecimal,
+                                          y: BigDecimal,
+                                          tolerance: BigDecimal): Boolean =
+    (x - y).abs > tolerance
+
 }
