@@ -1,8 +1,9 @@
 import sbt.librarymanagement.InclExclRule
 
 val awsSdkVersion = "1.11.728"
-val sparkVersion = "2.4.4"
 val dynamodbStreamsKinesisAdapterVersion = "1.5.2"
+val hadoopVersion = "2.7.3"
+val sparkVersion = "2.4.4"
 
 inThisBuild(
   List(
@@ -17,6 +18,15 @@ lazy val `spark-kinesis-dynamodb` = project.in(file("spark-kinesis-dynamodb")).s
   libraryDependencies ++= Seq(
     "org.apache.spark" %% "spark-streaming-kinesis-asl"     % sparkVersion,
     "com.amazonaws"    % "dynamodb-streams-kinesis-adapter" % dynamodbStreamsKinesisAdapterVersion
+  )
+)
+
+// Provides an alternative DynamoDB connector that performs load balancing between shards
+lazy val `load-balanced-emr-dynamodb-hadoop` = project.in(file("load-balanced-emr-dynamodb-hadoop")).settings(
+  libraryDependencies ++= Seq(
+    "com.amazon.emr" % "emr-dynamodb-hadoop" % "4.16.0",
+    "org.apache.hadoop" % "hadoop-mapreduce-client-app" % hadoopVersion % Provided,
+    "org.apache.hadoop" % "hadoop-common" % hadoopVersion % Provided,
   )
 )
 
@@ -87,7 +97,7 @@ lazy val migrator = (project in file("migrator")).settings(
     else
       Some("releases" at nexus + "service/local/staging/deploy/maven2")
   }
-).dependsOn(`spark-kinesis-dynamodb`)
+).dependsOn(`spark-kinesis-dynamodb`, `load-balanced-emr-dynamodb-hadoop`)
 
 lazy val tests = project.in(file("tests")).settings(
   libraryDependencies ++= Seq(
@@ -102,4 +112,4 @@ lazy val tests = project.in(file("tests")).settings(
 ).dependsOn(migrator)
 
 lazy val root = project.in(file("."))
-  .aggregate(migrator, `spark-kinesis-dynamodb`, tests)
+  .aggregate(migrator, `spark-kinesis-dynamodb`, `load-balanced-emr-dynamodb-hadoop`, tests)
