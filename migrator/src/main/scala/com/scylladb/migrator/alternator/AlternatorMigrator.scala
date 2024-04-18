@@ -37,10 +37,15 @@ object AlternatorMigrator {
         )
       }
 
-      writers.DynamoDB.writeRDD(target, renames, sourceRDD, Some(targetTableDesc))
+      if (target.streamChanges && target.skipInitialSnapshotTransfer.contains(true)) {
+        log.info("Skip transferring table snapshot")
+      } else {
+        writers.DynamoDB.writeRDD(target, renames, sourceRDD, Some(targetTableDesc))
+        log.info("Done transferring table snapshot")
+      }
 
       if (target.streamChanges) {
-        log.info("Done transferring table snapshot. Starting to transfer changes")
+        log.info("Starting to transfer changes")
         val streamingContext = new StreamingContext(spark.sparkContext, Seconds(5))
 
         DynamoStreamReplication.createDStream(
