@@ -17,6 +17,7 @@ import com.amazonaws.services.dynamodbv2.model.*;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.dynamodb.*;
+import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.RecordWriter;
 import org.apache.hadoop.mapred.Reporter;
@@ -36,16 +37,13 @@ import static org.apache.hadoop.dynamodb.DynamoDBUtil.createJobClient;
  * this and overwrite the convertValueToDynamoDBItemWritable with a conversion from the input Value
  * to a DynamoDBItemWritable. As an alternative, you can also use DefaultDynamoDBRecordWriter, and
  * do the conversion to a DynamoDBItemWritable inside of the reducer.
- *
- * @param <K> The type of Key received from the reducer
- * @param <V> The type of Value received from the reducer
  */
-public abstract class AbstractDynamoDBRecordWriter<K, V> implements RecordWriter<K, V> {
+public class LoadBalancedDynamoDBRecordWriter implements RecordWriter<Text, DynamoDBItemWritable> {
 
-  private static final Log log = LogFactory.getLog(AbstractDynamoDBRecordWriter.class);
+  private static final Log log = LogFactory.getLog(LoadBalancedDynamoDBRecordWriter.class);
   private static final long PRINT_COUNT_INCREMENT = 1000;
 
-  private final DynamoDBClient client;
+  private final LoadBalancedDynamoDBClient client;
   private final Progressable progressable;
   private final String tableName;
   private IopsController iopsController;
@@ -60,10 +58,10 @@ public abstract class AbstractDynamoDBRecordWriter<K, V> implements RecordWriter
   private long writesPerSecond = 0;
   private boolean deletionMode;
 
-  public AbstractDynamoDBRecordWriter(JobConf jobConf, Progressable progressable) {
+  public LoadBalancedDynamoDBRecordWriter(JobConf jobConf, Progressable progressable) {
     this.progressable = progressable;
 
-    client = new DynamoDBClient(jobConf);
+    client = new LoadBalancedDynamoDBClient(jobConf);
     tableName = jobConf.get(DynamoDBConstants.OUTPUT_TABLE_NAME);
     if (tableName == null) {
       throw new ResourceNotFoundException("No output table name was specified.");
@@ -73,7 +71,7 @@ public abstract class AbstractDynamoDBRecordWriter<K, V> implements RecordWriter
     deletionMode = jobConf.getBoolean(DynamoDBConstants.DELETION_MODE,
         DynamoDBConstants.DEFAULT_DELETION_MODE);
 
-    IopsCalculator iopsCalculator = new WriteIopsCalculator(createJobClient(jobConf), client,
+    IopsCalculator iopsCalculator = new LoadBalancedWriteIopsCalculator(createJobClient(jobConf), client,
         tableName);
     iopsController = new IopsController(iopsCalculator, DEFAULT_AVERAGE_ITEM_SIZE_IN_BYTES,
         DynamoDBOperationType.WRITE);
@@ -88,7 +86,7 @@ public abstract class AbstractDynamoDBRecordWriter<K, V> implements RecordWriter
   }
 
   @Override
-  public void write(K key, V value) throws IOException {
+  public void write(Text key, DynamoDBItemWritable value) throws IOException {
     if (value == null) {
       throw new RuntimeException("Null record encountered. At least the key columns must be "
           + "specified.");
@@ -141,7 +139,9 @@ public abstract class AbstractDynamoDBRecordWriter<K, V> implements RecordWriter
    * @param value The value to convert
    * @return Some object in a format that is compatible with DynamoDB.
    */
-  protected abstract DynamoDBItemWritable convertValueToDynamoDBItem(K key, V value);
+  protected DynamoDBItemWritable convertValueToDynamoDBItem(Text key, DynamoDBItemWritable value) {
+    return value;
+  }
 
   private void verifyInterval() {
     if (writesPerSecond >= permissibleWritesPerSecond) {

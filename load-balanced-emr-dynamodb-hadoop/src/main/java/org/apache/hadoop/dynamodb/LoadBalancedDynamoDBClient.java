@@ -16,12 +16,15 @@ package org.apache.hadoop.dynamodb;
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.ClientConfiguration;
 import com.amazonaws.auth.*;
-import com.amazonaws.services.dynamodbv2.AmazonDynamoDBClient;
+import com.amazonaws.client.builder.AwsClientBuilder;
+import com.amazonaws.services.dynamodbv2.AmazonDynamoDB;
+import com.amazonaws.services.dynamodbv2.AmazonDynamoDBClientBuilder;
 import com.amazonaws.services.dynamodbv2.model.*;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.primitives.Ints;
+import com.scylladb.alternator.AlternatorRequestHandler;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -33,6 +36,7 @@ import org.apache.hadoop.util.ReflectionUtils;
 import org.joda.time.Duration;
 
 import java.io.UnsupportedEncodingException;
+import java.net.URI;
 import java.util.*;
 import java.util.Map.Entry;
 import java.util.concurrent.Callable;
@@ -40,9 +44,9 @@ import java.util.concurrent.Callable;
 import static org.apache.hadoop.dynamodb.DynamoDBConstants.*;
 import static org.apache.hadoop.dynamodb.DynamoDBUtil.getDynamoDBEndpoint;
 
-public class DynamoDBClient {
+public class LoadBalancedDynamoDBClient {
 
-  private static final Log log = LogFactory.getLog(DynamoDBClient.class);
+  private static final Log log = LogFactory.getLog(LoadBalancedDynamoDBClient.class);
 
   private static final int DEFAULT_RETRY_DURATION = 10;
   private static final long MAX_BACKOFF_IN_MILLISECONDS = 1000 * 3;
@@ -63,7 +67,7 @@ public class DynamoDBClient {
           DynamoDBConstants.DEFAULT_SECRET_KEY_CONF
       );
   private final Map<String, List<WriteRequest>> writeBatchMap = new HashMap<>();
-  private final AmazonDynamoDBClient dynamoDB;
+  private final AmazonDynamoDB dynamoDB;
   private int writeBatchMapSizeBytes;
   private int batchWriteRetries;
   private final Configuration config;
@@ -71,22 +75,21 @@ public class DynamoDBClient {
   private final long maxItemByteSize;
 
   // For unit testing only
-  public DynamoDBClient() {
+  public LoadBalancedDynamoDBClient() {
     dynamoDB = null;
     config = null;
     maxBatchSize = DEFAULT_MAX_BATCH_SIZE;
     maxItemByteSize = DEFAULT_MAX_ITEM_SIZE;
   }
 
-  public DynamoDBClient(Configuration conf) {
+  public LoadBalancedDynamoDBClient(Configuration conf) {
     this(conf, null);
   }
 
-  public DynamoDBClient(Configuration conf, String region) {
+  public LoadBalancedDynamoDBClient(Configuration conf, String region) {
     Preconditions.checkNotNull(conf, "conf cannot be null.");
     config = conf;
-    dynamoDB = getDynamoDBClient(conf);
-    dynamoDB.setEndpoint(getDynamoDBEndpoint(conf, region));
+    dynamoDB = getDynamoDBClient(conf, region);
     maxBatchSize = config.getLong(MAX_BATCH_SIZE, DEFAULT_MAX_BATCH_SIZE);
     maxItemByteSize = config.getLong(MAX_ITEM_SIZE, DEFAULT_MAX_ITEM_SIZE);
   }
@@ -323,10 +326,18 @@ public class DynamoDBClient {
     Thread.sleep(delay);
   }
 
-  private AmazonDynamoDBClient getDynamoDBClient(Configuration conf) {
+  private AmazonDynamoDB getDynamoDBClient(Configuration conf, String region) {
     ClientConfiguration clientConfig = new ClientConfiguration().withMaxErrorRetry(1);
     applyProxyConfiguration(clientConfig, conf);
-    return new AmazonDynamoDBClient(getAWSCredentialsProvider(conf), clientConfig);
+    String endpoint = getDynamoDBEndpoint(conf, region);
+    AlternatorRequestHandler handler = new AlternatorRequestHandler(URI.create(endpoint));
+    return AmazonDynamoDBClientBuilder
+            .standard()
+            .withCredentials(getAWSCredentialsProvider(conf))
+            .withClientConfiguration(clientConfig)
+            .withEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration(endpoint, region))
+            .withRequestHandlers(handler)
+            .build();
   }
 
   @VisibleForTesting

@@ -24,6 +24,7 @@ lazy val `spark-kinesis-dynamodb` = project.in(file("spark-kinesis-dynamodb")).s
 // Provides an alternative DynamoDB connector that performs load balancing between shards
 lazy val `load-balanced-emr-dynamodb-hadoop` = project.in(file("load-balanced-emr-dynamodb-hadoop")).settings(
   libraryDependencies ++= Seq(
+    "com.scylladb.alternator" % "load-balancing" % "1.0.0",
     "com.amazon.emr" % "emr-dynamodb-hadoop" % "4.16.0",
     "org.apache.hadoop" % "hadoop-mapreduce-client-app" % hadoopVersion % Provided,
     "org.apache.hadoop" % "hadoop-common" % hadoopVersion % Provided,

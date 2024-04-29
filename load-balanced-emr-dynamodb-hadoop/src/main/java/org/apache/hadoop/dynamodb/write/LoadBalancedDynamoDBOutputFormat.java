@@ -22,12 +22,12 @@ import org.apache.hadoop.util.Progressable;
 
 import java.io.IOException;
 
-public class DynamoDBOutputFormat extends AbstractDynamoDBOutputFormat<Text, DynamoDBItemWritable> {
+public class LoadBalancedDynamoDBOutputFormat extends AbstractDynamoDBOutputFormat<Text, DynamoDBItemWritable> {
 
   @Override
   public RecordWriter<Text, DynamoDBItemWritable> getRecordWriter(FileSystem ignored, JobConf
       job, String name, Progressable progress) throws IOException {
-    return new DefaultDynamoDBRecordWriter(job, progress);
+    return new LoadBalancedDynamoDBRecordWriter(job, progress);
   }
 
 }
