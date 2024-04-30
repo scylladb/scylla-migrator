@@ -9,8 +9,8 @@ import org.apache.log4j.LogManager
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.streaming.StreamingContext
 import org.apache.spark.streaming.kinesis.{
+  KinesisDynamoDBInputDStream,
   KinesisInitialPositions,
-  KinesisInputDStream,
   SparkAWSCredentials
 }
 
@@ -29,22 +29,13 @@ object DynamoStreamReplication {
                     target: TargetSettings.DynamoDB,
                     targetTableDesc: TableDescription,
                     renames: List[Rename]): Unit =
-    KinesisInputDStream.builder
-      .streamingContext(streamingContext)
-      .streamName(src.table)
-      .dynamoStream(true)
-      .kinesisCredentials(
-        src.credentials.map {
-          case AWSCredentials(accessKey, secretKey) =>
-            SparkAWSCredentials.builder
-              .basicCredentials(accessKey, secretKey)
-              .build
-        }.orNull
-      )
-      .regionName(src.region.orNull)
-      .checkpointAppName(s"migrator_${src.table}_${System.currentTimeMillis()}")
-      .initialPosition(new KinesisInitialPositions.TrimHorizon)
-      .buildWithMessageHandler {
+    new KinesisDynamoDBInputDStream(
+      streamingContext,
+      streamName        = src.table,
+      regionName        = src.region.orNull,
+      initialPosition   = new KinesisInitialPositions.TrimHorizon,
+      checkpointAppName = s"migrator_${src.table}_${System.currentTimeMillis()}",
+      messageHandler = {
         case recAdapter: RecordAdapter =>
           val rec = recAdapter.getInternalObject
           val newMap = new util.HashMap[String, AttributeValue]()
@@ -63,35 +54,41 @@ object DynamoStreamReplication {
           Some(newMap)
 
         case _ => None
-      }
-      .foreachRDD { msgs =>
-        val rdd = msgs
-          .collect { case Some(item) => new DynamoDBItemWritable(item) }
-          .repartition(Runtime.getRuntime.availableProcessors() * 2)
-          .map(item => (new Text, item)) // Create the key after repartitioning to avoid Serialization issues
+      },
+      kinesisCreds = src.credentials.map {
+        case AWSCredentials(accessKey, secretKey) =>
+          SparkAWSCredentials.builder
+            .basicCredentials(accessKey, secretKey)
+            .build()
+      }.orNull
+    ).foreachRDD { msgs =>
+      val rdd = msgs
+        .collect { case Some(item) => new DynamoDBItemWritable(item) }
+        .repartition(Runtime.getRuntime.availableProcessors() * 2)
+        .map(item => (new Text, item)) // Create the key after repartitioning to avoid Serialization issues
 
-        val changes =
-          rdd
-            .map(_._2) // Remove keys because they are not serializable
-            .groupBy { itemWritable =>
-              itemWritable.getItem.get(operationTypeColumn) match {
-                case `putOperation`    => "UPSERT"
-                case `deleteOperation` => "DELETE"
-                case _                 => "UNKNOWN"
-              }
+      val changes =
+        rdd
+          .map(_._2) // Remove keys because they are not serializable
+          .groupBy { itemWritable =>
+            itemWritable.getItem.get(operationTypeColumn) match {
+              case `putOperation`    => "UPSERT"
+              case `deleteOperation` => "DELETE"
+              case _                 => "UNKNOWN"
             }
-            .mapValues(_.size)
-            .collect()
-        if (changes.nonEmpty) {
-          log.info("Changes to be applied:")
-          for ((operation, count) <- changes) {
-            log.info(s"${operation}: ${count}")
           }
-        } else {
-          log.info("No changes to apply")
+          .mapValues(_.size)
+          .collect()
+      if (changes.nonEmpty) {
+        log.info("Changes to be applied:")
+        for ((operation, count) <- changes) {
+          log.info(s"${operation}: ${count}")
         }
-
-        DynamoDB.writeRDD(target, renames, rdd, Some(targetTableDesc))(spark)
+      } else {
+        log.info("No changes to apply")
       }
+
+      DynamoDB.writeRDD(target, renames, rdd, Some(targetTableDesc))(spark)
+    }
 
 }
