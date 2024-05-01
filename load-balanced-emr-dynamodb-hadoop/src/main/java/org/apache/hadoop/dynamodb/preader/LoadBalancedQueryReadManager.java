@@ -15,10 +15,10 @@ package org.apache.hadoop.dynamodb.preader;
 
 import org.apache.hadoop.dynamodb.util.AbstractTimeSource;
 
-public class QueryReadManager extends AbstractReadManager {
+public class LoadBalancedQueryReadManager extends LoadBalancedAbstractReadManager {
 
-  public QueryReadManager(RateController rateController, AbstractTimeSource time,
-      DynamoDBRecordReaderContext context) {
+  public LoadBalancedQueryReadManager(RateController rateController, AbstractTimeSource time,
+                                      LoadBalancedDynamoDBRecordReaderContext context) {
     super(rateController, time, context);
   }
 
@@ -33,7 +33,7 @@ public class QueryReadManager extends AbstractReadManager {
     }
     segmentsRemaining.set(totalSegments);
 
-    enqueueReadRequestToTail(new QueryRecordReadRequest(this, context, null /* lastEvaluatedKey
+    enqueueReadRequestToTail(new LoadBalancedQueryRecordReadRequest(this, context, null /* lastEvaluatedKey
     */));
   }
 }

@@ -19,16 +19,16 @@ import org.apache.hadoop.dynamodb.preader.RateController.RequestLimit;
 
 import java.util.Map;
 
-public abstract class AbstractRecordReadRequest {
+public abstract class LoadBalancedAbstractRecordReadRequest {
 
-  protected final AbstractReadManager readMgr;
-  protected final DynamoDBRecordReaderContext context;
+  protected final LoadBalancedAbstractReadManager readMgr;
+  protected final LoadBalancedDynamoDBRecordReaderContext context;
 
   protected final Map<String, AttributeValue> lastEvaluatedKey;
   protected final int segment;
   protected final String tableName;
 
-  public AbstractRecordReadRequest(AbstractReadManager readMgr, DynamoDBRecordReaderContext
+  public LoadBalancedAbstractRecordReadRequest(LoadBalancedAbstractReadManager readMgr, LoadBalancedDynamoDBRecordReaderContext
       context, int segment, Map<String, AttributeValue> lastEvaluatedKey) {
     this.readMgr = readMgr;
     this.context = context;
@@ -57,7 +57,7 @@ public abstract class AbstractRecordReadRequest {
     context.getReporter().progress();
   }
 
-  protected abstract AbstractRecordReadRequest buildNextReadRequest(
+  protected abstract LoadBalancedAbstractRecordReadRequest buildNextReadRequest(
       PageResults<Map<String, AttributeValue>> pageResults);
 
   protected abstract PageResults<Map<String, AttributeValue>> fetchPage(RequestLimit lim);

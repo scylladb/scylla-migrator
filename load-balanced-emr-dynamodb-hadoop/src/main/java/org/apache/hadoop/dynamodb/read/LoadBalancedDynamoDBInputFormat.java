@@ -15,11 +15,13 @@ package org.apache.hadoop.dynamodb.read;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.dynamodb.DynamoDBClient;
+import org.apache.hadoop.dynamodb.LoadBalancedDynamoDBClient;
 import org.apache.hadoop.dynamodb.DynamoDBConstants;
+import org.apache.hadoop.dynamodb.DynamoDBItemWritable;
 import org.apache.hadoop.dynamodb.DynamoDBUtil;
-import org.apache.hadoop.dynamodb.preader.DynamoDBRecordReaderContext;
+import org.apache.hadoop.dynamodb.preader.LoadBalancedDynamoDBRecordReaderContext;
 import org.apache.hadoop.dynamodb.split.DynamoDBSplitGenerator;
+import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapred.*;
 
 import java.io.IOException;
@@ -29,13 +31,11 @@ import java.io.IOException;
  * the mapper is taking in key-value pairs in {@code &lt;Text, DynamoDBItemWritable&gt;} format.
  * A new subclass should be created if a different RecordReader is desired.
  *
- * @param <K> The type of Key that will be passed to the Mapper
- * @param <V> The type of Value that will be passed to the Mapper
  */
-public abstract class AbstractDynamoDBInputFormat<K, V> implements InputFormat<K, V> {
+public class LoadBalancedDynamoDBInputFormat implements InputFormat<Text, DynamoDBItemWritable> {
 
   private static final int MIN_READ_THROUGHPUT_PER_MAP = 100;
-  private static final Log log = LogFactory.getLog(AbstractDynamoDBInputFormat.class);
+  private static final Log log = LogFactory.getLog(LoadBalancedDynamoDBInputFormat.class);
 
   @Override
   public InputSplit[] getSplits(JobConf conf, int desiredSplits) throws IOException {
@@ -78,13 +78,19 @@ public abstract class AbstractDynamoDBInputFormat<K, V> implements InputFormat<K
     return getSplitGenerator().generateSplits(numMappers, numSegments, conf);
   }
 
-  protected DynamoDBRecordReaderContext buildDynamoDBRecordReaderContext(InputSplit split,
-      JobConf conf, Reporter reporter) {
-    DynamoDBRecordReaderContext context = new DynamoDBRecordReaderContext();
+  @Override
+  public RecordReader<Text, DynamoDBItemWritable> getRecordReader(InputSplit split, JobConf conf, Reporter reporter) throws IOException {
+    LoadBalancedDynamoDBRecordReaderContext context = buildDynamoDBRecordReaderContext(split, conf, reporter);
+    return new LoadBalancedDynamoDBRecordReader(context);
+  }
+
+  protected LoadBalancedDynamoDBRecordReaderContext buildDynamoDBRecordReaderContext(InputSplit split,
+                                                                                     JobConf conf, Reporter reporter) {
+    LoadBalancedDynamoDBRecordReaderContext context = new LoadBalancedDynamoDBRecordReaderContext();
 
     context.setConf(conf);
     context.setSplit(split);
-    context.setClient(new DynamoDBClient(conf));
+    context.setClient(new LoadBalancedDynamoDBClient(conf));
     context.setAverageItemSize(conf.getFloat(DynamoDBConstants.AVG_ITEM_SIZE, 0.0f));
     context.setReporter(reporter);
 

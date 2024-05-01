@@ -14,39 +14,35 @@
 package org.apache.hadoop.dynamodb.preader;
 
 import com.amazonaws.services.dynamodbv2.model.AttributeValue;
-import com.amazonaws.services.dynamodbv2.model.ScanResult;
+import com.amazonaws.services.dynamodbv2.model.QueryResult;
 import org.apache.hadoop.dynamodb.DynamoDBFibonacciRetryer.RetryResult;
 import org.apache.hadoop.dynamodb.preader.RateController.RequestLimit;
 
 import java.util.Map;
 
-public class ScanRecordReadRequest extends AbstractRecordReadRequest {
+public class LoadBalancedQueryRecordReadRequest extends LoadBalancedAbstractRecordReadRequest {
 
-  public ScanRecordReadRequest(AbstractReadManager readMgr, DynamoDBRecordReaderContext context,
-                               int segment, Map<String, AttributeValue> lastEvaluatedKey) {
-    super(readMgr, context, segment, lastEvaluatedKey);
+  public LoadBalancedQueryRecordReadRequest(LoadBalancedAbstractReadManager readMgr, LoadBalancedDynamoDBRecordReaderContext context,
+                                            Map<String, AttributeValue> lastEvaluatedKey) {
+    super(readMgr, context, 0 /* segment */, lastEvaluatedKey);
   }
 
   @Override
-  protected AbstractRecordReadRequest buildNextReadRequest(PageResults<Map<String,
+  protected LoadBalancedAbstractRecordReadRequest buildNextReadRequest(PageResults<Map<String,
       AttributeValue>> pageResults) {
-    return new ScanRecordReadRequest(readMgr, context, segment, pageResults.lastEvaluatedKey);
+    return new LoadBalancedQueryRecordReadRequest(readMgr, context, pageResults.lastEvaluatedKey);
   }
 
   @Override
   protected PageResults<Map<String, AttributeValue>> fetchPage(RequestLimit lim) {
     // Read from DynamoDB
-    RetryResult<ScanResult> retryResult = context.getClient().scanTable(tableName, null, segment,
-        context.getSplit().getTotalSegments(), lastEvaluatedKey, lim.items, context.getReporter());
+    RetryResult<QueryResult> retryResult = context.getClient().queryTable(tableName, context
+        .getSplit().getFilterPushdown(), lastEvaluatedKey, lim.items, context.getReporter());
 
-    ScanResult result = retryResult.result;
+    QueryResult result = retryResult.result;
     int retries = retryResult.retries;
 
-    double consumedCapacityUnits = 0.0;
-    if (result.getConsumedCapacity() != null) {
-      consumedCapacityUnits = result.getConsumedCapacity().getCapacityUnits();
-    }
-    return new PageResults<>(result.getItems(), result.getLastEvaluatedKey(), consumedCapacityUnits,
-        retries);
+    return new PageResults<>(result.getItems(), result.getLastEvaluatedKey(), result
+        .getConsumedCapacity().getCapacityUnits(), retries);
   }
 }

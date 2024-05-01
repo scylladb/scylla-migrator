@@ -14,7 +14,7 @@
 package org.apache.hadoop.dynamodb.preader;
 
 import com.amazonaws.services.dynamodbv2.model.AttributeValue;
-import org.apache.hadoop.dynamodb.DynamoDBClient;
+import org.apache.hadoop.dynamodb.LoadBalancedDynamoDBClient;
 import org.apache.hadoop.dynamodb.split.DynamoDBSplit;
 import org.apache.hadoop.mapred.InputSplit;
 import org.apache.hadoop.mapred.JobConf;
@@ -23,12 +23,12 @@ import org.apache.hadoop.mapred.Reporter;
 import java.util.Collection;
 import java.util.Map;
 
-public class DynamoDBRecordReaderContext {
+public class LoadBalancedDynamoDBRecordReaderContext {
 
   private DynamoDBSplit split;
   private JobConf conf;
   private Reporter reporter;
-  private DynamoDBClient client;
+  private LoadBalancedDynamoDBClient client;
   private Collection<String> attributes;
   private double averageItemSize;
   private PageResultMultiplexer<Map<String, AttributeValue>> pageMux;
@@ -73,11 +73,11 @@ public class DynamoDBRecordReaderContext {
     this.reporter = reporter;
   }
 
-  public DynamoDBClient getClient() {
+  public LoadBalancedDynamoDBClient getClient() {
     return client;
   }
 
-  public void setClient(DynamoDBClient client) {
+  public void setClient(LoadBalancedDynamoDBClient client) {
     this.client = client;
   }
 

@@ -20,10 +20,10 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Random;
 
-public class ScanReadManager extends AbstractReadManager {
+public class LoadBalancedScanReadManager extends LoadBalancedAbstractReadManager {
 
-  public ScanReadManager(RateController rateController, AbstractTimeSource time,
-      DynamoDBRecordReaderContext context) {
+  public LoadBalancedScanReadManager(RateController rateController, AbstractTimeSource time,
+                                     LoadBalancedDynamoDBRecordReaderContext context) {
     super(rateController, time, context);
   }
 
@@ -47,7 +47,7 @@ public class ScanReadManager extends AbstractReadManager {
 
     // Queue up segment scan requests
     for (Integer segment : shuffleSgments) {
-      enqueueReadRequestToTail(new ScanRecordReadRequest(this, context, segment, null /*
+      enqueueReadRequestToTail(new LoadBalancedScanRecordReadRequest(this, context, segment, null /*
       lastEvaluatedKey */));
     }
   }

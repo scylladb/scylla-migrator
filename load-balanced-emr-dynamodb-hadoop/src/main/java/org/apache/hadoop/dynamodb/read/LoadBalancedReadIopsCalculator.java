@@ -17,17 +17,17 @@ import com.amazonaws.services.dynamodbv2.model.ProvisionedThroughputDescription;
 import com.amazonaws.services.dynamodbv2.model.TableDescription;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.dynamodb.DynamoDBClient;
 import org.apache.hadoop.dynamodb.DynamoDBConstants;
 import org.apache.hadoop.dynamodb.IopsCalculator;
+import org.apache.hadoop.dynamodb.LoadBalancedDynamoDBClient;
 import org.apache.hadoop.mapred.JobClient;
 import org.apache.hadoop.mapred.JobConf;
 
-public class ReadIopsCalculator implements IopsCalculator {
+public class LoadBalancedReadIopsCalculator implements IopsCalculator {
 
-  private static final Log log = LogFactory.getLog(ReadIopsCalculator.class);
+  private static final Log log = LogFactory.getLog(LoadBalancedReadIopsCalculator.class);
 
-  private final DynamoDBClient dynamoDBClient;
+  private final LoadBalancedDynamoDBClient dynamoDBClient;
   private final JobClient jobClient;
   private final JobConf jobConf;
   private final String tableName;
@@ -36,8 +36,8 @@ public class ReadIopsCalculator implements IopsCalculator {
   private final int totalSegments;
   private final int localSegments;
 
-  public ReadIopsCalculator(JobClient jobClient, DynamoDBClient dynamoDBClient, String tableName,
-                            int totalSegments, int localSegments) {
+  public LoadBalancedReadIopsCalculator(JobClient jobClient, LoadBalancedDynamoDBClient dynamoDBClient, String tableName,
+                                        int totalSegments, int localSegments) {
     this.jobConf = (JobConf) jobClient.getConf();
     this.jobClient = jobClient;
 

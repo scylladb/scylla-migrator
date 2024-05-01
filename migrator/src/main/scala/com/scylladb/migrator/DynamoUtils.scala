@@ -181,7 +181,9 @@ object DynamoUtils {
     jobConf.set(
       "mapred.output.format.class",
       "org.apache.hadoop.dynamodb.write.LoadBalancedDynamoDBOutputFormat")
-    jobConf.set("mapred.input.format.class", "org.apache.hadoop.dynamodb.read.DynamoDBInputFormat")
+    jobConf.set(
+      "mapred.input.format.class",
+      "org.apache.hadoop.dynamodb.read.LoadBalancedDynamoDBInputFormat")
   }
 
   def tableThroughput(tableDesc: Option[TableDescription]): Option[String] = {

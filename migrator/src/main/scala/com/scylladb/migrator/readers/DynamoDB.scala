@@ -5,7 +5,7 @@ import com.scylladb.migrator.DynamoUtils
 import com.scylladb.migrator.DynamoUtils.{ setDynamoDBJobConf, setOptionalConf }
 import com.scylladb.migrator.config.{ AWSCredentials, DynamoDBEndpoint, SourceSettings }
 import org.apache.hadoop.dynamodb.{ DynamoDBConstants, DynamoDBItemWritable }
-import org.apache.hadoop.dynamodb.read.DynamoDBInputFormat
+import org.apache.hadoop.dynamodb.read.LoadBalancedDynamoDBInputFormat
 import org.apache.hadoop.io.Text
 import org.apache.hadoop.mapred.JobConf
 import org.apache.spark.rdd.RDD
@@ -57,7 +57,7 @@ object DynamoDB {
     val rdd =
       spark.sparkContext.hadoopRDD(
         jobConf,
-        classOf[DynamoDBInputFormat],
+        classOf[LoadBalancedDynamoDBInputFormat],
         classOf[Text],
         classOf[DynamoDBItemWritable])
     (rdd, description)

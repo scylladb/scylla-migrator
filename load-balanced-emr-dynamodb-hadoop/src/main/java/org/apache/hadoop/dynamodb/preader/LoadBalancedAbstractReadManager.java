@@ -29,9 +29,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  * target throughput rate. It will keep track of RCUs achieved and increase or decrease the worker
  * count as necessary.
  */
-public abstract class AbstractReadManager {
+public abstract class LoadBalancedAbstractReadManager {
 
-  protected static final Log log = LogFactory.getLog(AbstractReadManager.class);
+  protected static final Log log = LogFactory.getLog(LoadBalancedAbstractReadManager.class);
 
   // This defines the lower bound of what we try to stay within. Not the same
   // as RateController.MIN_RCU_PER_REQ which defines the absolute smallest
@@ -43,20 +43,20 @@ public abstract class AbstractReadManager {
   private static final int INITIAL_WORKER_COUNT = MIN_WORKER_COUNT;
   private static final int EVALUATION_FREQ_MS = DynamoDBConstants.RATE_CONTROLLER_WINDOW_SIZE_SEC
       * 1000;
-  protected final DynamoDBRecordReaderContext context;
+  protected final LoadBalancedDynamoDBRecordReaderContext context;
   protected final RateController rateController;
   protected final AbstractTimeSource time;
   // In the query case, there is only one read quest.
-  protected final Deque<AbstractRecordReadRequest> readRequestQueue = new ConcurrentLinkedDeque<>();
+  protected final Deque<LoadBalancedAbstractRecordReadRequest> readRequestQueue = new ConcurrentLinkedDeque<>();
   protected final AtomicInteger segmentsRemaining = new AtomicInteger(0);
-  protected final Queue<ReadWorker> workers = new ArrayBlockingQueue<>(MAX_WORKER_COUNT);
+  protected final Queue<LoadBalancedReadWorker> workers = new ArrayBlockingQueue<>(MAX_WORKER_COUNT);
   private final List<Report> reportedStats = new ArrayList<>();
   private final Object reportStatsLock = new Object();
   private final PageResultMultiplexer<Map<String, AttributeValue>> pageMux;
   private long lastEvaluatedTimeNano;
 
-  public AbstractReadManager(RateController rateController, AbstractTimeSource time,
-                             DynamoDBRecordReaderContext context) {
+  public LoadBalancedAbstractReadManager(RateController rateController, AbstractTimeSource time,
+                                         LoadBalancedDynamoDBRecordReaderContext context) {
     this.context = context;
     this.rateController = rateController;
     this.time = time;
@@ -70,15 +70,15 @@ public abstract class AbstractReadManager {
     }
   }
 
-  public void enqueueReadRequestToTail(AbstractRecordReadRequest req) {
+  public void enqueueReadRequestToTail(LoadBalancedAbstractRecordReadRequest req) {
     readRequestQueue.addLast(req);
   }
 
-  public void enqueueReadRequestToHead(AbstractRecordReadRequest req) {
+  public void enqueueReadRequestToHead(LoadBalancedAbstractRecordReadRequest req) {
     readRequestQueue.addFirst(req);
   }
 
-  public AbstractRecordReadRequest dequeueReadRequest() {
+  public LoadBalancedAbstractRecordReadRequest dequeueReadRequest() {
     return readRequestQueue.poll();
   }
 
@@ -181,7 +181,7 @@ public abstract class AbstractReadManager {
   }
 
   protected void addWorker() {
-    ReadWorker worker = new ReadWorker(this, context.getReporter());
+    LoadBalancedReadWorker worker = new LoadBalancedReadWorker(this, context.getReporter());
     if (workers.offer(worker)) {
       worker.start();
     } else {
@@ -197,7 +197,7 @@ public abstract class AbstractReadManager {
     if (!force && workers.size() <= MIN_WORKER_COUNT) {
       log.info("Can't reduce worker count, already at min worker count");
     } else {
-      ReadWorker worker = workers.poll();
+      LoadBalancedReadWorker worker = workers.poll();
       if (worker != null) {
         worker.setAlive(false);
       }

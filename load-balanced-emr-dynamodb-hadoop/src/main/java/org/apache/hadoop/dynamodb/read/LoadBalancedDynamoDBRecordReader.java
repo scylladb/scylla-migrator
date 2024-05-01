@@ -16,13 +16,14 @@ package org.apache.hadoop.dynamodb.read;
 import com.amazonaws.services.dynamodbv2.model.AttributeValue;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.dynamodb.DynamoDBClient;
+import org.apache.hadoop.dynamodb.LoadBalancedDynamoDBClient;
 import org.apache.hadoop.dynamodb.DynamoDBConstants;
 import org.apache.hadoop.dynamodb.DynamoDBItemWritable;
 import org.apache.hadoop.dynamodb.IopsCalculator;
 import org.apache.hadoop.dynamodb.preader.*;
 import org.apache.hadoop.dynamodb.split.DynamoDBSplit;
 import org.apache.hadoop.dynamodb.util.TimeSource;
+import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapred.RecordReader;
 import org.apache.hadoop.mapred.Reporter;
 
@@ -38,26 +39,23 @@ import static org.apache.hadoop.dynamodb.DynamoDBUtil.createJobClient;
  * convertDynamoDBItemToValue with a conversion from the DynamoDB item to the desired value type. As
  * an alternative, you can also use DefaultDynamoDBRecordReader, and do the conversion to a
  * DynamoDBItemWritable inside of the reducer.
- *
- * @param <K> The type of Key that will be passed to the Mapper
- * @param <V> The type of Value that will be passed to the Mapper
  */
-public abstract class AbstractDynamoDBRecordReader<K, V> implements RecordReader<K, V> {
+public class LoadBalancedDynamoDBRecordReader implements RecordReader<Text, DynamoDBItemWritable> {
 
-  private static final Log log = LogFactory.getLog(AbstractDynamoDBRecordReader.class);
+  private static final Log log = LogFactory.getLog(LoadBalancedDynamoDBRecordReader.class);
 
-  protected final DynamoDBClient client;
+  protected final LoadBalancedDynamoDBClient client;
   protected final String tableName;
 
   protected final DynamoDBSplit split;
   protected final long approxTotalItemCount;
   protected final Reporter reporter;
   private final PageResultMultiplexer<Map<String, AttributeValue>> pageMux;
-  private final AbstractReadManager readMgr;
-  private final DynamoDBRecordReaderContext context;
+  private final LoadBalancedAbstractReadManager readMgr;
+  private final LoadBalancedDynamoDBRecordReaderContext context;
   protected volatile long readItemCount;
 
-  public AbstractDynamoDBRecordReader(DynamoDBRecordReaderContext context) {
+  public LoadBalancedDynamoDBRecordReader(LoadBalancedDynamoDBRecordReaderContext context) {
     this.context = context;
     this.client = context.getClient();
     this.tableName = context.getConf().get(DynamoDBConstants.INPUT_TABLE_NAME);
@@ -96,16 +94,26 @@ public abstract class AbstractDynamoDBRecordReader<K, V> implements RecordReader
   }
 
   @Override
-  public boolean next(K key, V value) throws IOException {
+  public boolean next(Text key, DynamoDBItemWritable value) throws IOException {
     reporter.progress();
 
     Map<String, AttributeValue> item = pageMux.next();
     if (item != null) {
-      convertDynamoDBItemToValue(item, value);
+      value.setItem(item);
       return true;
     }
 
     return false;
+  }
+
+  @Override
+  public Text createKey() {
+    return new Text();
+  }
+
+  @Override
+  public DynamoDBItemWritable createValue() {
+    return new DynamoDBItemWritable();
   }
 
   @Override
@@ -123,25 +131,11 @@ public abstract class AbstractDynamoDBRecordReader<K, V> implements RecordReader
     pageMux.setDraining(true);
   }
 
-  protected void convertDynamoDBItemToValue(Map<String, AttributeValue> item, V value) {
-    DynamoDBItemWritable ddbItem = new DynamoDBItemWritable(item);
-    convertDynamoDBItemToValue(ddbItem, value);
-  }
-
-  /**
-   * Convert a DynamoDB item to some value. Note that the nature of this method requires V to have
-   * some form of setter since the converted value must be stored in toValue.
-   *
-   * @param item    The item retrieved from DynamoDB
-   * @param toValue Where the converted item should be stored
-   */
-  protected abstract void convertDynamoDBItemToValue(DynamoDBItemWritable item, V toValue);
-
-  private AbstractReadManager initReadManager() {
+  private LoadBalancedAbstractReadManager initReadManager() {
     // Calculate target rate. Currently this is only done at task startup
     // time, but we could have this refresh every x minutes so that changes
     // in table provisioning could be reflected.
-    IopsCalculator iopsCalculator = new ReadIopsCalculator(createJobClient(context.getConf()),
+    IopsCalculator iopsCalculator = new LoadBalancedReadIopsCalculator(createJobClient(context.getConf()),
         client, tableName, split.getTotalSegments(), split.getSegments().size());
     double targetRate = iopsCalculator.calculateTargetIops();
 
@@ -152,9 +146,9 @@ public abstract class AbstractDynamoDBRecordReader<K, V> implements RecordReader
         .RATE_CONTROLLER_WINDOW_SIZE_SEC, context.getAverageItemSize());
 
     if (isQuery()) {
-      return new QueryReadManager(rateController, time, context);
+      return new LoadBalancedQueryReadManager(rateController, time, context);
     }
-    return new ScanReadManager(rateController, time, context);
+    return new LoadBalancedScanReadManager(rateController, time, context);
   }
 
   private boolean isQuery() {

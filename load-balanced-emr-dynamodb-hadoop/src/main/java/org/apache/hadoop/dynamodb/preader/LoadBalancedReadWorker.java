@@ -21,19 +21,19 @@ import org.apache.hadoop.mapred.Reporter;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class ReadWorker extends Thread {
+public class LoadBalancedReadWorker extends Thread {
 
   private static final int SLEEP_TIME_MS = 80;
   private static final int SLEEP_JITTER_MS = 40;
 
-  private static final Log log = LogFactory.getLog(ReadWorker.class);
+  private static final Log log = LogFactory.getLog(LoadBalancedReadWorker.class);
   private static final AtomicInteger workerId = new AtomicInteger();
-  protected final AbstractReadManager readMgr;
+  protected final LoadBalancedAbstractReadManager readMgr;
   private final Reporter reporter;
   private final Random rnd = new Random();
   protected volatile boolean alive = true;
 
-  public ReadWorker(AbstractReadManager mgr, Reporter reporter) {
+  public LoadBalancedReadWorker(LoadBalancedAbstractReadManager mgr, Reporter reporter) {
     super("ReadWorker-" + workerId.incrementAndGet());
     this.readMgr = mgr;
     this.reporter = reporter;
@@ -64,7 +64,7 @@ public class ReadWorker extends Thread {
       reporter.progress();
     }
 
-    AbstractRecordReadRequest req = readMgr.dequeueReadRequest();
+    LoadBalancedAbstractRecordReadRequest req = readMgr.dequeueReadRequest();
     if (req == null) {
       log.info("Worker found read request queue empty, sleeping.");
       Thread.sleep(getSleepTime());
