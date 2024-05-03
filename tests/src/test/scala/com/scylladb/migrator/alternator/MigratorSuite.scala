@@ -68,7 +68,7 @@ trait MigratorSuite extends munit.FunSuite {
             .withTableName(name)
             .withKeySchema(new KeySchemaElement("id", "HASH"))
             .withAttributeDefinitions(new AttributeDefinition("id", "S"))
-            .withProvisionedThroughput(new ProvisionedThroughput(5L, 5L))
+            .withProvisionedThroughput(new ProvisionedThroughput(25L, 25L))
         sourceDDb.createTable(createTableRequest)
         // TODO Replace with “waiters” after we upgrade the AWS SDK
         Thread.sleep(5000)

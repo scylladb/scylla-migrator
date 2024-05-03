@@ -40,7 +40,7 @@ object AlternatorMigrator {
       if (target.streamChanges && target.skipInitialSnapshotTransfer.contains(true)) {
         log.info("Skip transferring table snapshot")
       } else {
-        writers.DynamoDB.writeRDD(target, renames, sourceRDD, Some(targetTableDesc))
+        writers.DynamoDB.writeRDD(target, renames, sourceRDD, targetTableDesc)
         log.info("Done transferring table snapshot")
       }
 

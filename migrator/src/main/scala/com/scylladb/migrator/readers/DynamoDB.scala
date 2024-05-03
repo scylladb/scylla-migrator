@@ -26,10 +26,9 @@ object DynamoDB {
           source.maxMapTasks,
           source.credentials)
         jobConf.set(DynamoDBConstants.INPUT_TABLE_NAME, source.table)
-        setOptionalConf(
-          jobConf,
-          DynamoDBConstants.READ_THROUGHPUT,
-          DynamoUtils.tableThroughput(Option(description)))
+        val readThroughput =
+          source.readThroughput.getOrElse(DynamoUtils.tableReadThroughput(description))
+        jobConf.set(DynamoDBConstants.READ_THROUGHPUT, readThroughput.toString)
         setOptionalConf(
           jobConf,
           DynamoDBConstants.THROUGHPUT_READ_PERCENT,
