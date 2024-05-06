@@ -43,25 +43,12 @@ object AlternatorValidator {
       targetSettings.endpoint,
       targetSettings.credentials,
       targetSettings.region,
-      targetSettings.table
-    ) { (jobConf, targetTableDesc) =>
-      setDynamoDBJobConf(
-        jobConf,
-        targetSettings.region,
-        targetSettings.endpoint,
-        targetSettings.scanSegments,
-        targetSettings.maxMapTasks,
-        targetSettings.credentials)
-      jobConf.set(DynamoDBConstants.INPUT_TABLE_NAME, targetSettings.table)
-      jobConf.set(DynamoDBConstants.ITEM_COUNT, targetTableDesc.getItemCount.toString)
-      jobConf.set(DynamoDBConstants.AVG_ITEM_SIZE,
-        (targetTableDesc.getTableSizeBytes / targetTableDesc.getItemCount).toString)
-      jobConf.set(
-        DynamoDBConstants.READ_THROUGHPUT,
-        sourceSettings.readThroughput
-          .getOrElse(DynamoUtils.tableReadThroughput(targetTableDesc))
-          .toString)
-    }
+      targetSettings.table,
+      targetSettings.scanSegments,
+      targetSettings.maxMapTasks,
+      readThroughput        = None,
+      throughputReadPercent = None
+    )
 
     // Define some aliases to prevent the Spark engine to try to serialize the whole object graph
     val renamedColumn = config.renamesMap
