@@ -45,6 +45,12 @@ object DynamoDB {
       .buildDynamoClient(endpoint, credentials, region)
       .describeTable(table)
       .getTable
+    val maybeItemCount = Option(description.getItemCount).map(_.toLong)
+    val maybeAvgItemSize =
+      for {
+        itemCount <- maybeItemCount
+        tableSize <- Option(description.getTableSizeBytes)
+      } yield tableSize / itemCount
 
     val jobConf = new JobConf(spark.sparkContext.hadoopConfiguration)
 
@@ -57,10 +63,8 @@ object DynamoDB {
       credentials
     )
     jobConf.set(DynamoDBConstants.INPUT_TABLE_NAME, table)
-    jobConf.set(DynamoDBConstants.ITEM_COUNT, description.getItemCount.toString)
-    jobConf.set(
-      DynamoDBConstants.AVG_ITEM_SIZE,
-      (description.getTableSizeBytes / description.getItemCount).toString)
+    setOptionalConf(jobConf, DynamoDBConstants.ITEM_COUNT, maybeItemCount.map(_.toString))
+    setOptionalConf(jobConf, DynamoDBConstants.AVG_ITEM_SIZE, maybeAvgItemSize.map(_.toString))
     jobConf.set(
       DynamoDBConstants.READ_THROUGHPUT,
       readThroughput
