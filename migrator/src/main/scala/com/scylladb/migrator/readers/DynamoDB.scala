@@ -26,6 +26,10 @@ object DynamoDB {
           source.maxMapTasks,
           source.credentials)
         jobConf.set(DynamoDBConstants.INPUT_TABLE_NAME, source.table)
+        jobConf.set(DynamoDBConstants.ITEM_COUNT,
+          description.getItemCount.toString)
+        jobConf.set(DynamoDBConstants.AVG_ITEM_SIZE,
+          (description.getTableSizeBytes / description.getItemCount).toString)
         val readThroughput =
           source.readThroughput.getOrElse(DynamoUtils.tableReadThroughput(description))
         jobConf.set(DynamoDBConstants.READ_THROUGHPUT, readThroughput.toString)

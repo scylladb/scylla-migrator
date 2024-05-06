@@ -53,6 +53,9 @@ object AlternatorValidator {
         targetSettings.maxMapTasks,
         targetSettings.credentials)
       jobConf.set(DynamoDBConstants.INPUT_TABLE_NAME, targetSettings.table)
+      jobConf.set(DynamoDBConstants.ITEM_COUNT, targetTableDesc.getItemCount.toString)
+      jobConf.set(DynamoDBConstants.AVG_ITEM_SIZE,
+        (targetTableDesc.getTableSizeBytes / targetTableDesc.getItemCount).toString)
       jobConf.set(
         DynamoDBConstants.READ_THROUGHPUT,
         sourceSettings.readThroughput
