@@ -1,7 +1,8 @@
 package com.scylladb.migrator.writers
 
 import com.amazonaws.services.dynamodbv2.model.TableDescription
-import com.scylladb.migrator.DynamoUtils.{ setDynamoDBJobConf, setOptionalConf, tableThroughput }
+import com.scylladb.migrator.DynamoUtils
+import com.scylladb.migrator.DynamoUtils.{ setDynamoDBJobConf, setOptionalConf }
 import com.scylladb.migrator.config.{ Rename, TargetSettings }
 import org.apache.hadoop.dynamodb.{ DynamoDBConstants, DynamoDBItemWritable }
 import org.apache.hadoop.io.Text
@@ -14,7 +15,7 @@ object DynamoDB {
   def writeRDD(target: TargetSettings.DynamoDB,
                renames: List[Rename],
                rdd: RDD[(Text, DynamoDBItemWritable)],
-               targetTableDesc: Option[TableDescription])(implicit spark: SparkSession): Unit = {
+               targetTableDesc: TableDescription)(implicit spark: SparkSession): Unit = {
 
     val jobConf = new JobConf(spark.sparkContext.hadoopConfiguration)
 
@@ -26,7 +27,9 @@ object DynamoDB {
       target.maxMapTasks,
       target.credentials)
     jobConf.set(DynamoDBConstants.OUTPUT_TABLE_NAME, target.table)
-    setOptionalConf(jobConf, DynamoDBConstants.WRITE_THROUGHPUT, tableThroughput(targetTableDesc))
+    val writeThroughput =
+      target.writeThroughput.getOrElse(DynamoUtils.tableWriteThroughput(targetTableDesc))
+    jobConf.set(DynamoDBConstants.WRITE_THROUGHPUT, writeThroughput.toString)
     setOptionalConf(
       jobConf,
       DynamoDBConstants.THROUGHPUT_WRITE_PERCENT,

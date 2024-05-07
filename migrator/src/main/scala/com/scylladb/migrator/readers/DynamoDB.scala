@@ -16,44 +16,65 @@ object DynamoDB {
   def readRDD(
     spark: SparkSession,
     source: SourceSettings.DynamoDB): (RDD[(Text, DynamoDBItemWritable)], TableDescription) =
-    readRDD(spark, source.endpoint, source.credentials, source.region, source.table) {
-      (jobConf, description) =>
-        setDynamoDBJobConf(
-          jobConf,
-          source.region,
-          source.endpoint,
-          source.scanSegments,
-          source.maxMapTasks,
-          source.credentials)
-        jobConf.set(DynamoDBConstants.INPUT_TABLE_NAME, source.table)
-        setOptionalConf(
-          jobConf,
-          DynamoDBConstants.READ_THROUGHPUT,
-          DynamoUtils.tableThroughput(Option(description)))
-        setOptionalConf(
-          jobConf,
-          DynamoDBConstants.THROUGHPUT_READ_PERCENT,
-          source.throughputReadPercent.map(_.toString))
-    }
+    readRDD(
+      spark,
+      source.endpoint,
+      source.credentials,
+      source.region,
+      source.table,
+      source.scanSegments,
+      source.maxMapTasks,
+      source.readThroughput,
+      source.throughputReadPercent
+    )
 
   /**
-    * A lower-level overload of `readRDD` that expects the caller to fully configure the Hadoop JobConf
-    * with the provided `configureJobConf` parameter.
+    * Overload of `readRDD` that does not depend on `SourceSettings.DynamoDB`
     */
-  def readRDD(spark: SparkSession,
-              endpoint: Option[DynamoDBEndpoint],
-              credentials: Option[AWSCredentials],
-              region: Option[String],
-              table: String)(
-    configureJobConf: (JobConf, TableDescription) => Unit
-  ): (RDD[(Text, DynamoDBItemWritable)], TableDescription) = {
+  def readRDD(
+    spark: SparkSession,
+    endpoint: Option[DynamoDBEndpoint],
+    credentials: Option[AWSCredentials],
+    region: Option[String],
+    table: String,
+    scanSegments: Option[Int],
+    maxMapTasks: Option[Int],
+    readThroughput: Option[Int],
+    throughputReadPercent: Option[Float]): (RDD[(Text, DynamoDBItemWritable)], TableDescription) = {
     val description = DynamoUtils
       .buildDynamoClient(endpoint, credentials, region)
       .describeTable(table)
       .getTable
+    val maybeItemCount = Option(description.getItemCount).map(_.toLong)
+    val maybeAvgItemSize =
+      for {
+        itemCount <- maybeItemCount
+        tableSize <- Option(description.getTableSizeBytes)
+      } yield tableSize / itemCount
 
     val jobConf = new JobConf(spark.sparkContext.hadoopConfiguration)
-    configureJobConf(jobConf, description)
+
+    setDynamoDBJobConf(
+      jobConf,
+      region,
+      endpoint,
+      scanSegments,
+      maxMapTasks,
+      credentials
+    )
+    jobConf.set(DynamoDBConstants.INPUT_TABLE_NAME, table)
+    setOptionalConf(jobConf, DynamoDBConstants.ITEM_COUNT, maybeItemCount.map(_.toString))
+    setOptionalConf(jobConf, DynamoDBConstants.AVG_ITEM_SIZE, maybeAvgItemSize.map(_.toString))
+    jobConf.set(
+      DynamoDBConstants.READ_THROUGHPUT,
+      readThroughput
+        .getOrElse(DynamoUtils.tableReadThroughput(description))
+        .toString)
+    setOptionalConf(
+      jobConf,
+      DynamoDBConstants.THROUGHPUT_READ_PERCENT,
+      throughputReadPercent.map(_.toString))
+
     val rdd =
       spark.sparkContext.hadoopRDD(
         jobConf,

@@ -88,7 +88,7 @@ object DynamoStreamReplication {
         log.info("No changes to apply")
       }
 
-      DynamoDB.writeRDD(target, renames, rdd, Some(targetTableDesc))(spark)
+      DynamoDB.writeRDD(target, renames, rdd, targetTableDesc)(spark)
     }
 
 }

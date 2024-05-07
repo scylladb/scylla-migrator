@@ -1,10 +1,10 @@
 package com.scylladb.migrator.alternator
 
 import com.amazonaws.services.dynamodbv2.model.AttributeValue
-import com.scylladb.migrator.DynamoUtils.{ setDynamoDBJobConf, setOptionalConf, tableThroughput }
+import com.scylladb.migrator.DynamoUtils.setDynamoDBJobConf
 import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
 import com.scylladb.migrator.validation.RowComparisonFailure
-import com.scylladb.migrator.readers
+import com.scylladb.migrator.{ readers, DynamoUtils }
 import org.apache.hadoop.dynamodb.DynamoDBConstants
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
@@ -43,21 +43,12 @@ object AlternatorValidator {
       targetSettings.endpoint,
       targetSettings.credentials,
       targetSettings.region,
-      targetSettings.table
-    ) { (jobConf, targetTableDesc) =>
-      setDynamoDBJobConf(
-        jobConf,
-        targetSettings.region,
-        targetSettings.endpoint,
-        targetSettings.scanSegments,
-        targetSettings.maxMapTasks,
-        targetSettings.credentials)
-      jobConf.set(DynamoDBConstants.INPUT_TABLE_NAME, targetSettings.table)
-      setOptionalConf(
-        jobConf,
-        DynamoDBConstants.READ_THROUGHPUT,
-        tableThroughput(Option(targetTableDesc)))
-    }
+      targetSettings.table,
+      targetSettings.scanSegments,
+      targetSettings.maxMapTasks,
+      readThroughput        = None,
+      throughputReadPercent = None
+    )
 
     // Define some aliases to prevent the Spark engine to try to serialize the whole object graph
     val renamedColumn = config.renamesMap

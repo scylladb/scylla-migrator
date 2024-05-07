@@ -7,9 +7,11 @@ import com.amazonaws.services.dynamodbv2.{
   AmazonDynamoDBStreamsClientBuilder
 }
 import com.amazonaws.services.dynamodbv2.model.{
+  BillingMode,
   CreateTableRequest,
   DescribeStreamRequest,
   ProvisionedThroughput,
+  ProvisionedThroughputDescription,
   ResourceNotFoundException,
   StreamSpecification,
   StreamViewType,
@@ -184,13 +186,43 @@ object DynamoUtils {
     jobConf.set("mapred.input.format.class", "org.apache.hadoop.dynamodb.read.DynamoDBInputFormat")
   }
 
-  def tableThroughput(tableDesc: Option[TableDescription]): Option[String] = {
-    val provisionedThroughput = tableDesc.flatMap(p => Option(p.getProvisionedThroughput))
-    val readThroughput = provisionedThroughput.flatMap(p => Option(p.getReadCapacityUnits))
-    val writeThroughput = provisionedThroughput.flatMap(p => Option(p.getWriteCapacityUnits))
+  /**
+    * @return The read throughput (in bytes per second) of the
+    *         provided table description.
+    *         If the table billing mode is PROVISIONED, it returns the
+    *         table RCU multiplied by the number of bytes per read
+    *         capacity unit. Otherwise (e.g. ,in case of on-demand
+    *         billing mode), it returns
+    *         [[DynamoDBConstants.DEFAULT_CAPACITY_FOR_ON_DEMAND]].
+    */
+  def tableReadThroughput(description: TableDescription): Long =
+    tableThroughput(
+      description,
+      DynamoDBConstants.BYTES_PER_READ_CAPACITY_UNIT.longValue(),
+      _.getReadCapacityUnits)
 
-    if (readThroughput.isEmpty || writeThroughput.isEmpty) Some("25")
-    else None
-  }
+  /**
+    * @return The write throughput (in bytes per second) of the
+    *         provided table description.
+    *         If the table billing mode is PROVISIONED, it returns the
+    *         table WCU multiplied by the number of bytes per write
+    *         capacity unit. Otherwise (e.g. ,in case of on-demand
+    *         billing mode), it returns
+    *         [[DynamoDBConstants.DEFAULT_CAPACITY_FOR_ON_DEMAND]].
+    */
+  def tableWriteThroughput(description: TableDescription): Long =
+    tableThroughput(
+      description,
+      DynamoDBConstants.BYTES_PER_WRITE_CAPACITY_UNIT.longValue(),
+      _.getWriteCapacityUnits)
+
+  private def tableThroughput(description: TableDescription,
+                              bytesPerCapacityUnit: Long,
+                              capacityUnits: ProvisionedThroughputDescription => Long): Long =
+    if (description.getBillingModeSummary == null || description.getBillingModeSummary.getBillingMode == BillingMode.PROVISIONED.toString) {
+      capacityUnits(description.getProvisionedThroughput) * bytesPerCapacityUnit
+    } else {
+      DynamoDBConstants.DEFAULT_CAPACITY_FOR_ON_DEMAND * bytesPerCapacityUnit
+    }
 
 }

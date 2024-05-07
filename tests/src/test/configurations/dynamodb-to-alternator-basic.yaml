@@ -7,7 +7,6 @@ source:
   credentials:
     accessKey: dummy
     secretKey: dummy
-  maxMapTasks: 1
 
 target:
   type: dynamodb
@@ -18,7 +17,6 @@ target:
   credentials:
     accessKey: dummy
     secretKey: dummy
-  maxMapTasks: 1
   streamChanges: false
 
 renames: []
