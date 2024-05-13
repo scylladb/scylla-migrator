@@ -37,13 +37,15 @@ lazy val migrator = (project in file("migrator")).settings(
   libraryDependencies ++= Seq(
     "org.apache.spark" %% "spark-streaming"      % sparkVersion % "provided",
     "org.apache.spark" %% "spark-sql"            % sparkVersion % "provided",
-    "com.amazonaws"    % "aws-java-sdk-sts"      % awsSdkVersion,
     "com.amazonaws"    % "aws-java-sdk-dynamodb" % awsSdkVersion,
+    "com.amazonaws"    % "aws-java-sdk-s3"       % awsSdkVersion,
+    "com.amazonaws"    % "aws-java-sdk-sts"      % awsSdkVersion,
     ("com.amazonaws" % "dynamodb-streams-kinesis-adapter" % dynamodbStreamsKinesisAdapterVersion)
       .excludeAll(InclExclRule("com.fasterxml.jackson.core")),
     "com.amazon.emr" % "emr-dynamodb-hadoop" % "4.16.0",
-    "io.circe"       %% "circe-yaml"         % "0.10.1",
     "io.circe"       %% "circe-generic"      % "0.11.1",
+    "io.circe"       %% "circe-parser"       % "0.11.1",
+    "io.circe"       %% "circe-yaml"         % "0.10.1",
   ),
   assembly / assemblyShadeRules := Seq(
     ShadeRule.rename("org.yaml.snakeyaml.**" -> "com.scylladb.shaded.@1").inAll

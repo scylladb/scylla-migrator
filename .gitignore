@@ -11,6 +11,7 @@ project/boot/
 project/plugins/project/
 sbt/*.jar
 mini-complete-example/sbt/*.jar
+.bsp/
 
 # Scala-IDE specific
 .scala_dependencies

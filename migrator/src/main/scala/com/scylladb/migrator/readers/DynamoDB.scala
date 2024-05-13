@@ -42,7 +42,7 @@ object DynamoDB {
     readThroughput: Option[Int],
     throughputReadPercent: Option[Float]): (RDD[(Text, DynamoDBItemWritable)], TableDescription) = {
     val description = DynamoUtils
-      .buildDynamoClient(endpoint, credentials, region)
+      .buildDynamoClient(endpoint, credentials.map(_.toAWSCredentialsProvider), region)
       .describeTable(table)
       .getTable
     val maybeItemCount = Option(description.getItemCount).map(_.toLong)

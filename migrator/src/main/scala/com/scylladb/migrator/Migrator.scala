@@ -40,7 +40,14 @@ object Migrator {
           val sourceDF = readers.Parquet.readDataFrame(spark, parquetSource)
           ScyllaMigrator.migrate(migratorConfig, scyllaTarget, sourceDF)
         case (dynamoSource: SourceSettings.DynamoDB, alternatorTarget: TargetSettings.DynamoDB) =>
-          AlternatorMigrator.migrate(dynamoSource, alternatorTarget, migratorConfig.renames)
+          AlternatorMigrator.migrateFromDynamoDB(
+            dynamoSource,
+            alternatorTarget,
+            migratorConfig.renames)
+        case (
+            s3Source: SourceSettings.DynamoDBS3Export,
+            alternatorTarget: TargetSettings.DynamoDB) =>
+          AlternatorMigrator.migrateFromS3Export(s3Source, alternatorTarget, migratorConfig.renames)
         case _ =>
           sys.error("Unsupported combination of source and target.")
       }

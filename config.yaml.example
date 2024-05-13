@@ -88,6 +88,36 @@ source:
 #   # how many tasks per executor?
 #   maxMapTasks: 1
 
+# Example for loading from a DynamoDB S3 export (see https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/S3DataExport.Output.html)
+# source:
+#   type: dynamodb-s3-export
+#   bucket: <bucket-name>
+#   # Key of the `manifest-summary.json` object in the bucket
+#   manifestKey: <manifest-summary-key>
+#   # Key schema and attribute definitions, see https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_TableCreationParameters.html
+#   tableDescription:
+#     attributeDefinitions:
+#       - name: <attribute-name>
+#         type: <attribute-type> (see https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_AttributeDefinition.html)
+#       - ...
+#     keySchema:
+#       - name: <key-name>
+#         type: <key-type> (see https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_KeySchemaElement.html)
+#       - ...
+#
+#   # Optional - load from a custom endpoint:
+#   endpoint:
+#     # Specify the hostname without a protocol
+#     host: <host>
+#     port: <port>
+#   # Optional - specify the region:
+#   region: <region>
+#
+#   # Optional - static credentials:
+#   credentials:
+#     accessKey: <user>
+#     secretKey: <pass>
+
 # Configuration for the database you're copying into
 target:
   type: scylla

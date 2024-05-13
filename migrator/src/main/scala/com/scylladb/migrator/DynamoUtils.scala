@@ -1,9 +1,10 @@
 package com.scylladb.migrator
 
 import com.amazonaws.auth.AWSCredentialsProvider
-import com.amazonaws.client.builder.AwsClientBuilder
 import com.amazonaws.services.dynamodbv2.{
+  AmazonDynamoDB,
   AmazonDynamoDBClientBuilder,
+  AmazonDynamoDBStreams,
   AmazonDynamoDBStreamsClientBuilder
 }
 import com.amazonaws.services.dynamodbv2.model.{
@@ -36,7 +37,10 @@ object DynamoUtils {
   def replicateTableDefinition(sourceDescription: TableDescription,
                                target: TargetSettings.DynamoDB): TableDescription = {
     // If non-existent, replicate
-    val targetClient = buildDynamoClient(target.endpoint, target.credentials, target.region)
+    val targetClient = buildDynamoClient(
+      target.endpoint,
+      target.credentials.map(_.toAWSCredentialsProvider),
+      target.region)
 
     log.info("Checking for table existence at destination")
     val targetDescription = Try(targetClient.describeTable(target.table))
@@ -71,9 +75,15 @@ object DynamoUtils {
   }
 
   def enableDynamoStream(source: SourceSettings.DynamoDB): Unit = {
-    val sourceClient = buildDynamoClient(source.endpoint, source.credentials, source.region)
+    val sourceClient = buildDynamoClient(
+      source.endpoint,
+      source.credentials.map(_.toAWSCredentialsProvider),
+      source.region)
     val sourceStreamsClient =
-      buildDynamoStreamsClient(source.endpoint, source.credentials, source.region)
+      buildDynamoStreamsClient(
+        source.endpoint,
+        source.credentials.map(_.toAWSCredentialsProvider),
+        source.region)
 
     sourceClient
       .updateTable(
@@ -107,38 +117,18 @@ object DynamoUtils {
 
   def buildDynamoClient(endpoint: Option[DynamoDBEndpoint],
                         creds: Option[AWSCredentialsProvider],
-                        region: Option[String]) = {
+                        region: Option[String]): AmazonDynamoDB = {
     val builder = AmazonDynamoDBClientBuilder.standard()
-
-    endpoint.foreach { endpoint =>
-      builder
-        .withEndpointConfiguration(
-          new AwsClientBuilder.EndpointConfiguration(
-            endpoint.renderEndpoint,
-            region.getOrElse("empty")))
-    }
-    creds.foreach(builder.withCredentials)
-    region.foreach(builder.withRegion)
-
-    builder.build()
+    AwsUtils
+      .configureClientBuilder(builder, endpoint, region, creds)
+      .build()
   }
 
   def buildDynamoStreamsClient(endpoint: Option[DynamoDBEndpoint],
                                creds: Option[AWSCredentialsProvider],
-                               region: Option[String]) = {
+                               region: Option[String]): AmazonDynamoDBStreams = {
     val builder = AmazonDynamoDBStreamsClientBuilder.standard()
-
-    endpoint.foreach { endpoint =>
-      builder
-        .withEndpointConfiguration(
-          new AwsClientBuilder.EndpointConfiguration(
-            endpoint.renderEndpoint,
-            region.getOrElse("empty")))
-    }
-    creds.foreach(builder.withCredentials)
-    region.foreach(builder.withRegion)
-
-    builder.build()
+    AwsUtils.configureClientBuilder(builder, endpoint, region, creds).build()
   }
 
   /**
