@@ -183,7 +183,9 @@ object DynamoUtils {
     jobConf.set(
       "mapred.output.format.class",
       "org.apache.hadoop.dynamodb.write.DynamoDBOutputFormat")
-    jobConf.set("mapred.input.format.class", "org.apache.hadoop.dynamodb.read.DynamoDBInputFormat")
+    jobConf.set(
+      "mapred.input.format.class",
+      "org.apache.hadoop.dynamodb.read.CustomDynamoDBInputFormat")
   }
 
   /**
