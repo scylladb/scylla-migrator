@@ -46,7 +46,8 @@ object SourceSettings {
                               tableDescription: DynamoDBS3Export.TableDescription,
                               endpoint: Option[DynamoDBEndpoint],
                               region: Option[String],
-                              credentials: Option[AWSCredentials])
+                              credentials: Option[AWSCredentials],
+                              usePathStyleAccess: Option[Boolean])
       extends SourceSettings
 
   object DynamoDBS3Export {

@@ -41,7 +41,8 @@ class DynamoDBSourceSettingParserTest extends munit.FunSuite {
       ),
       endpoint = None,
       region = None,
-      credentials = None
+      credentials = None,
+      usePathStyleAccess = None
     )
 
     val parsedSettings = parseSourceSettings(config)

@@ -30,21 +30,11 @@ class RenamedItemsTest extends MigratorSuite {
 
     val renamedItem1Data =
       item1Data + ("quux" -> item1Data("foo")) - "foo"
-
-    targetAlternator
-      .getItem(new GetItemRequest(tableName, keys1.asJava))
-      .tap { itemResult =>
-        assertEquals(itemResult.getItem.asScala.toMap, renamedItem1Data)
-      }
+    checkItemWasMigrated(tableName, keys1, renamedItem1Data)
 
     val renamedItem2Data =
       item2Data + ("quux" -> item2Data("foo")) - "foo"
-
-    targetAlternator
-      .getItem(new GetItemRequest(tableName, keys2.asJava))
-      .tap { itemResult =>
-        assertEquals(itemResult.getItem.asScala.toMap, renamedItem2Data)
-      }
+    checkItemWasMigrated(tableName, keys2, renamedItem2Data)
   }
 
 }

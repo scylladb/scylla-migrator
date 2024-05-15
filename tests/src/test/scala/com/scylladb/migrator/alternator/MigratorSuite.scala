@@ -6,6 +6,7 @@ import com.amazonaws.services.dynamodbv2.model._
 import com.amazonaws.services.dynamodbv2.{ AmazonDynamoDB, AmazonDynamoDBClientBuilder }
 
 import scala.util.chaining._
+import scala.collection.JavaConverters._
 
 /**
   * Base class for implementing end-to-end tests.
@@ -42,25 +43,9 @@ trait MigratorSuite extends munit.FunSuite {
     */
   def withTable(name: String): FunFixture[String] = FunFixture(
     setup = { _ =>
-      def deleteTableIfExists(database: AmazonDynamoDB): Unit =
-        try {
-          database.deleteTable(name).ensuring { result =>
-            result.getSdkHttpMetadata.getHttpStatusCode == 200
-          }
-          // Wait for the table to be effectively deleted
-          // TODO After we upgrade the AWS SDK version, we could use “waiters”
-          // https://aws.amazon.com/fr/blogs/developer/using-waiters-in-the-aws-sdk-for-java-2-x/
-          Thread.sleep(5000)
-        } catch {
-          case _: ResourceNotFoundException =>
-            // OK, the table was not existing
-            ()
-          case any: Throwable =>
-            fail(s"Something did not work as expected: ${any}")
-        }
       // Make sure the target database does not contain the table already
-      deleteTableIfExists(sourceDDb)
-      deleteTableIfExists(targetAlternator)
+      deleteTableIfExists(sourceDDb, name)
+      deleteTableIfExists(targetAlternator, name)
       try {
         // Create the table in the source database
         val createTableRequest =
@@ -73,7 +58,7 @@ trait MigratorSuite extends munit.FunSuite {
         // TODO Replace with “waiters” after we upgrade the AWS SDK
         Thread.sleep(5000)
         sourceDDb.describeTable(name).tap { result =>
-          println(s"Table status is ${result.getTable.getTableStatus}")
+          assertEquals(result.getTable.getTableStatus, TableStatus.ACTIVE.toString)
         }
       } catch {
         case any: Throwable =>
@@ -89,5 +74,53 @@ trait MigratorSuite extends munit.FunSuite {
       ()
     }
   )
+
+  /** Delete the table from the provided database instance */
+  def deleteTableIfExists(database: AmazonDynamoDB, name: String): Unit =
+    try {
+      database.deleteTable(name).ensuring { result =>
+        result.getSdkHttpMetadata.getHttpStatusCode == 200
+      }
+      // Wait for the table to be effectively deleted
+      // TODO After we upgrade the AWS SDK version, we could use “waiters”
+      // https://aws.amazon.com/fr/blogs/developer/using-waiters-in-the-aws-sdk-for-java-2-x/
+      Thread.sleep(5000)
+    } catch {
+      case _: ResourceNotFoundException =>
+        // OK, the table was not existing
+        ()
+      case any: Throwable =>
+        fail(s"Something did not work as expected: ${any}")
+    }
+
+  /** Check that the table schema in the target database is the same as in the source database */
+  def checkSchemaWasMigrated(tableName: String): Unit = {
+    val sourceTableDesc = sourceDDb.describeTable(tableName).getTable
+    checkSchemaWasMigrated(
+      tableName,
+      sourceTableDesc.getKeySchema,
+      sourceTableDesc.getAttributeDefinitions
+    )
+  }
+
+  /** Check that the table schema in the target database is equal to the provided schema */
+  def checkSchemaWasMigrated(tableName: String, keySchema: java.util.List[KeySchemaElement], attributeDefinitions: java.util.List[AttributeDefinition]): Unit = {
+    targetAlternator
+      .describeTable(tableName)
+      .getTable
+      .tap { targetTableDesc =>
+        assertEquals(targetTableDesc.getKeySchema, keySchema)
+        assertEquals(targetTableDesc.getAttributeDefinitions, attributeDefinitions)
+      }
+  }
+
+  /** Check that the target database contains the provided item description */
+  def checkItemWasMigrated(tableName: String, itemKey: Map[String, AttributeValue], itemData: Map[String, AttributeValue]): Unit = {
+    targetAlternator
+      .getItem(new GetItemRequest(tableName, itemKey.asJava))
+      .tap { itemResult =>
+        assertEquals(itemResult.getItem.asScala.toMap, itemData)
+      }
+  }
 
 }

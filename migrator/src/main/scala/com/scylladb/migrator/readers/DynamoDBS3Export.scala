@@ -15,22 +15,26 @@ import org.apache.spark.rdd.RDD
 import java.nio.ByteBuffer
 import java.util.Base64
 import java.util.zip.GZIPInputStream
-import scala.collection.JavaConverters._
 import scala.io.Source
 
 object DynamoDBS3Export {
 
   val log = LogManager.getLogger("com.scylladb.migrator.readers.DynamoDBS3Export")
 
-  def buildS3Client(source: SourceSettings.DynamoDBS3Export): AmazonS3 =
-    AwsUtils
-      .configureClientBuilder(
-        AmazonS3ClientBuilder.standard(),
-        source.endpoint,
-        source.region,
-        source.credentials.map(_.toAWSCredentialsProvider)
-      )
-      .build()
+  def buildS3Client(source: SourceSettings.DynamoDBS3Export): AmazonS3 = {
+    val s3ClientBuilder =
+      AwsUtils
+        .configureClientBuilder(
+          AmazonS3ClientBuilder.standard(),
+          source.endpoint,
+          source.region,
+          source.credentials.map(_.toAWSCredentialsProvider)
+        )
+    for (usePathStyleAccess <- source.usePathStyleAccess) {
+      s3ClientBuilder.withPathStyleAccessEnabled(usePathStyleAccess)
+    }
+    s3ClientBuilder.build()
+  }
 
   /**
     * Read the DynamoDB S3 Export data as described here:
@@ -137,36 +141,38 @@ object DynamoDBS3Export {
 
     lazy val attributeValueDecoder: Decoder[AttributeValue] = Decoder.decodeJsonObject.map {
       jsonObject =>
+        import com.scylladb.migrator.AttributeValueUtils._
+
         (jsonObject.toMap.head match {
-          case ("S", value)    => value.as[String].right.map(new AttributeValue().withS(_))
-          case ("N", value)    => value.as[String].right.map(new AttributeValue().withN(_))
-          case ("BOOL", value) => value.as[Boolean].right.map(new AttributeValue().withBOOL(_))
+          case ("S", value)    => value.as[String].right.map(stringValue)
+          case ("N", value)    => value.as[String].right.map(numericalValue)
+          case ("BOOL", value) => value.as[Boolean].right.map(boolValue)
           case ("L", value) =>
             value
               .as(Decoder.decodeArray(attributeValueDecoder, Array.canBuildFrom))
               .right
-              .map(l => new AttributeValue().withL(l: _*))
-          case ("NULL", _)  => Right(new AttributeValue().withNULL(true))
-          case ("B", value) => value.as[ByteBuffer].right.map(new AttributeValue().withB(_))
+              .map(l => listValue(l: _*))
+          case ("NULL", _)  => Right(nullValue)
+          case ("B", value) => value.as[ByteBuffer].right.map(binaryValue)
           case ("M", value) =>
-            value.as(itemDecoder).right.map(m => new AttributeValue().withM(m.asJava))
+            value.as(dataDecoder).right.map(mapValue)
           case ("SS", value) =>
             value
               .as[Array[String]]
               .right
-              .map(ss => new AttributeValue().withSS(ss: _*))
+              .map(ss => stringValues(ss: _*))
           case ("NS", value) =>
             value
               .as[Array[String]]
               .right
-              .map(ns => new AttributeValue().withNS(ns: _*))
+              .map(ns => numericalValues(ns: _*))
           case ("BS", value) =>
-            value.as[Array[ByteBuffer]].right.map(bs => new AttributeValue().withBS(bs: _*))
+            value.as[Array[ByteBuffer]].right.map(byteBuffers => binaryValues(byteBuffers: _*))
           case (tpe, _) => Left(DecodingFailure(s"Unknown item type: ${tpe}", Nil))
         }).fold(error => sys.error(s"Unable to decode AttributeValue: ${error}"), identity)
     }
 
-    val dataDecoder: Decoder[Map[String, AttributeValue]] =
+    lazy val dataDecoder: Decoder[Map[String, AttributeValue]] =
       Decoder.decodeJsonObject.emap { jsonObject =>
         jsonObject.toMap.foldLeft[Either[String, Map[String, AttributeValue]]](Right(Map.empty)) {
           case (acc, (key, value)) =>

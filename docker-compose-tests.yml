@@ -49,6 +49,18 @@ services:
       - "9042:9042"
     command: "--smp 1 --memory 2048M --alternator-port 8000 --alternator-write-isolation only_rmw_uses_lwt"
 
+  s3:
+    image: localstack/localstack:s3-latest
+    ports:
+      - "127.0.0.1:4566:4566"            # LocalStack Gateway
+    environment:
+      - DEBUG=${DEBUG:-0}
+    volumes:
+      - "./tests/docker/s3:/var/lib/localstack"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    networks:
+      - scylla
+
   spark-master:
     image: bde2020/spark-master:2.4.4-hadoop2.7
     container_name: spark-master
