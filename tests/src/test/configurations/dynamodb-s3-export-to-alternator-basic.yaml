@@ -1,0 +1,41 @@
+source:
+  type: dynamodb-s3-export
+  bucket: test-bucket
+  manifestKey: dynamodb-export/AWSDynamoDB/01715685260608-c488b4e1/manifest-summary.json
+  endpoint:
+    host: http://s3
+    port: 4566
+  usePathStyleAccess: true
+  tableDescription:
+    attributeDefinitions:
+      - name: id
+        type: S
+    keySchema:
+      - name: id
+        type: HASH
+
+target:
+  type: dynamodb
+  table: BasicTest
+  endpoint:
+    host: http://scylla
+    port: 8000
+  credentials:
+    accessKey: dummy
+    secretKey: dummy
+  streamChanges: false
+
+renames: []
+
+# Below are unused but mandatory settings
+savepoints:
+  path: /app/savepoints
+  intervalSeconds: 300
+skipTokenRanges: []
+validation:
+  compareTimestamps: true
+  ttlToleranceMillis: 60000
+  writetimeToleranceMillis: 1000
+  failuresToFetch: 100
+  floatingPointTolerance: 0.001
+  timestampMsTolerance: 0

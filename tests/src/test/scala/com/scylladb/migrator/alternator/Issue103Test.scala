@@ -34,16 +34,8 @@ class Issue103Test extends MigratorSuite {
     successfullyPerformMigration("dynamodb-to-alternator-issue-103.yaml")
 
     // Check that both items have been correctly migrated to the target table
-    targetAlternator
-      .getItem(new GetItemRequest(tableName, keys1.asJava))
-      .tap { itemResult =>
-        assertEquals(itemResult.getItem.asScala.toMap, item1Data)
-      }
-    targetAlternator
-      .getItem(new GetItemRequest(tableName, keys2.asJava))
-      .tap { itemResult =>
-        assertEquals(itemResult.getItem.asScala.toMap, item2Data)
-      }
+    checkItemWasMigrated(tableName, keys1, item1Data)
+    checkItemWasMigrated(tableName, keys2, item2Data)
   }
 
 }

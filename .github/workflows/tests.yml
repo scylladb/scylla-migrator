@@ -27,6 +27,7 @@ jobs:
           docker compose -f docker-compose-tests.yml up -d
           .github/wait-for-port.sh 8000 # ScyllaDB Alternator
           .github/wait-for-port.sh 8001 # DynamoDB
+          .github/wait-for-port.sh 4566 # S3
           .github/wait-for-cql.sh scylla
           .github/wait-for-cql.sh cassandra
           .github/wait-for-cql.sh scylla-source
