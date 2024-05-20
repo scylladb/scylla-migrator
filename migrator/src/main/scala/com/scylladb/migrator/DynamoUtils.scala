@@ -16,6 +16,7 @@ import com.amazonaws.services.dynamodbv2.model.{
   StreamSpecification,
   StreamViewType,
   TableDescription,
+  TableStatus,
   UpdateTableRequest
 }
 import com.scylladb.migrator.config.{
@@ -67,6 +68,13 @@ object DynamoUtils {
         log.info(sourceDescription.toString)
         targetClient.createTable(request)
         log.info(s"Table ${target.table} created.")
+
+        var targetTableDesc = targetClient.describeTable(target.table).getTable
+        while (TableStatus.ACTIVE.toString != targetTableDesc.getTableStatus) {
+          log.debug(s"Target table not ready yet. Waiting 1 second.")
+          Thread.sleep(1000)
+          targetTableDesc = targetClient.describeTable(target.table).getTable
+        }
 
         targetClient.describeTable(target.table).getTable
 
