@@ -50,12 +50,17 @@ object DynamoUtils {
           .withTableName(target.table)
           .withKeySchema(sourceDescription.getKeySchema)
           .withAttributeDefinitions(sourceDescription.getAttributeDefinitions)
-          .withProvisionedThroughput(
-            new ProvisionedThroughput(
-              sourceDescription.getProvisionedThroughput.getReadCapacityUnits,
-              sourceDescription.getProvisionedThroughput.getWriteCapacityUnits
+        if (sourceDescription.getProvisionedThroughput.getReadCapacityUnits != 0L && sourceDescription.getProvisionedThroughput.getWriteCapacityUnits != 0) {
+          request
+            .setProvisionedThroughput(
+              new ProvisionedThroughput(
+                sourceDescription.getProvisionedThroughput.getReadCapacityUnits,
+                sourceDescription.getProvisionedThroughput.getWriteCapacityUnits
+              )
             )
-          )
+        } else {
+          request.setBillingMode(BillingMode.PAY_PER_REQUEST.toString)
+        }
 
         log.info(
           s"Table ${target.table} does not exist at destination - creating it according to definition:")
