@@ -17,6 +17,7 @@ import com.amazonaws.services.dynamodbv2.model.{
   StreamSpecification,
   StreamViewType,
   TableDescription,
+  TableStatus,
   UpdateTableRequest
 }
 import com.scylladb.migrator.config.{
@@ -54,18 +55,30 @@ object DynamoUtils {
           .withTableName(target.table)
           .withKeySchema(sourceDescription.getKeySchema)
           .withAttributeDefinitions(sourceDescription.getAttributeDefinitions)
-          .withProvisionedThroughput(
-            new ProvisionedThroughput(
-              sourceDescription.getProvisionedThroughput.getReadCapacityUnits,
-              sourceDescription.getProvisionedThroughput.getWriteCapacityUnits
+        if (sourceDescription.getProvisionedThroughput.getReadCapacityUnits != 0L && sourceDescription.getProvisionedThroughput.getWriteCapacityUnits != 0) {
+          request
+            .setProvisionedThroughput(
+              new ProvisionedThroughput(
+                sourceDescription.getProvisionedThroughput.getReadCapacityUnits,
+                sourceDescription.getProvisionedThroughput.getWriteCapacityUnits
+              )
             )
-          )
+        } else {
+          request.setBillingMode(BillingMode.PAY_PER_REQUEST.toString)
+        }
 
         log.info(
           s"Table ${target.table} does not exist at destination - creating it according to definition:")
         log.info(sourceDescription.toString)
         targetClient.createTable(request)
         log.info(s"Table ${target.table} created.")
+
+        var targetTableDesc = targetClient.describeTable(target.table).getTable
+        while (TableStatus.ACTIVE.toString != targetTableDesc.getTableStatus) {
+          log.debug(s"Target table not ready yet. Waiting 1 second.")
+          Thread.sleep(1000)
+          targetTableDesc = targetClient.describeTable(target.table).getTable
+        }
 
         targetClient.describeTable(target.table).getTable
 

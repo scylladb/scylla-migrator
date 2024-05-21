@@ -49,6 +49,7 @@ object DynamoDB {
     val maybeAvgItemSize =
       for {
         itemCount <- maybeItemCount
+        if itemCount != 0L
         tableSize <- Option(description.getTableSizeBytes)
       } yield tableSize / itemCount
 
