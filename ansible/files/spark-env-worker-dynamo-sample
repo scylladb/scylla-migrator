@@ -1,0 +1,16 @@
+export SPARK_PUBLIC_DNS=spark-master
+export SPARK_MASTER_HOST={{spark.master.ansible_facts.default_ipv4.addres}}
+#######################################################################################################
+# This was for a ~3TB migration with ~26B items
+# Used i4i.4xLarge workers, each instance has 128G memory, 16vCPU
+#
+# By using multiple workers on an instance, we can control the velocity
+# of the migration by having multiple workers.  While it is set to 8 in this file,
+# we started the migration with 4, and as DynamoDB auto-scaled, we added workers
+# to the peak of 8.
+#######################################################################################################
+export CORES=12                                         # used 
+export MEMORY=24G                                       # 12core * 2g = 24
+export SPARK_WORKER_INSTANCES=8                         # this is how many workers will be 
+                                                        # started/stopped on the node.
+export SLAVESIZE="-c $CORES -m $MEMORY"

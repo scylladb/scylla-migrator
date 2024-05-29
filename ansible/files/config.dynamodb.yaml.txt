@@ -1,0 +1,69 @@
+---
+source:
+  type: dynamodb
+  table: "YOUR_TABLE_NAME"
+  # if using DynamoDB local - specify endpoint with http:// prefix
+  # Otherwise, if using aws configure, leave commented out and it will use that
+  #endpoint:
+  #  host: http://dynamo-local-db-source
+  #  port: 8000
+  #credentials:
+  #  accessKey: empty
+  #  secretKey: empty
+  ##############################################################################
+  # scan segments is how many work chunks to create.  You want work chunks
+  # to be big enough that they are worth the overhead of their creation.
+  # If the table is small enough, I would consider lowering to 1!
+  #
+  # You can use dynamoDB describe table to get an estimated number of items.
+  # for a 28B item table, we set scanSegments to 28,000 - then as we tracked
+  # progress in http://spark-master:4040, which shows how many segments completed
+  # and how many left, we knew each segment completed was ~1m items...
+  # 1m~ items was plenty to justify segment creation cost.
+  ##############################################################################
+  scanSegments: 4000
+  # Near as I can tell, these read throughput settings DID NOTHING
+  # on on-demand and systems with auto-scale on.  DynamoDB just
+  # kept raising the provisioning limit and didn't honor throughput cap
+  #readThroughput: 1000
+  #throughputReadPercent: 0.5
+  maxMapTasks: 2
+  streamChanges: false
+  # if using DynamoDB local - specify endpoint with http:// prefix
+  # Otherwise, if using aws configure, leave commented out
+target:
+  type: dynamodb
+  table: "redacted-table-name"
+  # Specify endpoint with http:// prefix
+  # I don't specify region, as I use aws configure to set it.
+  # specifying hostname of scylla - this requires that /etc/hosts be set...
+  endpoint:
+    host: http://YOUR_ALTERNATOR_INSTANCE
+    port: 8000
+  credentials:
+    accessKey: empty
+    secretKey: empty
+    #scanSegments: 10000
+  maxMapTasks: 1
+  streamChanges: false
+savepoints:
+  # Where should savepoint configurations be stored? This is a path on the host running
+  # the Spark driver - usually the Spark master.
+  path: /app/savepoints
+  # Interval in which savepoints will be created
+  intervalSeconds: 300
+renames: []
+skipTokenRanges: []
+validation:
+  # Should WRITETIMEs and TTLs be compared?
+  compareTimestamps: false
+  # What difference should we allow between TTLs?
+  ttlToleranceMillis: 60000
+  # What difference should we allow between WRITETIMEs?
+  writetimeToleranceMillis: 1000
+  # How many differences to fetch and print
+  failuresToFetch: 100
+  # What difference should we allow between floating point numbers?
+  floatingPointTolerance: 0.001
+  # What difference in ms should we allow between timestamps?
+  timestampMsTolerance: 0
