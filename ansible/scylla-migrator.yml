@@ -203,10 +203,4 @@
     - debug: msg="{{ build.stdout }}"
 
     - debug: msg="{{ build.stderr }}"
-
-################################################################
-# For convenience - move demo configs to scylla-migrator
-################################################################
-#cp *.sh $HOME/scylla-migrator/
-#cp spark-env $HOME/scylla-migrator
-#cp config.yaml $HOME/scylla-migrator/demo-config.yaml
+...
