@@ -1,0 +1,18 @@
+##################################################################################################################
+# As a scenarion, for a ~3TB migration
+# Used x2iedn.2xlarge master.  The master requires significant memory.  Did not spawn workers on master instance.
+# Used i4i.4xLarge workers, each instance has 128G memory, 16vCPU
+#
+# By using multiple workers on an instance, we can control the velocity
+# of the migration by having multiple workers.  While it is set to 8 in this file,
+# we started the migration with 4, and as DynamoDB auto-scaled, we added workers
+# to the peak of 8.
+##################################################################################################################
+
+export CORES=0                                          # 0 cores for slaves on master node
+export MEMORY=0G                                        # no memory, as no workers on master node.
+export SPARK_WORKER_INSTANCES=0                         # no workers on master node
+export SPARK_MASTER_HOST={{spark.master.ansible_facts.default_ipv4.addres}}
+export SPARK_DAEMON_MEMORY=4G                           # memory for master
+
+export SLAVESIZE="-c $CORES -m $MEMORY"                 

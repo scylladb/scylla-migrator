@@ -1,7 +1,0 @@
-export CORES=0                                          # 0 cores for slaves on master node
-export MEMORY=0G                                        # no memory, as no workers on master node.
-export SPARK_WORKER_INSTANCES=0                         # no workers on master node
-export SPARK_MASTER_HOST={{spark.master.ansible_facts.default_ipv4.addres}}
-export SPARK_DAEMON_MEMORY=4G                           # memory for master
-
-export SLAVESIZE="-c $CORES -m $MEMORY"                 

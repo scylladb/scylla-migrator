@@ -1,7 +1,7 @@
 export SPARK_PUBLIC_DNS=spark-master
 export SPARK_MASTER_HOST={{spark.master.ansible_facts.default_ipv4.addres}}
 #######################################################################################################
-# This was for a ~3TB migration with ~26B items
+# This was for a ~3TB migration
 # Used i4i.4xLarge workers, each instance has 128G memory, 16vCPU
 #
 # By using multiple workers on an instance, we can control the velocity

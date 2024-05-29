@@ -1,3 +1,12 @@
+# Ansible deployment
+
+An ansible playbook is provided in ansible folder.  The ansible playbook will install the pre-requisites, spark, on the master and workers added to the ansible/inventory/hosts file.  Scylla-migrator will be installed on the spark master node.
+1. Update ansible/inventory/hosts file with master and worker instances
+2. The spark-env-master-sample and spark-env-worker-sample contain environment variables determining number of workers, CPUs per worker, and memory.  
+3. run `ansible-playbook scylla-migrator.yml`
+4. Follow instructions in Configuring the Migrator and Running on a live Spark cluster.
+
+
 # Building
 
 1. Make sure the Java 8 JDK and `sbt` are installed on your machine.
@@ -11,9 +20,17 @@ Create a `config.yaml` for your migration using the template `config.yaml.exampl
 
 # Running on a live Spark cluster
 
-The Scylla Migrator is built against Spark 2.4.4, so you'll need to run that version on your cluster.
+The Scylla Migrator is built against Spark 2.4.8, so you'll need to run that version on your cluster.
 
+If you didn't build Scylla Migrator on the master node:
 After running `build.sh`, copy the jar from `./migrator/target/scala-2.11/scylla-migrator-assembly-0.0.1.jar` and the `config.yaml` you've created to the Spark master server.
+
+Start the spark master and slaves.
+`cd scylla-migrator`
+`./start-spark.sh`
+
+On worker instances:
+`./start-slave.sh`
 
 Then, run this command on the Spark master server:
 ```shell
