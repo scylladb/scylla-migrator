@@ -1,11 +1,11 @@
 #!/bin/bash
 set -x
 
-. spark-env
+source spark-env
 
-export SPARK_LOCAL_IP=$SPARK_MASTER_HOST
+#export SPARK_LOCAL_IP=$SPARK_MASTER_HOST
 
-cd s$SPARK_HOME/sbin
+cd $SPARK_HOME/sbin
 
 ./stop-shuffle-service.sh
 ./stop-slave.sh spark://$SPARK_MASTER_HOST:7077 $SLAVESIZE

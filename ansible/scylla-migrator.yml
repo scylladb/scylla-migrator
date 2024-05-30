@@ -6,13 +6,13 @@
     home_dir: /home/ubuntu
     spark_home: /opt/spark
   tasks: 
-    - name: Print all available facts
-      ansible.builtin.debug:
-        var: ansible_facts
+    #- name: Print all available facts
+    #  ansible.builtin.debug:
+    #    var: ansible_facts
 
-    - name: Print all available facts
-      ansible.builtin.debug:
-        var: ansible_facts.default_ipv4.address
+    #- name: Print all available facts
+    #  ansible.builtin.debug:
+    #    var: ansible_facts.default_ipv4.address
 
     - name: add universe repository
       become: true
@@ -149,10 +149,6 @@
         state: present
       register: rsa_key
 
-    - name: Print all available facts
-      ansible.builtin.debug:
-        var: rsa_key
-
     - name: Allow passwordless SSH between all hosts
       lineinfile:
         dest: "{{home_dir}}/.ssh/authorized_keys"
@@ -173,6 +169,26 @@
         line:  "{{hostvars[item].ansible_host}}"
       with_items: "{{ groups['spark']}}"
 
+    - name: copy worker start/stop convenience scripts
+      copy:
+        src: "{{ item }}"
+        dest: "{{home_dir}}"
+        mode: 0755
+      when: inventory_hostname in groups['worker']
+      with_items:
+        - start-slave.sh
+        - stop-slave.sh
+
+    - name: copy template
+      template:
+        src: spark-env-worker-sample
+        dest: "{{home_dir}}"
+      when: inventory_hostname in groups['worker']
+
+    - name: rename spark-env
+      shell: mv spark-env-worker-sample spark-env
+      when: inventory_hostname in groups['worker']
+
 - name: Install scylla migrator on master
   hosts: spark_master
   vars:
@@ -189,11 +205,26 @@
         repo: https://github.com/scylladb/scylla-migrator.git
         dest: "{{home_dir}}/scylla-migrator"
 
-    - name: Clone scylla-migrator demo repo
-      ansible.builtin.git:
-        repo: https://github.com/scylladb/scylla-code-samples.git
-        dest: "{{home_dir}}/scylla-code-samples"
-        
+    - name: copy master start/stop convenience scripts
+      copy:
+        src: "{{ item }}"
+        dest: "{{home_dir}}/scylla-migrator"
+        mode: 0755
+      with_items:
+        - start-spark.sh
+        - stop-spark.sh
+        - start-slave.sh
+        - stop-slave.sh
+        - config.dynamodb.yml
+    
+    - name: copy template
+      template:
+        src: spark-env-master-sample
+        dest: "{{home_dir}}/scylla-migrator"
+
+    - name: rename spark-env
+      shell: cd "{{home_dir}}/scylla-migrator" && mv spark-env-master-sample spark-env
+
     - name: build scylla-migrator
       shell: "./build.sh"
       register: build

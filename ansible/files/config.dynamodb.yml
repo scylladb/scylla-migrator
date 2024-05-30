@@ -33,7 +33,7 @@ source:
   # Otherwise, if using aws configure, leave commented out
 target:
   type: dynamodb
-  table: "redacted-table-name"
+  table: "YOUR_TABLE_NAME"
   # Specify endpoint with http:// prefix
   # I don't specify region, as I use aws configure to set it.
   # specifying hostname of scylla - this requires that /etc/hosts be set...

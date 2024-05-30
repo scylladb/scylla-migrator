@@ -1,9 +1,9 @@
 #!/bin/bash
 set -x
 
-. spark-env
+source spark-env
 
-export SPARK_LOCAL_IP=$SPARK_MASTER_HOST
+#export SPARK_LOCAL_IP=$SPARK_MASTER_HOST
 
 cd $SPARK_HOME/sbin
 

@@ -1,5 +1,5 @@
-export SPARK_PUBLIC_DNS=spark-master
-export SPARK_MASTER_HOST={{spark.master.ansible_facts.default_ipv4.addres}}
+#export SPARK_PUBLIC_DNS=<spark-master-hostname>
+export SPARK_MASTER_HOST={{spark_master_ip}}
 #######################################################################################################
 # This was for a ~3TB migration
 # Used i4i.4xLarge workers, each instance has 128G memory, 16vCPU

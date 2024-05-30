@@ -2,9 +2,10 @@
 
 An ansible playbook is provided in ansible folder.  The ansible playbook will install the pre-requisites, spark, on the master and workers added to the ansible/inventory/hosts file.  Scylla-migrator will be installed on the spark master node.
 1. Update ansible/inventory/hosts file with master and worker instances
-2. The spark-env-master-sample and spark-env-worker-sample contain environment variables determining number of workers, CPUs per worker, and memory.  
-3. run `ansible-playbook scylla-migrator.yml`
-4. Follow instructions in Configuring the Migrator and Running on a live Spark cluster.
+2. Update ansible/ansible.cfg with location of private key if necessary
+3. The spark-env-master-sample and spark-env-worker-sample contain environment variables determining number of workers, CPUs per worker, and memory.  
+4. run `ansible-playbook scylla-migrator.yml`
+5. Follow instructions in Configuring the Migrator and Running on a live Spark cluster.
 
 
 # Building
@@ -31,6 +32,12 @@ Start the spark master and slaves.
 
 On worker instances:
 `./start-slave.sh`
+
+Configure and confirm networking between:
+- source and spark servers
+- target and spark servers
+
+Create schema in target server.
 
 Then, run this command on the Spark master server:
 ```shell
