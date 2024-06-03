@@ -11,32 +11,32 @@ source:
   #  accessKey: empty
   #  secretKey: empty
   ##############################################################################
-  # scan segments is how many work chunks to create.  You want work chunks
-  # to be big enough that they are worth the overhead of their creation.
-  # If the table is small enough, I would consider lowering to 1!
-  #
-  # You can use dynamoDB describe table to get an estimated number of items.
-  # for a 28B item table, we set scanSegments to 28,000 - then as we tracked
-  # progress in http://spark-master:4040, which shows how many segments completed
-  # and how many left, we knew each segment completed was ~1m items...
-  # 1m~ items was plenty to justify segment creation cost.
+  # scan segments is how many work chunks will be created to scan the source.
+  # A good ROT is to divide source table bytes, taken from describe_table
+  # command, and divide by 128MB.  Roundup, and use that for both 
+  # scanSegments and maxMapTasks.
   ##############################################################################
-  scanSegments: 4000
-  # Near as I can tell, these read throughput settings DID NOTHING
-  # on on-demand and systems with auto-scale on.  DynamoDB just
-  # kept raising the provisioning limit and didn't honor throughput cap
+  scanSegments: 700
+  # If DynamoDB is using throughput limits, you can specify a readThroughput limit
+  # or a throughputReadPercent.
   #readThroughput: 1000
   #throughputReadPercent: 0.5
-  maxMapTasks: 2
+  # MaxMapTasks will be the number of partitions work will be broken up into.
+  # Can set it equal to scanSegments.  Or to allow multiple concurrent scans by
+  # a single task, set scanSegments to some multiple of maxMapTasks.
+  maxMapTasks: 700
   streamChanges: false
-  # if using DynamoDB local - specify endpoint with http:// prefix
-  # Otherwise, if using aws configure, leave commented out
+  # For scyllaDB - Alternator target, you need to specify endpoint URL.
 target:
   type: dynamodb
   table: "YOUR_TABLE_NAME"
-  # Specify endpoint with http:// prefix
-  # I don't specify region, as I use aws configure to set it.
-  # specifying hostname of scylla - this requires that /etc/hosts be set...
+  # For scyllaDB - Alternator target, you need to specify endpoint URL.
+  # If you have multiple workers, you could use /etc/hosts, and add 
+  # an entry to each worker - such that each worker node connects to a 
+  # different scylla node.  Then use the "scylla" hostname here.
+  # You could alternately use the Alternator DNS load balancer, or
+  # The easiest and least performant option is just point to a single nodes IP.
+  # YOUR-SCYLLA-NODE0-IP scylla
   endpoint:
     host: http://YOUR_ALTERNATOR_INSTANCE
     port: 8000
