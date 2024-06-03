@@ -1,16 +1,42 @@
-#export SPARK_PUBLIC_DNS=<spark-master-hostname>
-export SPARK_MASTER_HOST={{spark_master_ip}}
-#######################################################################################################
-# This was for a ~3TB migration
-# Used i4i.4xLarge workers, each instance has 128G memory, 16vCPU
+##################################################################################################################
+# Master node requires a lot of memory.  We allocate 64G for the driver to avoid OOM when
+# there are a lot of tasks.
+# 
+# For this example, we're not using any workers on master.
+# so CORES = 0 and SPARK_WORKER_INSTANCES = 0.
 #
-# By using multiple workers on an instance, we can control the velocity
-# of the migration by having multiple workers.  While it is set to 8 in this file,
-# we started the migration with 4, and as DynamoDB auto-scaled, we added workers
-# to the peak of 8.
-#######################################################################################################
-export CORES=12                                         # used 
-export MEMORY=24G                                       # 12core * 2g = 24
-export SPARK_WORKER_INSTANCES=8                         # this is how many workers will be 
+# MEMORY is used in the spark-submit job and allocates the memory per executor.
+# You can have one or more executors per worker.
+# 
+# By using multiple workers on an instance, we can control the velocit of the migration.
+#
+# Eg. 
+#    Target system is 3 x i4i.4xlarge (16 vCPU, 128G)
+#    We can provision 3 x i4i.2xlarge (8vCPU, 64G)
+#
+#    SPARK_WORKER_INSTANCES = 1
+#    CORES = 4
+#    MEMORY = 8G     (4 cores per worker * 2G)
+#
+#    Start 1 worker per node,  or one at a time.  
+#    - Monitor the pressure on the source system
+#    - Monitor the velocity of the migration in the spark jobs monito
+#
+#    You can increase the velocity by updating spark-env on worker nodes, increase the
+#    SPARK_WORKER_INSTANCES = 2, run ./start-worker.sh.  
+#    So long as there are tasks available, the new workers would pick up tasks and increase
+#    the velocity of the migration.
+#
+#    You should be mindful of over-provisioning the number of workers on an instance.
+#    Eg. if the node has 8 CPUs, then number of workers on an instance * cores <= 8...
+##################################################################################################################
+#export SPARK_PUBLIC_DNS=<spark-master-hostname>
+export SPARK_MASTER_HOST={{ hostvars.spark_master.ansible_facts.default_ipv4.address }}
+export CORES=4                                         # used 
+#export MEMORY=8G                                       # No longer using this.  Setting memory on spark-submit command.
+                                                        # as memory for each executor.
+                                                        # the spark-worker memory will default to memory on instance - 1g.
+export SPARK_WORKER_INSTANCES=4                         # this is how many workers will be 
                                                         # started/stopped on the node.
-export SLAVESIZE="-c $CORES -m $MEMORY"
+#export SLAVESIZE="-c $CORES -m $MEMORY"
+export SLAVESIZE="-c $CORES"

@@ -1,18 +1,43 @@
 ##################################################################################################################
-# As a scenarion, for a ~3TB migration
-# Used x2iedn.2xlarge master.  The master requires significant memory.  Did not spawn workers on master instance.
-# Used i4i.4xLarge workers, each instance has 128G memory, 16vCPU
+# Master node requires a lot of memory.  We allocate 64G for the driver to avoid OOM when
+# there are a lot of tasks.
+# 
+# For this example, we're not using any workers on master.
+# so CORES = 0 and SPARK_WORKER_INSTANCES = 0.
 #
-# By using multiple workers on an instance, we can control the velocity
-# of the migration by having multiple workers.  While it is set to 8 in this file,
-# we started the migration with 4, and as DynamoDB auto-scaled, we added workers
-# to the peak of 8.
+# MEMORY is used in the spark-submit job and allocates the memory per executor.
+# You can have one or more executors per worker.
+# 
+# By using multiple workers on an instance, we can control the velocit of the migration.
+#
+# Eg. 
+#    Target system is 3 x i4i.4xlarge (16 vCPU, 128G)
+#    We can provision 3 x i4i.2xlarge (8vCPU, 64G)
+#
+#    SPARK_WORKER_INSTANCES = 1
+#    CORES = 4
+#    MEMORY = 8G     (4 cores per worker * 2G)
+#
+#    Start 1 worker per node,  or one at a time.  
+#    - Monitor the pressure on the source system
+#    - Monitor the velocity of the migration in the spark jobs monito
+#
+#    You can increase the velocity by updating spark-env on worker nodes, increase the
+#    SPARK_WORKER_INSTANCES = 2, run ./start-worker.sh.  
+#    So long as there are tasks available, the new workers would pick up tasks and increase
+#    the velocity of the migration.
+#
+#    You should be mindful of over-provisioning the number of workers on an instance.
+#    Eg. if the node has 8 CPUs, then number of workers on an instance * cores <= 8...
 ##################################################################################################################
 
 export CORES=0                                          # 0 cores for slaves on master node
-export MEMORY=0G                                        # no memory, as no workers on master node.
+export MEMORY=8G                                       # cores per worker x 2G
+ 
+      
 export SPARK_WORKER_INSTANCES=0                         # no workers on master node
-export SPARK_MASTER_HOST={{spark_master_ip}}
-export SPARK_DAEMON_MEMORY=4G                           # memory for master
+export SPARK_MASTER_HOST={{ hostvars.spark_master.ansible_facts.default_ipv4.address }}
+#export SPARK_DAEMON_MEMORY=1G                          # memory for master/worker daemons
+                                                        # just let it default
 
 export SLAVESIZE="-c $CORES -m $MEMORY"                 
