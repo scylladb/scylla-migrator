@@ -1,11 +1,9 @@
 package com.scylladb.migrator.alternator
 
 import com.amazonaws.services.dynamodbv2.model.AttributeValue
-import com.scylladb.migrator.DynamoUtils.setDynamoDBJobConf
 import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
 import com.scylladb.migrator.validation.RowComparisonFailure
-import com.scylladb.migrator.{ readers, DynamoUtils }
-import org.apache.hadoop.dynamodb.DynamoDBConstants
+import com.scylladb.migrator.readers
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 
@@ -41,7 +39,7 @@ object AlternatorValidator {
     val (target, _) = readers.DynamoDB.readRDD(
       spark,
       targetSettings.endpoint,
-      targetSettings.credentials,
+      targetSettings.finalCredentials,
       targetSettings.region,
       targetSettings.table,
       targetSettings.scanSegments,

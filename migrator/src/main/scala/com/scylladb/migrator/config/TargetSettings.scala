@@ -1,6 +1,7 @@
 package com.scylladb.migrator.config
 
 import cats.implicits._
+import com.scylladb.migrator.AwsUtils
 import io.circe.{ Decoder, DecodingFailure, Encoder, Json }
 import io.circe.generic.semiauto.{ deriveDecoder, deriveEncoder }
 import io.circe.syntax._
@@ -31,7 +32,10 @@ object TargetSettings {
                       maxMapTasks: Option[Int],
                       streamChanges: Boolean,
                       skipInitialSnapshotTransfer: Option[Boolean])
-      extends TargetSettings
+      extends TargetSettings {
+    lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
+      AwsUtils.computeFinalCredentials(credentials, endpoint, region)
+  }
 
   implicit val decoder: Decoder[TargetSettings] =
     Decoder.instance { cursor =>

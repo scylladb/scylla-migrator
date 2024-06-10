@@ -1,6 +1,7 @@
 package com.scylladb.migrator.config
 
 import cats.implicits._
+import com.scylladb.migrator.AwsUtils
 import io.circe.syntax._
 import io.circe.{ Decoder, DecodingFailure, Encoder, Json }
 import io.circe.generic.semiauto.{ deriveDecoder, deriveEncoder }
@@ -10,8 +11,8 @@ case class DynamoDBEndpoint(host: String, port: Int) {
 }
 
 object DynamoDBEndpoint {
-  implicit val encoder = deriveEncoder[DynamoDBEndpoint]
-  implicit val decoder = deriveDecoder[DynamoDBEndpoint]
+  implicit val encoder: Encoder[DynamoDBEndpoint] = deriveEncoder[DynamoDBEndpoint]
+  implicit val decoder: Decoder[DynamoDBEndpoint] = deriveDecoder[DynamoDBEndpoint]
 }
 
 sealed trait SourceSettings
@@ -38,8 +39,18 @@ object SourceSettings {
                       readThroughput: Option[Int],
                       throughputReadPercent: Option[Float],
                       maxMapTasks: Option[Int])
-      extends SourceSettings
-  case class Parquet(path: String, credentials: Option[AWSCredentials]) extends SourceSettings
+      extends SourceSettings {
+    lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
+      AwsUtils.computeFinalCredentials(credentials, endpoint, region)
+  }
+  case class Parquet(path: String,
+                     credentials: Option[AWSCredentials],
+                     endpoint: Option[DynamoDBEndpoint],
+                     region: Option[String])
+      extends SourceSettings {
+    lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
+      AwsUtils.computeFinalCredentials(credentials, endpoint, region)
+  }
 
   case class DynamoDBS3Export(bucket: String,
                               manifestKey: String,
@@ -48,7 +59,10 @@ object SourceSettings {
                               region: Option[String],
                               credentials: Option[AWSCredentials],
                               usePathStyleAccess: Option[Boolean])
-      extends SourceSettings
+      extends SourceSettings {
+    lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
+      AwsUtils.computeFinalCredentials(credentials, endpoint, region)
+  }
 
   object DynamoDBS3Export {
 
