@@ -109,7 +109,7 @@ html_theme_options = {
     "hide_feedback_buttons": "false",
     "github_issues_repository": "scylladb/scylla-migrator",
     "github_repository": "scylladb/scylla-migrator",
-    "site_description": "Migrate data extract using Spark to Scylla, normally from Cassandra.",
+    "site_description": "Migrate data using Spark from Cassandra or DynamoDB to Scylla.",
     "hide_version_dropdown": [],
     "zendesk_tag": "",
     "versions_unstable": UNSTABLE_VERSIONS,
