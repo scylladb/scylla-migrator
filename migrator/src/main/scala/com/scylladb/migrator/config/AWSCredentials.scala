@@ -11,9 +11,14 @@ object AWSCredentials {
   implicit val encoder: Encoder[AWSCredentials] = deriveEncoder
 }
 
-case class AWSAssumeRole(arn: String, sessionName: String)
+case class AWSAssumeRole(arn: String, sessionName: Option[String]) {
+  def getSessionName: String =
+    sessionName.getOrElse(AWSAssumeRole.defaultSessionName)
+}
 
 object AWSAssumeRole {
   implicit val decoder: Decoder[AWSAssumeRole] = deriveDecoder
   implicit val encoder: Encoder[AWSAssumeRole] = deriveEncoder
+
+  val defaultSessionName: String = "scylla-migrator"
 }

@@ -45,7 +45,7 @@ object AwsUtils {
         AWSCredentials(configuredCredentials.accessKey, configuredCredentials.secretKey, None)
       configuredCredentials.assumeRole match {
         case None => baseCredentials
-        case Some(AWSAssumeRole(roleArn, roleSessionName)) =>
+        case Some(role) =>
           val stsClient =
             configureClientBuilder(
               AWSSecurityTokenServiceClientBuilder.standard(),
@@ -60,8 +60,8 @@ object AwsUtils {
           val response =
             stsClient.assumeRole(
               new AssumeRoleRequest()
-                .withRoleArn(roleArn)
-                .withRoleSessionName(roleSessionName)
+                .withRoleArn(role.arn)
+                .withRoleSessionName(role.getSessionName)
             )
           val assumedCredentials = response.getCredentials
           AWSCredentials(
@@ -76,6 +76,7 @@ object AwsUtils {
 
 /** Bare AWS credentials */
 case class AWSCredentials(accessKey: String, secretKey: String, maybeSessionToken: Option[String]) {
+
   /** Convenient method to use our credentials with the AWS SDK */
   def toProvider: AWSCredentialsProvider = {
     val staticCredentials =

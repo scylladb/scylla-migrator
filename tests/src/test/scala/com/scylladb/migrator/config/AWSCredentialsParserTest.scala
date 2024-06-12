@@ -22,7 +22,7 @@ class AWSCredentialsParserTest extends munit.FunSuite {
         |  arn: baz
         |  sessionName: bah""".stripMargin
     val expectedCredentials =
-      AWSCredentials("foo", "bar", Some(AWSAssumeRole("baz", "bah")))
+      AWSCredentials("foo", "bar", Some(AWSAssumeRole("baz", Some("bah"))))
     val parsedCredentials = parseCredentials(config)
     assertEquals(parsedCredentials, expectedCredentials)
   }

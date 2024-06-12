@@ -62,7 +62,7 @@ object DynamoStreamReplication {
             SparkAWSCredentials.builder
               .basicCredentials(accessKey, secretKey)
           for (assumeRole <- maybeAssumeRole) {
-            builder.stsCredentials(assumeRole.arn, assumeRole.sessionName)
+            builder.stsCredentials(assumeRole.arn, assumeRole.getSessionName)
           }
           builder.build()
       }.orNull

@@ -54,9 +54,10 @@ source:
 #   credentials:
 #     accessKey: <user>
 #     secretKey: <pass>
-#     # Optional - assume role
+#     # Optional - assume role, see https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html
 #     assumeRole:
 #       arn: <roleArn>
+#       # Optional - the session name to use. If not set, we use 'scylla-migrator'
 #       sessionName: <roleSessionName>
 #   # Optional - specify the region:
 #   region: <region>
@@ -83,9 +84,10 @@ source:
 #   credentials:
 #     accessKey: <user>
 #     secretKey: <pass>
-#     # Optional - assume role
+#     # Optional - assume role, see https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html
 #     assumeRole:
 #       arn: <roleArn>
+#       # Optional - the session name to use. If not set, we use 'scylla-migrator'
 #       sessionName: <sessionName>
 #
 #   # below controls split factor
@@ -132,9 +134,10 @@ source:
 #   credentials:
 #     accessKey: <user>
 #     secretKey: <pass>
-#     # Optional - assume role
+#     # Optional - assume role, see https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html
 #     assumeRole:
 #       arn: <roleArn>
+#       # Optional - the session name to use. If not set, we use 'scylla-migrator'
 #       sessionName: <roleSessionName>
 #
 #   # Optional - use path-style access in S3 (see https://docs.aws.amazon.com/AmazonS3/latest/userguide/VirtualHosting.html)
@@ -209,9 +212,10 @@ target:
 #   credentials:
 #     accessKey: <user>
 #     secretKey: <pass>
-#     # Optional - assume role
+#     # Optional - assume role, see https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html
 #     assumeRole:
 #       arn: <roleArn>
+#       # Optional - the session name to use. If not set, we use 'scylla-migrator'
 #       sessionName: <roleSessionName>
 #
 #   # Split factor for reading/writing. This is required for Scylla targets.
