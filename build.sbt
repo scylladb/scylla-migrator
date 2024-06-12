@@ -40,8 +40,7 @@ lazy val migrator = (project in file("migrator")).settings(
     "com.amazonaws"    % "aws-java-sdk-dynamodb" % awsSdkVersion,
     "com.amazonaws"    % "aws-java-sdk-s3"       % awsSdkVersion,
     "com.amazonaws"    % "aws-java-sdk-sts"      % awsSdkVersion,
-    ("com.amazonaws" % "dynamodb-streams-kinesis-adapter" % dynamodbStreamsKinesisAdapterVersion)
-      .excludeAll(InclExclRule("com.fasterxml.jackson.core")),
+    "com.datastax.spark" %% "spark-cassandra-connector" % "2.5.0-3-g35e0c096",
     "com.amazon.emr" % "emr-dynamodb-hadoop" % "4.16.0",
     "io.circe"       %% "circe-generic"      % "0.11.1",
     "io.circe"       %% "circe-parser"       % "0.11.1",
@@ -51,21 +50,13 @@ lazy val migrator = (project in file("migrator")).settings(
     ShadeRule.rename("org.yaml.snakeyaml.**" -> "com.scylladb.shaded.@1").inAll
   ),
   assembly / assemblyMergeStrategy := {
-    // Handle conflicts between our own library dependencies and those that are bundled into
-    // the spark-cassandra-connector fat-jar
-    case PathList("com", "codahale", "metrics", _ @_*)                => MergeStrategy.first
-    case PathList("digesterRules.xml")                                => MergeStrategy.first
-    case PathList("org", "aopalliance", _ @_*)                        => MergeStrategy.first
-    case PathList("org", "apache", "commons", "collections", _ @_*)   => MergeStrategy.first
-    case PathList("org", "apache", "commons", "configuration", _ @_*) => MergeStrategy.first
-    case PathList("org", "apache", "commons", "logging", _ @_*)       => MergeStrategy.first
-    case PathList("org", "apache", "spark", _ @_*)                    => MergeStrategy.first
-    case PathList("org", "slf4j", _ @_*)                              => MergeStrategy.first
-    case PathList("properties.dtd")                                   => MergeStrategy.first
-    case PathList("PropertyList-1.0.dtd")                             => MergeStrategy.first
-    // Other conflicts
-    case PathList("javax", "inject", _ @_*)         => MergeStrategy.first
-    case PathList("org", "apache", "hadoop", _ @_*) => MergeStrategy.first
+    // Handle duplicates between the transitive dependencies of Spark itself
+    case PathList("org", "aopalliance", _*)                  => MergeStrategy.first
+    case PathList("org", "apache", "commons", "logging", _*) => MergeStrategy.first
+    case PathList("org", "apache", "hadoop", _*)             => MergeStrategy.first
+    case PathList("org", "apache", "spark", _*)              => MergeStrategy.first
+    case PathList("javax", "inject", _*)                     => MergeStrategy.first
+    case "module-info.class"                                 => MergeStrategy.discard // Safe because Java 8 does not support modules
     case x =>
       val oldStrategy = (assembly / assemblyMergeStrategy).value
       oldStrategy(x)
