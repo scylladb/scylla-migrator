@@ -9,16 +9,23 @@ object Parquet {
   val log = LogManager.getLogger("com.scylladb.migrator.readers.Parquet")
 
   def readDataFrame(spark: SparkSession, source: SourceSettings.Parquet): SourceDataFrame = {
-    source.finalCredentials.foreach { credentials =>
+    source.credentials.foreach { credentials =>
       log.info("Loaded AWS credentials from config file")
+      source.region.foreach { region =>
+        spark.sparkContext.hadoopConfiguration.set("fs.s3a.endpoint.region", region)
+      }
       spark.sparkContext.hadoopConfiguration.set("fs.s3a.access.key", credentials.accessKey)
       spark.sparkContext.hadoopConfiguration.set("fs.s3a.secret.key", credentials.secretKey)
-      credentials.maybeSessionToken.foreach { sessionToken =>
-        // See https://hadoop.apache.org/docs/stable/hadoop-aws/tools/hadoop-aws/index.html#Using_Session_Credentials_with_TemporaryAWSCredentialsProvider
+      // See https://hadoop.apache.org/docs/stable/hadoop-aws/tools/hadoop-aws/assumed_roles.html
+      credentials.assumeRole.foreach { role =>
         spark.sparkContext.hadoopConfiguration.set(
           "fs.s3a.aws.credentials.provider",
-          "org.apache.hadoop.fs.s3a.TemporaryAWSCredentialsProvider")
-        spark.sparkContext.hadoopConfiguration.set("fs.s3a.session.token", sessionToken)
+          "org.apache.hadoop.fs.s3a.auth.AssumedRoleCredentialProvider")
+        spark.sparkContext.hadoopConfiguration.set("fs.s3a.assumed.role.arn", role.arn)
+        role.sessionName.foreach { sessionName =>
+          spark.sparkContext.hadoopConfiguration
+            .set("fs.s3a.assumed.role.session.name", sessionName)
+        }
       }
     }
 
