@@ -43,11 +43,7 @@ object SourceSettings {
     lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
       AwsUtils.computeFinalCredentials(credentials, endpoint, region)
   }
-  case class Parquet(path: String,
-                     credentials: Option[AWSCredentials],
-                     endpoint: Option[DynamoDBEndpoint],
-                     region: Option[String])
-      extends SourceSettings
+  case class Parquet(path: String, credentials: Option[AWSCredentials]) extends SourceSettings
 
   case class DynamoDBS3Export(bucket: String,
                               manifestKey: String,
