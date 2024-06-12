@@ -12,13 +12,7 @@ TMPDIR="$PWD"/tmpexec
 mkdir -p "$TMPDIR"
 trap "rm -rf $TMPDIR" EXIT
 pushd spark-cassandra-connector
-sbt -Djava.io.tmpdir="$TMPDIR" ++2.11.12 assembly
+sbt -Djava.io.tmpdir="$TMPDIR" ++2.11.12 publishLocal
 popd
 
-if [ ! -d "./migrator/lib" ]; then
-    mkdir migrator/lib
-fi
-
-cp ./spark-cassandra-connector/connector/target/scala-2.11/spark-cassandra-connector-assembly-*.jar ./migrator/lib
-
-sbt -Djava.io.tmpdir="$TMPDIR" -mem 8192 migrator/assembly
+sbt -Djava.io.tmpdir="$TMPDIR" migrator/assembly
