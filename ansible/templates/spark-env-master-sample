@@ -32,12 +32,8 @@
 ##################################################################################################################
 
 export CORES=0                                          # 0 cores for slaves on master node
-export MEMORY=8G                                       # cores per worker x 2G
- 
-      
+export MEMORY=8G                                        # cores per worker x 2G
 export SPARK_WORKER_INSTANCES=0                         # no workers on master node
 export SPARK_MASTER_HOST={{ hostvars.spark_master.ansible_facts.default_ipv4.address }}
-#export SPARK_DAEMON_MEMORY=1G                          # memory for master/worker daemons
-                                                        # just let it default
 
-export SLAVESIZE="-c $CORES -m $MEMORY"                 
+export SLAVESIZE="-c $CORES "                 

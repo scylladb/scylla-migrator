@@ -30,13 +30,9 @@
 #    You should be mindful of over-provisioning the number of workers on an instance.
 #    Eg. if the node has 8 CPUs, then number of workers on an instance * cores <= 8...
 ##################################################################################################################
-#export SPARK_PUBLIC_DNS=<spark-master-hostname>
+
 export SPARK_MASTER_HOST={{ hostvars.spark_master.ansible_facts.default_ipv4.address }}
-export CORES=4                                         # used 
-#export MEMORY=8G                                       # No longer using this.  Setting memory on spark-submit command.
-                                                        # as memory for each executor.
-                                                        # the spark-worker memory will default to memory on instance - 1g.
+export CORES=4                                          # number of cores per worker
 export SPARK_WORKER_INSTANCES=4                         # this is how many workers will be 
                                                         # started/stopped on the node.
-#export SLAVESIZE="-c $CORES -m $MEMORY"
 export SLAVESIZE="-c $CORES"
