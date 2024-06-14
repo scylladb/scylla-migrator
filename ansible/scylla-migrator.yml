@@ -175,7 +175,7 @@
       when: inventory_hostname in groups['worker']
 
 - name: Install scylla migrator on master
-  hosts: spark_master
+  hosts: master
   vars:
     home_dir: /home/ubuntu
     spark_home: /opt/spark
