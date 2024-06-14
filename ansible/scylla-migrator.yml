@@ -141,19 +141,6 @@
         regexp: '^:$SPARK_HOME/sbin'
         line: export PATH=$PATH:$SPARK_HOME/sbin
 
-    - name: Generate an OpenSSH keypair with the default values (4096 bits, rsa)
-      community.crypto.openssh_keypair:
-        path: "{{ home_dir }}/.ssh/id_ssh_rsa"
-        state: present
-      register: rsa_key
-
-    - name: Allow passwordless SSH between all hosts
-      lineinfile:
-        dest: "{{ home_dir }}/.ssh/authorized_keys"
-        state: present
-        line:  "{{ hostvars[item].rsa_key.public_key }} {{ hostvars[item].ansible_host }}"
-      with_items: "{{ groups['spark'] }}"
-
     - name: Make sure slaves file exists
       become: true
       ansible.builtin.file:
