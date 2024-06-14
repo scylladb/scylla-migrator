@@ -97,7 +97,7 @@ lazy val tests = project.in(file("tests")).settings(
     "org.apache.spark"         %% "spark-sql"                % sparkVersion,
     "org.apache.cassandra"     % "java-driver-query-builder" % "4.18.0",
     "com.github.mjakubowski84" %% "parquet4s-core"           % "1.9.4",
-    "org.apache.hadoop"        % "hadoop-client"             % "2.9.2",
+    "org.apache.hadoop"        % "hadoop-client"             % "2.6.5",
     "org.scalameta"            %% "munit"                    % "0.7.29",
     "org.scala-lang.modules"   %% "scala-collection-compat"  % "2.11.0"
   ),

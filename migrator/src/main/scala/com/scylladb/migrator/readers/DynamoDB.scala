@@ -1,10 +1,10 @@
 package com.scylladb.migrator.readers
 
 import com.amazonaws.services.dynamodbv2.model.TableDescription
-import com.scylladb.migrator.DynamoUtils
+import com.scylladb.migrator.{ AWSCredentials, DynamoUtils }
 import com.scylladb.migrator.DynamoUtils.{ setDynamoDBJobConf, setOptionalConf }
 import com.scylladb.migrator.alternator.DynamoDBInputFormat
-import com.scylladb.migrator.config.{ AWSCredentials, DynamoDBEndpoint, SourceSettings }
+import com.scylladb.migrator.config.{ DynamoDBEndpoint, SourceSettings }
 import org.apache.hadoop.dynamodb.{ DynamoDBConstants, DynamoDBItemWritable }
 import org.apache.hadoop.io.Text
 import org.apache.hadoop.mapred.JobConf
@@ -19,7 +19,7 @@ object DynamoDB {
     readRDD(
       spark,
       source.endpoint,
-      source.credentials,
+      source.finalCredentials,
       source.region,
       source.table,
       source.scanSegments,
@@ -43,7 +43,7 @@ object DynamoDB {
     throughputReadPercent: Option[Float]): (RDD[(Text, DynamoDBItemWritable)], TableDescription) = {
 
     val tableDescription = DynamoUtils
-      .buildDynamoClient(endpoint, credentials.map(_.toAWSCredentialsProvider), region)
+      .buildDynamoClient(endpoint, credentials.map(_.toProvider), region)
       .describeTable(table)
       .getTable
 
@@ -102,7 +102,10 @@ object DynamoDB {
     jobConf.set(DynamoDBConstants.INPUT_TABLE_NAME, table)
     setOptionalConf(jobConf, DynamoDBConstants.ITEM_COUNT, maybeItemCount.map(_.toString))
     setOptionalConf(jobConf, DynamoDBConstants.AVG_ITEM_SIZE, maybeAvgItemSize.map(_.toString))
-    setOptionalConf(jobConf, DynamoDBConstants.TABLE_SIZE_BYTES, Option(description.getTableSizeBytes).map(_.toString))
+    setOptionalConf(
+      jobConf,
+      DynamoDBConstants.TABLE_SIZE_BYTES,
+      Option(description.getTableSizeBytes).map(_.toString))
     jobConf.set(
       DynamoDBConstants.READ_THROUGHPUT,
       readThroughput

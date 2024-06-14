@@ -20,12 +20,7 @@ import com.amazonaws.services.dynamodbv2.model.{
   TableStatus,
   UpdateTableRequest
 }
-import com.scylladb.migrator.config.{
-  AWSCredentials,
-  DynamoDBEndpoint,
-  SourceSettings,
-  TargetSettings
-}
+import com.scylladb.migrator.config.{ DynamoDBEndpoint, SourceSettings, TargetSettings }
 import org.apache.hadoop.dynamodb.DynamoDBConstants
 import org.apache.hadoop.mapred.JobConf
 import org.apache.log4j.LogManager
@@ -38,10 +33,8 @@ object DynamoUtils {
   def replicateTableDefinition(sourceDescription: TableDescription,
                                target: TargetSettings.DynamoDB): TableDescription = {
     // If non-existent, replicate
-    val targetClient = buildDynamoClient(
-      target.endpoint,
-      target.credentials.map(_.toAWSCredentialsProvider),
-      target.region)
+    val targetClient =
+      buildDynamoClient(target.endpoint, target.finalCredentials.map(_.toProvider), target.region)
 
     log.info("Checking for table existence at destination")
     val targetDescription = Try(targetClient.describeTable(target.table))
@@ -88,14 +81,12 @@ object DynamoUtils {
   }
 
   def enableDynamoStream(source: SourceSettings.DynamoDB): Unit = {
-    val sourceClient = buildDynamoClient(
-      source.endpoint,
-      source.credentials.map(_.toAWSCredentialsProvider),
-      source.region)
+    val sourceClient =
+      buildDynamoClient(source.endpoint, source.finalCredentials.map(_.toProvider), source.region)
     val sourceStreamsClient =
       buildDynamoStreamsClient(
         source.endpoint,
-        source.credentials.map(_.toAWSCredentialsProvider),
+        source.finalCredentials.map(_.toProvider),
         source.region)
 
     sourceClient
@@ -179,6 +170,9 @@ object DynamoUtils {
     for (credentials <- maybeAwsCredentials) {
       jobConf.set(DynamoDBConstants.DYNAMODB_ACCESS_KEY_CONF, credentials.accessKey)
       jobConf.set(DynamoDBConstants.DYNAMODB_SECRET_KEY_CONF, credentials.secretKey)
+      for (sessionToken <- credentials.maybeSessionToken) {
+        jobConf.set(DynamoDBConstants.DYNAMODB_SESSION_TOKEN_CONF, sessionToken)
+      }
     }
     jobConf.set(
       DynamoDBConstants.CUSTOM_CREDENTIALS_PROVIDER_CONF,

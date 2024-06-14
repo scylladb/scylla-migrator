@@ -28,7 +28,7 @@ object DynamoDBS3Export {
           AmazonS3ClientBuilder.standard(),
           source.endpoint,
           source.region,
-          source.credentials.map(_.toAWSCredentialsProvider)
+          source.finalCredentials.map(_.toProvider)
         )
     for (usePathStyleAccess <- source.usePathStyleAccess) {
       s3ClientBuilder.withPathStyleAccessEnabled(usePathStyleAccess)

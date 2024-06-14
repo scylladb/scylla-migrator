@@ -57,10 +57,14 @@ object DynamoStreamReplication {
         case _ => None
       },
       kinesisCreds = src.credentials.map {
-        case AWSCredentials(accessKey, secretKey) =>
-          SparkAWSCredentials.builder
-            .basicCredentials(accessKey, secretKey)
-            .build()
+        case AWSCredentials(accessKey, secretKey, maybeAssumeRole) =>
+          val builder =
+            SparkAWSCredentials.builder
+              .basicCredentials(accessKey, secretKey)
+          for (assumeRole <- maybeAssumeRole) {
+            builder.stsCredentials(assumeRole.arn, assumeRole.getSessionName)
+          }
+          builder.build()
       }.orNull
     ).foreachRDD { msgs =>
       val rdd = msgs

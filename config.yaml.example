@@ -52,8 +52,8 @@ source:
 #   # This section can be left out if running on EC2 instances that have instance profiles with the
 #   # appropriate permissions. Assuming roles is not supported currently.
 #   credentials:
-#     accessKey:
-#     secretKey:
+#     accessKey: <user>
+#     secretKey: <pass>
 
 # Example for loading from DynamoDB:
 # source:
@@ -72,6 +72,11 @@ source:
 #   credentials:
 #     accessKey: <user>
 #     secretKey: <pass>
+#     # Optional - assume role, see https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html
+#     assumeRole:
+#       arn: <roleArn>
+#       # Optional - the session name to use. If not set, we use 'scylla-migrator'
+#       sessionName: <sessionName>
 #
 #   # below controls split factor
 #   scanSegments: 1
@@ -117,6 +122,11 @@ source:
 #   credentials:
 #     accessKey: <user>
 #     secretKey: <pass>
+#     # Optional - assume role, see https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html
+#     assumeRole:
+#       arn: <roleArn>
+#       # Optional - the session name to use. If not set, we use 'scylla-migrator'
+#       sessionName: <roleSessionName>
 #
 #   # Optional - use path-style access in S3 (see https://docs.aws.amazon.com/AmazonS3/latest/userguide/VirtualHosting.html)
 #   usePathStyleAccess: true
@@ -190,6 +200,11 @@ target:
 #   credentials:
 #     accessKey: <user>
 #     secretKey: <pass>
+#     # Optional - assume role, see https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html
+#     assumeRole:
+#       arn: <roleArn>
+#       # Optional - the session name to use. If not set, we use 'scylla-migrator'
+#       sessionName: <roleSessionName>
 #
 #   # Split factor for reading/writing. This is required for Scylla targets.
 #   scanSegments: 1
