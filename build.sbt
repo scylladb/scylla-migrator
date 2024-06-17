@@ -2,6 +2,7 @@ import sbt.librarymanagement.InclExclRule
 
 val awsSdkVersion = "1.11.728"
 val sparkVersion = "2.4.4"
+val hadoopVersion = "2.6.5"
 val dynamodbStreamsKinesisAdapterVersion = "1.5.2"
 
 inThisBuild(
@@ -37,6 +38,15 @@ lazy val migrator = (project in file("migrator")).settings(
   libraryDependencies ++= Seq(
     "org.apache.spark" %% "spark-streaming"      % sparkVersion % "provided",
     "org.apache.spark" %% "spark-sql"            % sparkVersion % "provided",
+    ("org.apache.hadoop" % "hadoop-aws"           % hadoopVersion)
+      // Exclude dependencies to old versions of libraries that could create duplicates when we run sbt-assembly
+      .excludeAll(
+        InclExclRule("com.amazonaws", "aws-java-sdk"),
+        InclExclRule("asm", "asm"),
+        InclExclRule("com.sun.jersey", "jersey-core"),
+        InclExclRule("com.sun.jersey", "jersey-server"),
+        InclExclRule("javax.servlet", "servlet-api"),
+      ),
     "com.amazonaws"    % "aws-java-sdk-dynamodb" % awsSdkVersion,
     "com.amazonaws"    % "aws-java-sdk-s3"       % awsSdkVersion,
     "com.amazonaws"    % "aws-java-sdk-sts"      % awsSdkVersion,
@@ -88,7 +98,7 @@ lazy val tests = project.in(file("tests")).settings(
     "org.apache.spark"         %% "spark-sql"                % sparkVersion,
     "org.apache.cassandra"     % "java-driver-query-builder" % "4.18.0",
     "com.github.mjakubowski84" %% "parquet4s-core"           % "1.9.4",
-    "org.apache.hadoop"        % "hadoop-client"             % "2.6.5",
+    "org.apache.hadoop"        % "hadoop-client"             % hadoopVersion,
     "org.scalameta"            %% "munit"                    % "0.7.29",
     "org.scala-lang.modules"   %% "scala-collection-compat"  % "2.11.0"
   ),
