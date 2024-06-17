@@ -1,11 +1,10 @@
 package com.scylladb.migrator.validation
 
-import com.amazonaws.services.dynamodbv2.model.AttributeValue
 import com.datastax.spark.connector.CassandraRow
 import com.google.common.math.DoubleMath
+import com.scylladb.migrator.alternator.DdbValue
 
 import java.time.temporal.ChronoUnit
-import scala.collection.JavaConverters._
 
 case class RowComparisonFailure(rowRepr: String,
                                 otherRepr: Option[String],
@@ -133,8 +132,8 @@ object RowComparisonFailure {
           )
     }
 
-  def dynamoDBRowComparisonFailure(left: Map[String, AttributeValue],
-                                   maybeRight: Option[Map[String, AttributeValue]],
+  def dynamoDBRowComparisonFailure(left: collection.Map[String, DdbValue],
+                                   maybeRight: Option[collection.Map[String, DdbValue]],
                                    items: List[Item]): RowComparisonFailure =
     RowComparisonFailure(left.toString, maybeRight.map(_.toString), items)
 
@@ -146,8 +145,8 @@ object RowComparisonFailure {
     * @param floatingPointTolerance The tolerance to apply when comparing floating point values
     * @return Some comparison failure if the compared items were different, otherwise `None`.
     */
-  def compareDynamoDBRows(left: Map[String, AttributeValue],
-                          maybeRight: Option[Map[String, AttributeValue]],
+  def compareDynamoDBRows(left: collection.Map[String, DdbValue],
+                          maybeRight: Option[collection.Map[String, DdbValue]],
                           renamedColumn: String => String,
                           floatingPointTolerance: Double): Option[RowComparisonFailure] =
     maybeRight match {
@@ -206,13 +205,12 @@ object RowComparisonFailure {
       case (Some(l: Array[_]), Some(r: Array[_])) =>
         !l.sameElements(r)
 
-      // Special cases for DynamoDB’s AttributeValue
-      case (Some(l: AttributeValue), Some(r: AttributeValue)) if l.getN != null && r.getN != null =>
-        areNumericalValuesDifferent(BigDecimal(l.getN), BigDecimal(r.getN), floatingPointTolerance)
-      case (Some(l: AttributeValue), Some(r: AttributeValue))
-          if l.getNS != null && r.getN != null =>
-        val xs = l.getNS.asScala.map(BigDecimal(_))
-        val ys = r.getNS.asScala.map(BigDecimal(_))
+      // Special cases for DynamoDB item values
+      case (Some(DdbValue.N(l)), Some(DdbValue.N(r))) =>
+        areNumericalValuesDifferent(BigDecimal(l), BigDecimal(r), floatingPointTolerance)
+      case (Some(DdbValue.Ns(l)), Some(DdbValue.Ns(r))) =>
+        val xs = l.map(BigDecimal(_))
+        val ys = r.map(BigDecimal(_))
         xs.size != ys.size || xs.zip(ys).exists {
           case (x, y) => areNumericalValuesDifferent(x, y, floatingPointTolerance)
         }

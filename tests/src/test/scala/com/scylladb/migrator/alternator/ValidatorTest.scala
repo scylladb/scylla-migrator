@@ -1,7 +1,6 @@
 package com.scylladb.migrator.alternator
 
-import com.amazonaws.services.dynamodbv2.model.{ AttributeAction, AttributeValueUpdate }
-import com.scylladb.migrator.AttributeValueUtils.stringValue
+import com.amazonaws.services.dynamodbv2.model.{ AttributeAction, AttributeValue, AttributeValueUpdate }
 import com.scylladb.migrator.SparkUtils.{ submitSparkJob, successfullyPerformMigration }
 
 import scala.jdk.CollectionConverters._
@@ -12,8 +11,8 @@ class ValidatorTest extends MigratorSuite {
   withTable("BasicTest").test("Validate migration") { tableName =>
     val configFile = "dynamodb-to-alternator-basic.yaml"
 
-    val keys = Map("id"   -> stringValue("12345"))
-    val attrs = Map("foo" -> stringValue("bar"))
+    val keys = Map("id"   -> new AttributeValue().withS("12345"))
+    val attrs = Map("foo" -> new AttributeValue().withS("bar"))
     val itemData = keys ++ attrs
 
     // Insert some items
@@ -33,7 +32,7 @@ class ValidatorTest extends MigratorSuite {
       keys.asJava,
       Map(
         "foo" -> new AttributeValueUpdate()
-          .withValue(stringValue("baz"))
+          .withValue(new AttributeValue().withS("baz"))
           .withAction(AttributeAction.PUT)).asJava)
 
     // Check that the validation failed because of the introduced change

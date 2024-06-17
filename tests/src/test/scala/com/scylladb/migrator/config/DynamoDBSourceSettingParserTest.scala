@@ -63,7 +63,7 @@ class DynamoDBSourceSettingParserTest extends munit.FunSuite {
         |      type: HASH
         |""".stripMargin
 
-    interceptMessage[DecodingFailure]("Unknown attribute type number: DownField(type),DownArray,DownField(attributeDefinitions),DownField(tableDescription)") {
+    interceptMessage[DecodingFailure]("DecodingFailure at .tableDescription.attributeDefinitions[0].type: Unknown attribute type number") {
       parseSourceSettings(config)
     }
   }
@@ -71,7 +71,6 @@ class DynamoDBSourceSettingParserTest extends munit.FunSuite {
   private def parseSourceSettings(yamlContent: String): SourceSettings.DynamoDBS3Export =
     yaml.parser
       .parse(yamlContent)
-      .right
       .flatMap(_.as[SourceSettings]) match {
       case Left(error) => throw error
       case Right(source: SourceSettings.DynamoDBS3Export) => source

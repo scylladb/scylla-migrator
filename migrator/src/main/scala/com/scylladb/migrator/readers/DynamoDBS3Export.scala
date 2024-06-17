@@ -1,6 +1,11 @@
 package com.scylladb.migrator.readers
 
-import com.amazonaws.services.dynamodbv2.model._
+import com.amazonaws.services.dynamodbv2.model.{
+  AttributeDefinition,
+  KeySchemaElement,
+  ProvisionedThroughputDescription,
+  TableDescription
+}
 import com.amazonaws.services.s3.{ AmazonS3, AmazonS3ClientBuilder }
 import com.scylladb.migrator.AwsUtils
 import com.scylladb.migrator.config.SourceSettings
@@ -11,10 +16,12 @@ import io.circe.parser.decode
 import org.apache.log4j.LogManager
 import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
+import software.amazon.awssdk.services.dynamodb.model.AttributeValue
 
 import java.nio.ByteBuffer
 import java.util.Base64
 import java.util.zip.GZIPInputStream
+import scala.collection.immutable.ArraySeq
 import scala.io.Source
 
 object DynamoDBS3Export {
@@ -144,30 +151,29 @@ object DynamoDBS3Export {
         import com.scylladb.migrator.AttributeValueUtils._
 
         (jsonObject.toMap.head match {
-          case ("S", value)    => value.as[String].right.map(stringValue)
-          case ("N", value)    => value.as[String].right.map(numericalValue)
-          case ("BOOL", value) => value.as[Boolean].right.map(boolValue)
+          case ("S", value)    => value.as[String].map(stringValue)
+          case ("N", value)    => value.as[String].map(numericalValue)
+          case ("BOOL", value) => value.as[Boolean].map(boolValue)
           case ("L", value) =>
             value
-              .as(Decoder.decodeArray(attributeValueDecoder, Array.canBuildFrom))
-              .right
-              .map(l => listValue(l: _*))
+              .as(Decoder.decodeArray(attributeValueDecoder, Array.toFactory(Array)))
+              .map(l => listValue(ArraySeq.unsafeWrapArray(l): _*))
           case ("NULL", _)  => Right(nullValue)
-          case ("B", value) => value.as[ByteBuffer].right.map(binaryValue)
+          case ("B", value) => value.as[ByteBuffer].map(binaryValue)
           case ("M", value) =>
-            value.as(dataDecoder).right.map(mapValue)
+            value.as(dataDecoder).map(mapValue)
           case ("SS", value) =>
             value
               .as[Array[String]]
-              .right
-              .map(ss => stringValues(ss: _*))
+              .map(ss => stringValues(ArraySeq.unsafeWrapArray(ss): _*))
           case ("NS", value) =>
             value
               .as[Array[String]]
-              .right
-              .map(ns => numericalValues(ns: _*))
+              .map(ns => numericalValues(ArraySeq.unsafeWrapArray(ns): _*))
           case ("BS", value) =>
-            value.as[Array[ByteBuffer]].right.map(byteBuffers => binaryValues(byteBuffers: _*))
+            value
+              .as[Array[ByteBuffer]]
+              .map(byteBuffers => binaryValues(ArraySeq.unsafeWrapArray(byteBuffers): _*))
           case (tpe, _) => Left(DecodingFailure(s"Unknown item type: ${tpe}", Nil))
         }).fold(error => sys.error(s"Unable to decode AttributeValue: ${error}"), identity)
     }
@@ -177,15 +183,15 @@ object DynamoDBS3Export {
         jsonObject.toMap.foldLeft[Either[String, Map[String, AttributeValue]]](Right(Map.empty)) {
           case (acc, (key, value)) =>
             for {
-              previousAttr <- acc.right
-              decodedValue <- attributeValueDecoder.decodeJson(value).left.map(_.toString()).right
+              previousAttr <- acc
+              decodedValue <- attributeValueDecoder.decodeJson(value).left.map(_.toString())
             } yield previousAttr + (key -> decodedValue)
         }
       }
 
     Decoder.instance { cursor =>
       for {
-        item <- cursor.downField("Item").as(dataDecoder).right
+        item <- cursor.downField("Item").as(dataDecoder)
       } yield item
     }
   }

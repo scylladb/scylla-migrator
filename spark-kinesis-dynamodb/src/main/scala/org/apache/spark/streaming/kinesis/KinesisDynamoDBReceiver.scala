@@ -18,11 +18,9 @@ package org.apache.spark.streaming.kinesis
 
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
-
-import scala.collection.JavaConverters._
 import scala.collection.mutable
+import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
-
 import com.amazonaws.services.cloudwatch.AmazonCloudWatchClientBuilder
 import com.amazonaws.services.dynamodbv2.{AmazonDynamoDBClientBuilder, AmazonDynamoDBStreamsClient}
 import com.amazonaws.services.dynamodbv2.model.DescribeTableRequest
@@ -30,14 +28,16 @@ import com.amazonaws.services.dynamodbv2.streamsadapter.{AmazonDynamoDBStreamsAd
 import com.amazonaws.services.kinesis.clientlibrary.interfaces.IRecordProcessorCheckpointer
 import com.amazonaws.services.kinesis.clientlibrary.interfaces.v2
 import com.amazonaws.services.kinesis.clientlibrary.lib.worker.{KinesisClientLibConfiguration, Worker}
+import com.amazonaws.services.kinesis.metrics.interfaces.MetricsLevel
 import com.amazonaws.services.kinesis.model.Record
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.storage.{StorageLevel, StreamBlockId}
 import org.apache.spark.streaming.Duration
 import org.apache.spark.streaming.kinesis.KinesisInitialPositions.AtTimestamp
 import org.apache.spark.streaming.receiver.{BlockGenerator, BlockGeneratorListener, Receiver}
 import org.apache.spark.util.Utils
+
+import scala.collection.immutable.ArraySeq
 
 /**
  * Custom AWS Kinesis-specific implementation of Spark Streaming's Receiver.
@@ -97,7 +97,9 @@ private[kinesis] class KinesisDynamoDBReceiver[T](
     messageHandler: Record => T,
     kinesisCreds: SparkAWSCredentials,
     dynamoDBCreds: Option[SparkAWSCredentials],
-    cloudWatchCreds: Option[SparkAWSCredentials])
+    cloudWatchCreds: Option[SparkAWSCredentials],
+    metricsLevel: MetricsLevel,
+    metricsEnabledDimensions: Set[String])
   extends Receiver[T](storageLevel) with Logging { receiver =>
 
   /*
@@ -148,7 +150,7 @@ private[kinesis] class KinesisDynamoDBReceiver[T](
    * This is called when the KinesisReceiver starts and must be non-blocking.
    * The KCL creates and manages the receiving/processing thread pool through Worker.run().
    */
-  override def onStart() {
+  override def onStart(): Unit = {
     blockGenerator = supervisor.createBlockGenerator(new GeneratedBlockHandler)
 
     workerId = Utils.localHostName() + ":" + UUID.randomUUID()
@@ -181,6 +183,8 @@ private[kinesis] class KinesisDynamoDBReceiver[T](
         .withKinesisEndpoint(endpointUrl)
         .withTaskBackoffTimeMillis(500)
         .withRegionName(regionName)
+        .withMetricsLevel(metricsLevel)
+        .withMetricsEnabledDimensions(metricsEnabledDimensions.asJava)
         .withIdleTimeBetweenReadsInMillis(500)
         .withMaxRecords(1000)
         .withFailoverTimeMillis(60000)
@@ -258,7 +262,7 @@ private[kinesis] class KinesisDynamoDBReceiver[T](
    * The KCL worker.shutdown() method stops the receiving/processing threads.
    * The KCL will do its best to drain and checkpoint any in-flight records upon shutdown.
    */
-  override def onStop() {
+  override def onStop(): Unit = {
     if (workerThread != null) {
       if (worker != null) {
         worker.shutdown()
@@ -329,7 +333,7 @@ private[kinesis] class KinesisDynamoDBReceiver[T](
    * for next block. Internally, this is synchronized with `rememberAddedRange()`.
    */
   private def finalizeRangesForCurrentBlock(blockId: StreamBlockId): Unit = {
-    blockIdToSeqNumRanges.put(blockId, SequenceNumberRanges(seqNumRangesInCurrentBlock.toArray))
+    blockIdToSeqNumRanges.put(blockId, SequenceNumberRanges(seqNumRangesInCurrentBlock.to(ArraySeq)))
     seqNumRangesInCurrentBlock.clear()
     logDebug(s"Generated block $blockId has $blockIdToSeqNumRanges")
   }

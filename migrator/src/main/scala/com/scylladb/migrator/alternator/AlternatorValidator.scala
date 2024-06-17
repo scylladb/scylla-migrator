@@ -1,14 +1,12 @@
 package com.scylladb.migrator.alternator
 
-import com.amazonaws.services.dynamodbv2.model.AttributeValue
 import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
 import com.scylladb.migrator.validation.RowComparisonFailure
 import com.scylladb.migrator.readers
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 
-import java.util
-import scala.collection.JavaConverters._
+import scala.jdk.CollectionConverters._
 
 object AlternatorValidator {
 
@@ -27,13 +25,14 @@ object AlternatorValidator {
     val (source, sourceTableDesc) = readers.DynamoDB.readRDD(spark, sourceSettings)
     val sourceTableKeys = sourceTableDesc.getKeySchema.asScala.toList
 
-    val sourceByKey: RDD[(List[AttributeValue], util.Map[String, AttributeValue])] =
+    val sourceByKey: RDD[(List[DdbValue], collection.Map[String, DdbValue])] =
       source
         .map {
           case (_, item) =>
             val key = sourceTableKeys
-              .map(keySchemaElement => item.getItem.get(keySchemaElement.getAttributeName))
-            (key, item.getItem)
+              .map(keySchemaElement =>
+                DdbValue.from(item.getItem.get(keySchemaElement.getAttributeName)))
+            (key, item.getItem.asScala.map { case (k, v) => (k, DdbValue.from(v)) })
         }
 
     val (target, _) = readers.DynamoDB.readRDD(
@@ -52,16 +51,16 @@ object AlternatorValidator {
     val renamedColumn = config.renamesMap
     val configValidation = config.validation
 
-    val targetByKey: RDD[(List[AttributeValue], util.Map[String, AttributeValue])] =
+    val targetByKey: RDD[(List[DdbValue], collection.Map[String, DdbValue])] =
       target
         .map {
           case (_, item) =>
             val key = sourceTableKeys
               .map { keySchemaElement =>
                 val columnName = keySchemaElement.getAttributeName
-                item.getItem.get(renamedColumn(columnName))
+                DdbValue.from(item.getItem.get(renamedColumn(columnName)))
               }
-            (key, item.getItem)
+            (key, item.getItem.asScala.map { case (k, v) => (k, DdbValue.from(v)) })
         }
 
     sourceByKey
@@ -69,8 +68,8 @@ object AlternatorValidator {
       .flatMap {
         case (_, (l, r)) =>
           RowComparisonFailure.compareDynamoDBRows(
-            l.asScala.toMap,
-            r.map(_.asScala.toMap),
+            l,
+            r,
             renamedColumn,
             configValidation.floatingPointTolerance
           )

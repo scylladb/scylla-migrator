@@ -1,14 +1,13 @@
 package com.scylladb.migrator.validation
 
-import com.amazonaws.services.dynamodbv2.model.AttributeValue
-import com.scylladb.migrator.AttributeValueUtils.{ numericalValue, stringValue }
-import com.scylladb.migrator.validation.RowComparisonFailure.{ dynamoDBRowComparisonFailure, Item }
+import com.scylladb.migrator.alternator.DdbValue
+import com.scylladb.migrator.validation.RowComparisonFailure.{Item, dynamoDBRowComparisonFailure}
 
 class DynamoDBRowComparisonTest extends munit.FunSuite {
 
   val sameColumns: String => String = identity
   val floatingPointTolerance: Double = 0.01
-  val item: Map[String, AttributeValue] = Map("foo" -> stringValue("bar"))
+  val item: Map[String, DdbValue] = Map("foo" -> DdbValue.S("bar"))
 
   test("No difference") {
     val result = RowComparisonFailure.compareDynamoDBRows(
@@ -22,7 +21,7 @@ class DynamoDBRowComparisonTest extends munit.FunSuite {
 
   test("No difference with renamed column") {
     // Same as `item` but with column `foo` renamed to `quux`
-    val renamedItem = Map("quux" -> stringValue("bar"))
+    val renamedItem = Map("quux" -> DdbValue.S("bar"))
     val result = RowComparisonFailure.compareDynamoDBRows(
       item,
       Some(renamedItem),
@@ -59,7 +58,7 @@ class DynamoDBRowComparisonTest extends munit.FunSuite {
   }
 
   test("Misspelled column") {
-    val otherItem = Map("baz" -> stringValue("bah"))
+    val otherItem = Map("baz" -> DdbValue.S("bah"))
     val result =
       RowComparisonFailure.compareDynamoDBRows(
         item,
@@ -73,7 +72,7 @@ class DynamoDBRowComparisonTest extends munit.FunSuite {
   }
 
   test("Incorrect value") {
-    val otherItem = Map("foo" -> stringValue("boom"))
+    val otherItem = Map("foo" -> DdbValue.S("boom"))
     val result =
       RowComparisonFailure.compareDynamoDBRows(
         item,
@@ -93,13 +92,13 @@ class DynamoDBRowComparisonTest extends munit.FunSuite {
   test("Numerical values within the tolerance threshold") {
     val numericalItem =
       Map(
-        "foo" -> numericalValue("123.456"),
-        "bar" -> numericalValue("789.012")
+        "foo" -> DdbValue.N("123.456"),
+        "bar" -> DdbValue.N("789.012")
       )
     val otherNumericalItem =
       Map(
-        "foo" -> numericalValue("123.457"), // +0.001
-        "bar" -> numericalValue("789.112") // +0.1
+        "foo" -> DdbValue.N("123.457"), // +0.001
+        "bar" -> DdbValue.N("789.112") // +0.1
       )
     val result =
       RowComparisonFailure.compareDynamoDBRows(

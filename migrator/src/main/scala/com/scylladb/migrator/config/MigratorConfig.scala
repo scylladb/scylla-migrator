@@ -28,10 +28,10 @@ object MigratorConfig {
 
   implicit val tokenDecoder: Decoder[Token[_]] = Decoder.instance { cursor =>
     for {
-      tpe <- cursor.get[String]("type").right
+      tpe <- cursor.get[String]("type")
       result <- tpe match {
-                 case "long"    => cursor.get[Long]("value").right.map(LongToken(_))
-                 case "bigint"  => cursor.get[BigInt]("value").right.map(BigIntToken(_))
+                 case "long"    => cursor.get[Long]("value").map(LongToken(_))
+                 case "bigint"  => cursor.get[BigInt]("value").map(BigIntToken(_))
                  case otherwise => Left(DecodingFailure(s"Unknown token type '$otherwise'", Nil))
                }
     } yield result

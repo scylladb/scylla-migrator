@@ -10,13 +10,13 @@ import com.scylladb.migrator.config.{ CopyType, SourceSettings }
 import org.apache.log4j.LogManager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.cassandra.{ CassandraSQLRow, DataTypeConverter }
-import org.apache.spark.sql.catalyst.encoders.RowEncoder
 import org.apache.spark.sql.types.{ IntegerType, LongType, StructField, StructType }
-import org.apache.spark.sql.{ DataFrame, Row, SparkSession }
+import org.apache.spark.sql.{ DataFrame, Encoders, Row, SparkSession }
 import org.apache.spark.unsafe.types.UTF8String
 import com.datastax.oss.driver.api.core.ConsistencyLevel
 import com.scylladb.migrator.scylla.SourceDataFrame
 
+import scala.collection.immutable.ArraySeq
 import scala.collection.mutable.ArrayBuffer
 
 object Cassandra {
@@ -41,7 +41,7 @@ object Cassandra {
   def createSelection(tableDef: TableDef,
                       origSchema: StructType,
                       preserveTimes: Boolean): Either[Throwable, Selection] =
-    determineCopyType(tableDef, preserveTimes).right map {
+    determineCopyType(tableDef, preserveTimes) map {
       case CopyType.WithTimestampPreservation =>
         val columnRefs =
           tableDef.partitionKey.map(_.ref) ++
@@ -113,11 +113,13 @@ object Cassandra {
           .groupBy {
             case (fieldName, value, ttl, writetime) => (ttl, writetime)
           }
+          .view
           .mapValues(
             _.map {
               case (fieldName, value, _, _) => fieldName -> value
             }.toMap
           )
+          .toMap
 
       // This is an optimisation to avoid unnecessary inserts and tombstones:
       // If there are multiple rows to insert, remove the row containing NULLs
@@ -139,7 +141,7 @@ object Cassandra {
                 .getOrElse(fields.getOrElse(field.name, CassandraOption.Unset))
             } ++ Seq(ttl.getOrElse(0L), writetime.getOrElse(CassandraOption.Unset))
 
-            Row(newValues: _*)
+            Row(ArraySeq.unsafeWrapArray(newValues): _*)
         }
     }
 
@@ -196,7 +198,7 @@ object Cassandra {
             broadcastSchema.value,
             broadcastPrimaryKeyOrdinals.value,
             broadcastRegularKeyOrdinals.value)
-        }(RowEncoder(finalSchema))
+        }(Encoders.row(finalSchema))
 
     }
 

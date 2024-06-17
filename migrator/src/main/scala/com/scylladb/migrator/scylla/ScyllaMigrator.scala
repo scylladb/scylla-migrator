@@ -51,17 +51,18 @@ object ScyllaMigrator {
       val cassandraPartitions = partitions.map(p => {
         p.asInstanceOf[CassandraPartition[_, _]]
       })
-      var allTokenRanges = Set[(Token[_], Token[_])]()
+      val allTokenRangesBuilder = Set.newBuilder[(Token[_], Token[_])]
       cassandraPartitions.foreach(p => {
         p.tokenRanges
           .asInstanceOf[Vector[CqlTokenRange[_, _]]]
           .foreach(tr => {
-            val range =
-              Set((tr.range.start.asInstanceOf[Token[_]], tr.range.end.asInstanceOf[Token[_]]))
-            allTokenRanges = allTokenRanges ++ range
+            val range: (Token[_], Token[_]) =
+              (tr.range.start.asInstanceOf[Token[_]], tr.range.end.asInstanceOf[Token[_]])
+            allTokenRangesBuilder += range
           })
 
       })
+      val allTokenRanges = allTokenRangesBuilder.result()
 
       log.info("All token ranges extracted from partitions size:" + allTokenRanges.size)
 

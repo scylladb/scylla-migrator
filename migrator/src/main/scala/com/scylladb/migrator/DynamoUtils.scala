@@ -24,6 +24,7 @@ import com.scylladb.migrator.config.{ DynamoDBEndpoint, SourceSettings, TargetSe
 import org.apache.hadoop.dynamodb.DynamoDBConstants
 import org.apache.hadoop.mapred.JobConf
 import org.apache.log4j.LogManager
+import software.amazon.awssdk.auth.credentials.{ AwsCredentials, ProfileCredentialsProvider }
 
 import scala.util.{ Failure, Success, Try }
 
@@ -174,9 +175,14 @@ object DynamoUtils {
         jobConf.set(DynamoDBConstants.DYNAMODB_SESSION_TOKEN_CONF, sessionToken)
       }
     }
+
+    // The default way to compute the available resources (memory/cpu per worker) requires a
+    // YARN environment. We disable it to be agnostic to the type of cluster.
+    jobConf.set(DynamoDBConstants.YARN_RESOURCE_MANAGER_ENABLED, "false")
+
     jobConf.set(
       DynamoDBConstants.CUSTOM_CREDENTIALS_PROVIDER_CONF,
-      "com.amazonaws.auth.profile.ProfileCredentialsProvider")
+      "com.scylladb.migrator.DynamoUtils$ProfileCredentialsProvider")
     jobConf.set(
       "mapred.output.format.class",
       "org.apache.hadoop.dynamodb.write.DynamoDBOutputFormat")
@@ -221,5 +227,12 @@ object DynamoUtils {
     } else {
       DynamoDBConstants.DEFAULT_CAPACITY_FOR_ON_DEMAND * bytesPerCapacityUnit
     }
+
+  /** Reflection-friendly credentials provider used by the EMR DynamoDB connector */
+  class ProfileCredentialsProvider
+      extends software.amazon.awssdk.auth.credentials.AwsCredentialsProvider {
+    private lazy val delegate = ProfileCredentialsProvider.create()
+    def resolveCredentials(): AwsCredentials = delegate.resolveCredentials()
+  }
 
 }

@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
 
   dynamodb:
@@ -62,13 +60,11 @@ services:
       - scylla
 
   spark-master:
-    image: bde2020/spark-master:2.4.4-hadoop2.7
+    build: dockerfiles/spark
+    command: master
     container_name: spark-master
     hostname: spark-master
     environment:
-      INIT_DAEMON_STEP: setup_spark
-      SPARK_MASTER: spark://spark-master:7077
-      SPARK_CONF_DIR: /conf
       SPARK_PUBLIC_DNS: spark-master
     networks:
       - scylla
@@ -89,13 +85,14 @@ services:
       - 7077:7077
       - 8080:8080
     volumes:
-      - ./migrator/target/scala-2.11:/jars
+      - ./migrator/target/scala-2.13:/jars
       - ./tests/src/test/configurations:/app/configurations
       - ./tests/docker/spark-master:/app/savepoints
       - ./tests/docker/parquet:/app/parquet
 
   spark-worker:
-    image: bde2020/spark-worker:2.4.4-hadoop2.7
+    build: dockerfiles/spark
+    command: worker
     hostname: spark-worker
     container_name: spark-worker-1
     environment:

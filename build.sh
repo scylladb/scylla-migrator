@@ -12,7 +12,7 @@ TMPDIR="$PWD"/tmpexec
 mkdir -p "$TMPDIR"
 trap "rm -rf $TMPDIR" EXIT
 pushd spark-cassandra-connector
-sbt -Djava.io.tmpdir="$TMPDIR" ++2.11.12 publishLocal
+sbt -Djava.io.tmpdir="$TMPDIR" ++2.13.11 publishLocal
 popd
 
-sbt -Djava.io.tmpdir="$TMPDIR" migrator/assembly
+sbt -Djava.io.tmpdir="$TMPDIR" -mem 8192 migrator/assembly

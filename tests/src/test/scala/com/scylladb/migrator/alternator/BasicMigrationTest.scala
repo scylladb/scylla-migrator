@@ -1,15 +1,15 @@
 package com.scylladb.migrator.alternator
 
-import com.scylladb.migrator.AttributeValueUtils.stringValue
+import com.amazonaws.services.dynamodbv2.model.AttributeValue
 import com.scylladb.migrator.SparkUtils.successfullyPerformMigration
 
-import scala.collection.JavaConverters._
+import scala.jdk.CollectionConverters._
 
 class BasicMigrationTest extends MigratorSuite {
 
   withTable("BasicTest").test("Read from source and write to target") { tableName =>
-    val keys = Map("id"   -> stringValue("12345"))
-    val attrs = Map("foo" -> stringValue("bar"))
+    val keys = Map("id"   -> new AttributeValue().withS("12345"))
+    val attrs = Map("foo" -> new AttributeValue().withS("bar"))
     val itemData = keys ++ attrs
 
     // Insert some items
