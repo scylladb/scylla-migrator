@@ -5,7 +5,6 @@ import org.apache.hadoop.mapred.{ InputSplit, JobConf }
 
 /**
   * Specializes the split strategy:
-  *    - do not bound the maximum number of partitions by the available memory per node
   *    - use as many partitions as the number of scan segments
   *    - by default, create segments that split the data into 128 MB chunks
   */
@@ -39,7 +38,7 @@ class DynamoDBInputFormat extends org.apache.hadoop.dynamodb.read.DynamoDBInputF
 
     log.info(s"Using ${numSegments} segments across ${numMappers} mappers")
 
-    getSplitGenerator().generateSplits(numMappers, numSegments, conf)
+    getSplitGenerator.generateSplits(numMappers, numSegments, conf)
   }
 
   override def getNumSegments(tableNormalizedReadThroughput: Int,
@@ -61,7 +60,7 @@ class DynamoDBInputFormat extends org.apache.hadoop.dynamodb.read.DynamoDBInputF
       // split into segments of at most 100 MB each (note: upstream implementation splits into 1 GB segments)
       val numSegmentsForSize = {
         val bytesPerSegment = 100 * 1024 * 1024
-        (currentTableSizeBytes / bytesPerSegment).ceil.intValue()
+        (currentTableSizeBytes.toDouble / bytesPerSegment).ceil.intValue()
       }
       log.info(s"Would use ${numSegmentsForSize} segments for size")
 
@@ -81,6 +80,33 @@ class DynamoDBInputFormat extends org.apache.hadoop.dynamodb.read.DynamoDBInputF
       log.info(s"Using computed number of segments: ${numSegments}")
       numSegments
     }
+  }
+
+  // Implementation copied from https://github.com/awslabs/emr-dynamodb-connector/blob/f52cef1ceac75c524f47996802a10f2bd6554c7e/emr-dynamodb-hadoop/src/main/java/org/apache/hadoop/dynamodb/read/AbstractDynamoDBInputFormat.java
+  // and adapted to initialize the number of mappers to the number of segments
+  private def getNumMappers(numSegments: Int, configuredReadThroughput: Int, conf: JobConf): Int = {
+    log.info("Number of segments: " + numSegments)
+    log.info("Configured read throughput: " + configuredReadThroughput)
+
+    var numMappers = numSegments
+
+    // Don't use an excessive number of mappers for a small scan job
+    val maxMapTasksForThroughput = configuredReadThroughput / 100
+    if (maxMapTasksForThroughput < numSegments) numMappers = maxMapTasksForThroughput
+
+    // Don't need more mappers than max possible scan segments
+    val maxSplits = Math.min(
+      DynamoDBConstants.MAX_SCAN_SEGMENTS,
+      conf.getInt(DynamoDBConstants.MAX_MAP_TASKS, DynamoDBConstants.MAX_SCAN_SEGMENTS))
+    if (numMappers > maxSplits) {
+      log.info("Max number of splits: " + maxSplits)
+      numMappers = maxSplits
+    }
+
+    numMappers = Math.max(numMappers, DynamoDBConstants.MIN_SCAN_SEGMENTS)
+
+    log.info("Calculated to use " + numMappers + " mappers")
+    numMappers
   }
 
 }

@@ -1,7 +1,7 @@
 package org.apache.spark.streaming.kinesis
 
 import com.amazonaws.services.kinesis.model.Record
-import org.apache.spark.streaming.kinesis.KinesisInputDStream.{DEFAULT_KINESIS_ENDPOINT_URL, DEFAULT_STORAGE_LEVEL}
+import org.apache.spark.streaming.kinesis.KinesisInputDStream.{DEFAULT_KINESIS_ENDPOINT_URL, DEFAULT_METRICS_ENABLED_DIMENSIONS, DEFAULT_METRICS_LEVEL, DEFAULT_STORAGE_LEVEL}
 import org.apache.spark.streaming.receiver.Receiver
 import org.apache.spark.streaming.StreamingContext
 
@@ -29,8 +29,10 @@ class KinesisDynamoDBInputDStream[T: ClassTag](
       DEFAULT_STORAGE_LEVEL,
       messageHandler,
       kinesisCreds,
-      None,
-      None
+      dynamoDBCreds = None,
+      cloudWatchCreds = None,
+      DEFAULT_METRICS_LEVEL,
+      DEFAULT_METRICS_ENABLED_DIMENSIONS
     ) {
 
   override def getReceiver(): Receiver[T] = {
@@ -45,7 +47,9 @@ class KinesisDynamoDBInputDStream[T: ClassTag](
       messageHandler,
       kinesisCreds,
       dynamoDBCreds,
-      cloudWatchCreds
+      cloudWatchCreds,
+      metricsLevel,
+      metricsEnabledDimensions
     )
   }
 

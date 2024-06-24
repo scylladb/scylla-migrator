@@ -92,12 +92,12 @@
 
     - name: Download spark
       get_url: 
-        url: https://archive.apache.org/dist/spark/spark-2.4.8/spark-2.4.8-bin-hadoop2.7.tgz 
-        dest: "{{ home_dir }}/spark-2.4.8-bin-hadoop2.7.tgz"
+        url: https://archive.apache.org/dist/spark/spark-3.5.1/spark-3.5.1-bin-hadoop3-scala2.13.tgz
+        dest: "{{ home_dir }}/spark-3.5.1-bin-hadoop3-scala2.13.tgz"
 
     - name: Extract spark
       ansible.builtin.unarchive:
-        src: "spark-2.4.8-bin-hadoop2.7.tgz"
+        src: "spark-3.5.1-bin-hadoop3-scala2.13.tgz"
         dest: "{{ home_dir }}"
         remote_src: yes
 
@@ -109,7 +109,7 @@
 
     - name: Move spark to opt/spark
       become: true
-      command: "sudo mv spark-2.4.8-bin-hadoop2.7 {{ spark_home }}"
+      command: "sudo mv spark-3.5.1-bin-hadoop3-scala2.13 {{ spark_home }}"
 
     - name: Set JAVA_HOME
       ansible.builtin.lineinfile:

@@ -30,8 +30,7 @@ class AWSCredentialsParserTest extends munit.FunSuite {
   private def parseCredentials(yamlContent: String): AWSCredentials =
     yaml.parser
       .parse(yamlContent)
-      .right
       .flatMap(_.as[AWSCredentials])
-      .right.getOrElse(fail("Failed to parse AWS credentials."))
+      .getOrElse(fail("Failed to parse AWS credentials."))
 
 }

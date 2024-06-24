@@ -38,12 +38,9 @@ class DynamoDBTargetSettingParserTest extends munit.FunSuite {
   private def parseDynamoDBTargetSettings(yamlContent: String): TargetSettings.DynamoDB =
     yaml.parser
       .parse(yamlContent)
-      .right
-      .flatMap(_.as[TargetSettings])
-      .right
-      .get match {
-      case dynamoDB: TargetSettings.DynamoDB => dynamoDB
-      case other                             => fail(s"Failed to parse type TargetSettings.DynamoDB. Got ${other}.")
+      .flatMap(_.as[TargetSettings]) match {
+      case Right(dynamoDB: TargetSettings.DynamoDB) => dynamoDB
+      case other => fail(s"Failed to parse type TargetSettings.DynamoDB. Got ${other}.")
     }
 
 }

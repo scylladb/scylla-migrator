@@ -15,7 +15,7 @@ object Migrator {
       .appName("scylla-migrator")
       .config("spark.task.maxFailures", "1024")
       .config("spark.stage.maxConsecutiveAttempts", "60")
-      .getOrCreate
+      .getOrCreate()
 
     Logger.getRootLogger.setLevel(Level.WARN)
     log.setLevel(Level.INFO)
@@ -43,11 +43,14 @@ object Migrator {
           AlternatorMigrator.migrateFromDynamoDB(
             dynamoSource,
             alternatorTarget,
-            migratorConfig.renames)
+            migratorConfig.renamesMap)
         case (
             s3Source: SourceSettings.DynamoDBS3Export,
             alternatorTarget: TargetSettings.DynamoDB) =>
-          AlternatorMigrator.migrateFromS3Export(s3Source, alternatorTarget, migratorConfig.renames)
+          AlternatorMigrator.migrateFromS3Export(
+            s3Source,
+            alternatorTarget,
+            migratorConfig.renamesMap)
         case _ =>
           sys.error("Unsupported combination of source and target.")
       }

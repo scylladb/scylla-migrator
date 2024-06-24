@@ -1,6 +1,6 @@
 package com.scylladb.migrator.writers
 
-import com.amazonaws.services.dynamodbv2.model.{ AttributeValue, TableDescription }
+import com.amazonaws.services.dynamodbv2.model.TableDescription
 import com.amazonaws.services.dynamodbv2.streamsadapter.model.RecordAdapter
 import com.scylladb.migrator.AttributeValueUtils
 import com.scylladb.migrator.config.{ AWSCredentials, Rename, SourceSettings, TargetSettings }
@@ -14,6 +14,7 @@ import org.apache.spark.streaming.kinesis.{
   KinesisInitialPositions,
   SparkAWSCredentials
 }
+import software.amazon.awssdk.services.dynamodb.model.AttributeValue
 
 import java.util
 
@@ -29,7 +30,7 @@ object DynamoStreamReplication {
                     src: SourceSettings.DynamoDB,
                     target: TargetSettings.DynamoDB,
                     targetTableDesc: TableDescription,
-                    renames: List[Rename]): Unit =
+                    renamesMap: Map[String, String]): Unit =
     new KinesisDynamoDBInputDStream(
       streamingContext,
       streamName        = src.table,
@@ -41,10 +42,15 @@ object DynamoStreamReplication {
           val rec = recAdapter.getInternalObject
           val newMap = new util.HashMap[String, AttributeValue]()
 
-          if (rec.getDynamodb.getNewImage ne null)
-            newMap.putAll(rec.getDynamodb.getNewImage)
+          if (rec.getDynamodb.getNewImage ne null) {
+            rec.getDynamodb.getNewImage.forEach { (key, value) =>
+              newMap.put(key, AttributeValueUtils.fromV1(value))
+            }
+          }
 
-          newMap.putAll(rec.getDynamodb.getKeys)
+          rec.getDynamodb.getKeys.forEach { (key, value) =>
+            newMap.put(key, AttributeValueUtils.fromV1(value))
+          }
 
           val operationType =
             rec.getEventName match {
@@ -93,7 +99,7 @@ object DynamoStreamReplication {
         log.info("No changes to apply")
       }
 
-      DynamoDB.writeRDD(target, renames, rdd, targetTableDesc)(spark)
+      DynamoDB.writeRDD(target, renamesMap, rdd, targetTableDesc)(spark)
     }
 
 }

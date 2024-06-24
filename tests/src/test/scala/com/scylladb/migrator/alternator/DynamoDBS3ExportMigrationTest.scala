@@ -2,16 +2,15 @@ package com.scylladb.migrator.alternator
 
 import com.amazonaws.auth.{AWSStaticCredentialsProvider, BasicAWSCredentials}
 import com.amazonaws.client.builder.AwsClientBuilder
-import com.amazonaws.services.dynamodbv2.model.{AttributeDefinition, KeySchemaElement}
+import com.amazonaws.services.dynamodbv2.model.{AttributeDefinition, AttributeValue, KeySchemaElement}
 import com.amazonaws.services.s3.model.{AmazonS3Exception, HeadBucketRequest, ObjectListing}
 import com.amazonaws.services.s3.{AmazonS3, AmazonS3ClientBuilder}
-import com.scylladb.migrator.AttributeValueUtils._
 import com.scylladb.migrator.SparkUtils.successfullyPerformMigration
 
 import java.nio.ByteBuffer
 import java.nio.file.{Files, Path, Paths}
 import java.util.function.Consumer
-import scala.collection.JavaConverters._
+import scala.jdk.CollectionConverters._
 
 class DynamoDBS3ExportMigrationTest extends MigratorSuite {
 
@@ -50,29 +49,34 @@ class DynamoDBS3ExportMigrationTest extends MigratorSuite {
     )
 
     // Check that the items have been migrated to the target table
-    val item1Key = Map("id" -> stringValue("foo"))
-    val item1Data = item1Key ++ Map("bar" -> numericalValue("42"))
+    val item1Key = Map("id" -> new AttributeValue().withS("foo"))
+    val item1Data = item1Key ++ Map("bar" -> new AttributeValue().withN("42"))
     checkItemWasMigrated(tableName, item1Key, item1Data)
 
-    val item2Key = Map("id" -> stringValue("bar"))
-    val item2Data = item2Key ++ Map("baz" -> numericalValue("0"))
+    val item2Key = Map("id" -> new AttributeValue().withS("bar"))
+    val item2Data = item2Key ++ Map("baz" -> new AttributeValue().withN("0"))
     checkItemWasMigrated(tableName, item2Key, item2Data)
 
     // Check that all the data types have been correctly decoded during the import
-    val item3Key = Map("id" -> stringValue("K3TXQk84Si"))
+    val item3Key = Map("id" -> new AttributeValue().withS("K3TXQk84Si"))
     val item3Data = item3Key ++ Map(
-      "a" -> boolValue(false),
-      "b" -> nullValue,
-      "c" -> stringValues("8gfX8dh0xa", "fRjHZJ2Ce9"),
-      "d" -> numericalValues("3", "2"),
-      "e" -> listValue(numericalValue("1"), stringValue("Dsb87qc6Es")),
-      "f" -> mapValue(
-        "g" -> numericalValue("9"),
-        "h" -> nullValue,
-        "i" -> boolValue(true)
+      "a" -> new AttributeValue().withBOOL(false),
+      "b" -> new AttributeValue().withNULL(true),
+      "c" -> new AttributeValue().withSS("8gfX8dh0xa", "fRjHZJ2Ce9"),
+      "d" -> new AttributeValue().withNS("3", "2"),
+      "e" -> new AttributeValue().withL(new AttributeValue().withN("1"), new AttributeValue().withS("Dsb87qc6Es")),
+      "f" -> new AttributeValue().withM(
+        Map(
+          "g" -> new AttributeValue().withN("9"),
+          "h" -> new AttributeValue().withNULL(true),
+          "i" -> new AttributeValue().withBOOL(true)
+        ).asJava
       ),
-      "j" -> binaryValue("hello".getBytes),
-      "k" -> binaryValues(ByteBuffer.wrap("is fast".getBytes), ByteBuffer.wrap("scylladb".getBytes))
+      "j" -> new AttributeValue().withB(ByteBuffer.wrap("hello".getBytes)),
+      "k" -> new AttributeValue().withBS(
+        ByteBuffer.wrap("is fast".getBytes),
+        ByteBuffer.wrap("scylladb".getBytes)
+      )
     )
     checkItemWasMigrated(tableName, item3Key, item3Data)
   }

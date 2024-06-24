@@ -29,7 +29,7 @@ An ansible playbook is provided in ansible folder.  The ansible playbook will in
 
 # Building
 
-1. Make sure the Java 8 JDK and `sbt` are installed on your machine.
+1. Make sure the Java 8+ JDK and `sbt` are installed on your machine.
 2. Export the `JAVA_HOME` environment variable with the path to the
 JDK installation.
 3. Run `build.sh`.
@@ -40,10 +40,10 @@ Create a `config.yaml` for your migration using the template `config.yaml.exampl
 
 # Running on a live Spark cluster
 
-The Scylla Migrator is built against Spark 2.4.8, so you'll need to run that version on your cluster.
+The Scylla Migrator is built against Spark 3.5.1, so you'll need to run that version on your cluster.
 
 If you didn't build Scylla Migrator on the master node:
-After running `build.sh`, copy the jar from `./migrator/target/scala-2.11/scylla-migrator-assembly-0.0.1.jar` and the `config.yaml` you've created to the Spark master server.
+After running `build.sh`, copy the jar from `./migrator/target/scala-2.13/scylla-migrator-assembly-0.0.1.jar` and the `config.yaml` you've created to the Spark master server.
 
 Start the spark master and slaves.
 `cd scylla-migrator`
@@ -122,4 +122,4 @@ docker compose exec spark-master /spark/bin/spark-submit --class com.scylladb.mi
   /jars/scylla-migrator-assembly-0.0.1.jar
 ```
 
-The `spark-master` container mounts the `./migrator/target/scala-2.11` dir on `/jars` and the repository root on `/app`. To update the jar with new code, just run `build.sh` and then run `spark-submit` again.
+The `spark-master` container mounts the `./migrator/target/scala-2.13` dir on `/jars` and the repository root on `/app`. To update the jar with new code, just run `build.sh` and then run `spark-submit` again.
