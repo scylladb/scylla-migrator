@@ -18,7 +18,7 @@ inThisBuild(
 lazy val `spark-kinesis-dynamodb` = project.in(file("spark-kinesis-dynamodb")).settings(
   libraryDependencies ++= Seq(
     ("org.apache.spark" %% "spark-streaming-kinesis-asl" % sparkVersion)
-      .excludeAll(InclExclRule("org.apache.spark", "spark-streaming_2.13")), // For some reason, the Spark dependency is not marked as provided in spark-streaming-kinesis-asl. We exclude it and then add it as provided.
+      .excludeAll(InclExclRule("org.apache.spark", s"spark-streaming_${scalaBinaryVersion.value}")), // For some reason, the Spark dependency is not marked as provided in spark-streaming-kinesis-asl. We exclude it and then add it as provided.
     "org.apache.spark" %% "spark-streaming" % sparkVersion % Provided,
     "com.amazonaws"    % "dynamodb-streams-kinesis-adapter" % dynamodbStreamsKinesisAdapterVersion
   )
