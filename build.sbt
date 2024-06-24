@@ -49,7 +49,7 @@ lazy val migrator = (project in file("migrator")).settings(
     "software.amazon.awssdk"    % "dynamodb" % awsSdkVersion,
     "software.amazon.awssdk"    % "s3"       % awsSdkVersion,
     "software.amazon.awssdk"    % "sts"      % awsSdkVersion,
-    "com.datastax.spark" %% "spark-cassandra-connector" % "3.1.0-49-g38c045a4",
+    "com.datastax.spark" %% "spark-cassandra-connector" % "3.5.0-1-g468079b4",
     "com.github.jnr" % "jnr-posix" % "3.1.19", // Needed by the cassandra connector
     "com.amazon.emr" % "emr-dynamodb-hadoop" % "5.3.0",
     "io.circe"       %% "circe-generic"      % "0.14.7",
