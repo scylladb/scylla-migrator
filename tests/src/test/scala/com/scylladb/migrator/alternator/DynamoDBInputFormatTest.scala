@@ -1,8 +1,8 @@
 package com.scylladb.migrator.alternator
 
-import com.amazonaws.services.dynamodbv2.model.{BillingMode, BillingModeSummary, ProvisionedThroughputDescription, TableDescription}
 import com.scylladb.migrator.readers.DynamoDB
 import org.apache.spark.sql.SparkSession
+import software.amazon.awssdk.services.dynamodb.model.{BillingMode, BillingModeSummary, ProvisionedThroughputDescription, TableDescription}
 
 class DynamoDBInputFormatTest extends munit.FunSuite {
 
@@ -38,20 +38,24 @@ class DynamoDBInputFormatTest extends munit.FunSuite {
     configuredReadThroughput: Option[Int] = None,
     configuredThroughputReadPercent: Option[Float] = None
   ): Unit = {
-    val tableDescription =
-      new TableDescription()
-        .withTableName("DummyTable")
-        .withTableSizeBytes(tableSizeBytes)
+    val tableDescriptionBuilder =
+      TableDescription
+        .builder()
+        .tableName("DummyTable")
+        .tableSizeBytes(tableSizeBytes)
     tableProvisionedThroughput match {
       case Some((rcu, wcu)) =>
-        tableDescription.withProvisionedThroughput(
-          new ProvisionedThroughputDescription()
-            .withReadCapacityUnits(rcu)
-            .withWriteCapacityUnits(wcu)
+        tableDescriptionBuilder.provisionedThroughput(
+          ProvisionedThroughputDescription
+            .builder()
+            .readCapacityUnits(rcu)
+            .writeCapacityUnits(wcu)
+            .build()
         )
       case None =>
-        tableDescription.withProvisionedThroughput(new ProvisionedThroughputDescription())
-          .withBillingModeSummary(new BillingModeSummary().withBillingMode(BillingMode.PAY_PER_REQUEST))
+        tableDescriptionBuilder
+          .provisionedThroughput(ProvisionedThroughputDescription.builder().build())
+          .billingModeSummary(BillingModeSummary.builder().billingMode(BillingMode.PAY_PER_REQUEST).build())
     }
 
     val jobConf = DynamoDB.makeJobConf(
@@ -64,7 +68,7 @@ class DynamoDBInputFormatTest extends munit.FunSuite {
       maxMapTasks = configuredMaxMapTasks,
       readThroughput = configuredReadThroughput,
       throughputReadPercent = configuredThroughputReadPercent,
-      description = tableDescription
+      description = tableDescriptionBuilder.build()
     )
     val splits = new DynamoDBInputFormat().getSplits(jobConf, 1)
 

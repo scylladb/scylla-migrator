@@ -1,10 +1,11 @@
 package com.scylladb.migrator.alternator
 
-import com.amazonaws.auth.{ AWSStaticCredentialsProvider, BasicAWSCredentials }
-import com.amazonaws.client.builder.AwsClientBuilder.EndpointConfiguration
-import com.amazonaws.services.dynamodbv2.model._
-import com.amazonaws.services.dynamodbv2.{ AmazonDynamoDB, AmazonDynamoDBClientBuilder }
+import software.amazon.awssdk.auth.credentials.{AwsBasicCredentials, StaticCredentialsProvider}
+import software.amazon.awssdk.regions.Region
+import software.amazon.awssdk.services.dynamodb.DynamoDbClient
+import software.amazon.awssdk.services.dynamodb.model.{AttributeDefinition, AttributeValue, CreateTableRequest, DeleteTableRequest, DescribeTableRequest, GetItemRequest, KeySchemaElement, KeyType, ProvisionedThroughput, ResourceNotFoundException, ScalarAttributeType}
 
+import java.net.URI
 import scala.util.chaining._
 import scala.jdk.CollectionConverters._
 
@@ -17,17 +18,19 @@ import scala.jdk.CollectionConverters._
 trait MigratorSuite extends munit.FunSuite {
 
   /** Client of a source DynamoDB instance */
-  val sourceDDb: AmazonDynamoDB = AmazonDynamoDBClientBuilder
-    .standard()
-    .withEndpointConfiguration(new EndpointConfiguration("http://localhost:8001", "eu-central-1"))
-    .withCredentials(new AWSStaticCredentialsProvider(new BasicAWSCredentials("dummy", "dummy")))
+  val sourceDDb: DynamoDbClient = DynamoDbClient
+    .builder()
+    .region(Region.of("dummy"))
+    .endpointOverride(new URI("http://localhost:8001"))
+    .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("dummy", "dummy")))
     .build()
 
   /** Client of a target Alternator instance */
-  val targetAlternator: AmazonDynamoDB = AmazonDynamoDBClientBuilder
-    .standard()
-    .withEndpointConfiguration(new EndpointConfiguration("http://localhost:8000", "eu-central-1"))
-    .withCredentials(new AWSStaticCredentialsProvider(new BasicAWSCredentials("dummy", "dummy")))
+  val targetAlternator: DynamoDbClient = DynamoDbClient
+    .builder()
+    .region(Region.of("dummy"))
+    .endpointOverride(new URI("http://localhost:8000"))
+    .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("dummy", "dummy")))
     .build()
 
   /**
@@ -49,17 +52,19 @@ trait MigratorSuite extends munit.FunSuite {
       try {
         // Create the table in the source database
         val createTableRequest =
-          new CreateTableRequest()
-            .withTableName(name)
-            .withKeySchema(new KeySchemaElement("id", "HASH"))
-            .withAttributeDefinitions(new AttributeDefinition("id", "S"))
-            .withProvisionedThroughput(new ProvisionedThroughput(25L, 25L))
+          CreateTableRequest
+            .builder()
+            .tableName(name)
+            .keySchema(KeySchemaElement.builder().attributeName("id").keyType(KeyType.HASH).build())
+            .attributeDefinitions(AttributeDefinition.builder().attributeName("id").attributeType(ScalarAttributeType.S).build())
+            .provisionedThroughput(ProvisionedThroughput.builder.readCapacityUnits(25L).writeCapacityUnits(25L).build())
+            .build()
         sourceDDb.createTable(createTableRequest)
-        // TODO Replace with “waiters” after we upgrade the AWS SDK
-        Thread.sleep(5000)
-        sourceDDb.describeTable(name).tap { result =>
-          assertEquals(result.getTable.getTableStatus, TableStatus.ACTIVE.toString)
-        }
+        val waiterResponse =
+          sourceDDb
+            .waiter()
+            .waitUntilTableExists(describeTableRequest(name))
+        assert(waiterResponse.matched().response().isPresent, s"Failed to create table ${name}: ${waiterResponse.matched().exception().get()}")
       } catch {
         case any: Throwable =>
           fail(s"Failed to created table ${name} in database ${sourceDDb}", any)
@@ -69,22 +74,26 @@ trait MigratorSuite extends munit.FunSuite {
     teardown = { _ =>
       // Clean-up both the source and target databases because we assume the test did replicate the table
       // to the target database
-      targetAlternator.deleteTable(name)
-      sourceDDb.deleteTable(name)
+      targetAlternator.deleteTable(DeleteTableRequest.builder().tableName(name).build())
+      sourceDDb.deleteTable(DeleteTableRequest.builder().tableName(name).build())
       ()
     }
   )
 
+  def describeTableRequest(name: String): DescribeTableRequest =
+    DescribeTableRequest.builder().tableName(name).build()
+
   /** Delete the table from the provided database instance */
-  def deleteTableIfExists(database: AmazonDynamoDB, name: String): Unit =
+  def deleteTableIfExists(database: DynamoDbClient, name: String): Unit =
     try {
-      database.deleteTable(name).ensuring { result =>
-        result.getSdkHttpMetadata.getHttpStatusCode == 200
+      database.deleteTable(DeleteTableRequest.builder().tableName(name).build()).ensuring { result =>
+        result.sdkHttpResponse().isSuccessful
       }
-      // Wait for the table to be effectively deleted
-      // TODO After we upgrade the AWS SDK version, we could use “waiters”
-      // https://aws.amazon.com/fr/blogs/developer/using-waiters-in-the-aws-sdk-for-java-2-x/
-      Thread.sleep(5000)
+      val waiterResponse =
+        database
+          .waiter()
+          .waitUntilTableNotExists(describeTableRequest(name))
+      assert(waiterResponse.matched().response().isPresent, s"Failed to delete table ${name}: ${waiterResponse.matched().exception().get()}")
     } catch {
       case _: ResourceNotFoundException =>
         // OK, the table was not existing
@@ -95,31 +104,31 @@ trait MigratorSuite extends munit.FunSuite {
 
   /** Check that the table schema in the target database is the same as in the source database */
   def checkSchemaWasMigrated(tableName: String): Unit = {
-    val sourceTableDesc = sourceDDb.describeTable(tableName).getTable
+    val sourceTableDesc = sourceDDb.describeTable(describeTableRequest(tableName)).table
     checkSchemaWasMigrated(
       tableName,
-      sourceTableDesc.getKeySchema,
-      sourceTableDesc.getAttributeDefinitions
+      sourceTableDesc.keySchema,
+      sourceTableDesc.attributeDefinitions
     )
   }
 
   /** Check that the table schema in the target database is equal to the provided schema */
   def checkSchemaWasMigrated(tableName: String, keySchema: java.util.List[KeySchemaElement], attributeDefinitions: java.util.List[AttributeDefinition]): Unit = {
     targetAlternator
-      .describeTable(tableName)
-      .getTable
+      .describeTable(describeTableRequest(tableName))
+      .table
       .tap { targetTableDesc =>
-        assertEquals(targetTableDesc.getKeySchema, keySchema)
-        assertEquals(targetTableDesc.getAttributeDefinitions, attributeDefinitions)
+        assertEquals(targetTableDesc.keySchema, keySchema)
+        assertEquals(targetTableDesc.attributeDefinitions, attributeDefinitions)
       }
   }
 
   /** Check that the target database contains the provided item description */
   def checkItemWasMigrated(tableName: String, itemKey: Map[String, AttributeValue], itemData: Map[String, AttributeValue]): Unit = {
     targetAlternator
-      .getItem(new GetItemRequest(tableName, itemKey.asJava))
+      .getItem(GetItemRequest.builder.tableName(tableName).key(itemKey.asJava).build())
       .tap { itemResult =>
-        assertEquals(itemResult.getItem.asScala.toMap, itemData)
+        assertEquals(itemResult.item.asScala.toMap, itemData)
       }
   }
 

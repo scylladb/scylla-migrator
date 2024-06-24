@@ -1,24 +1,26 @@
 package com.scylladb.migrator.alternator
 
-import com.amazonaws.auth.{AWSStaticCredentialsProvider, BasicAWSCredentials}
-import com.amazonaws.client.builder.AwsClientBuilder
-import com.amazonaws.services.dynamodbv2.model.{AttributeDefinition, AttributeValue, KeySchemaElement}
-import com.amazonaws.services.s3.model.{AmazonS3Exception, HeadBucketRequest, ObjectListing}
-import com.amazonaws.services.s3.{AmazonS3, AmazonS3ClientBuilder}
 import com.scylladb.migrator.SparkUtils.successfullyPerformMigration
+import software.amazon.awssdk.auth.credentials.{AwsBasicCredentials, StaticCredentialsProvider}
+import software.amazon.awssdk.core.SdkBytes
+import software.amazon.awssdk.regions.Region
+import software.amazon.awssdk.services.dynamodb.model.{AttributeDefinition, AttributeValue, DeleteTableRequest, KeySchemaElement, KeyType, ScalarAttributeType}
+import software.amazon.awssdk.services.s3.S3Client
+import software.amazon.awssdk.services.s3.model.{CreateBucketRequest, DeleteBucketRequest, DeleteObjectRequest, HeadBucketRequest, ListObjectsV2Request, NoSuchBucketException, PutObjectRequest}
 
-import java.nio.ByteBuffer
+import java.net.URI
 import java.nio.file.{Files, Path, Paths}
 import java.util.function.Consumer
 import scala.jdk.CollectionConverters._
 
 class DynamoDBS3ExportMigrationTest extends MigratorSuite {
 
-  val s3Client: AmazonS3 =
-    AmazonS3ClientBuilder
-      .standard()
-      .withEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration("http://127.0.0.1:4566", "us-east-1"))
-      .withCredentials(new AWSStaticCredentialsProvider(new BasicAWSCredentials("dummy", "dummy")))
+  val s3Client: S3Client =
+    S3Client
+      .builder()
+      .endpointOverride(new URI("http://127.0.0.1:4566"))
+      .region(Region.EU_WEST_1)
+      .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("dummy", "dummy")))
       .build()
 
   withResources("test-bucket", "BasicTest").test("Export data from DynamoDB to S3, and import from S3 to Alternator") { case (bucketName, tableName) =>
@@ -26,14 +28,14 @@ class DynamoDBS3ExportMigrationTest extends MigratorSuite {
     // it seems impossible to tell DynamoDB to export to our local S3 instance. Instead,
     // we copy the files that resulted from a manual DynamoDB export into our local S3
     // instance.
-    val bucketPath = Paths.get("tests/src/test/s3/test-bucket")
+    val bucketPath = Paths.get("src/test/s3/test-bucket")
     Files
       .walk(bucketPath)
       .forEach(new Consumer[Path] {
         def accept(path: Path): Unit = {
           if (Files.isRegularFile(path)) {
             val key = bucketPath.relativize(path).toString
-            s3Client.putObject(bucketName, key, path.toFile)
+            s3Client.putObject(PutObjectRequest.builder().bucket(bucketName).key(key).build(), path)
           }
         }
       })
@@ -44,38 +46,40 @@ class DynamoDBS3ExportMigrationTest extends MigratorSuite {
     // Check that the schema has been correctly defined on the target table
     checkSchemaWasMigrated(
       tableName,
-      Seq(new KeySchemaElement("id", "HASH")).asJava,
-      Seq(new AttributeDefinition("id", "S")).asJava
+      Seq(KeySchemaElement.builder().attributeName("id").keyType(KeyType.HASH).build()).asJava,
+      Seq(AttributeDefinition.builder().attributeName("id").attributeType(ScalarAttributeType.S).build()).asJava
     )
 
     // Check that the items have been migrated to the target table
-    val item1Key = Map("id" -> new AttributeValue().withS("foo"))
-    val item1Data = item1Key ++ Map("bar" -> new AttributeValue().withN("42"))
+    val item1Key = Map("id" -> AttributeValue.fromS("foo"))
+    val item1Data = item1Key ++ Map("bar" -> AttributeValue.fromN("42"))
     checkItemWasMigrated(tableName, item1Key, item1Data)
 
-    val item2Key = Map("id" -> new AttributeValue().withS("bar"))
-    val item2Data = item2Key ++ Map("baz" -> new AttributeValue().withN("0"))
+    val item2Key = Map("id" -> AttributeValue.fromS("bar"))
+    val item2Data = item2Key ++ Map("baz" -> AttributeValue.fromN("0"))
     checkItemWasMigrated(tableName, item2Key, item2Data)
 
     // Check that all the data types have been correctly decoded during the import
-    val item3Key = Map("id" -> new AttributeValue().withS("K3TXQk84Si"))
+    val item3Key = Map("id" -> AttributeValue.fromS("K3TXQk84Si"))
     val item3Data = item3Key ++ Map(
-      "a" -> new AttributeValue().withBOOL(false),
-      "b" -> new AttributeValue().withNULL(true),
-      "c" -> new AttributeValue().withSS("8gfX8dh0xa", "fRjHZJ2Ce9"),
-      "d" -> new AttributeValue().withNS("3", "2"),
-      "e" -> new AttributeValue().withL(new AttributeValue().withN("1"), new AttributeValue().withS("Dsb87qc6Es")),
-      "f" -> new AttributeValue().withM(
+      "a" -> AttributeValue.fromBool(false),
+      "b" -> AttributeValue.fromNul(true),
+      "c" -> AttributeValue.fromSs(List("8gfX8dh0xa", "fRjHZJ2Ce9").asJava),
+      "d" -> AttributeValue.fromNs(List("3", "2").asJava),
+      "e" -> AttributeValue.fromL(List(AttributeValue.fromN("1"), AttributeValue.fromS("Dsb87qc6Es")).asJava),
+      "f" -> AttributeValue.fromM(
         Map(
-          "g" -> new AttributeValue().withN("9"),
-          "h" -> new AttributeValue().withNULL(true),
-          "i" -> new AttributeValue().withBOOL(true)
+          "g" -> AttributeValue.fromN("9"),
+          "h" -> AttributeValue.fromNul(true),
+          "i" -> AttributeValue.fromBool(true)
         ).asJava
       ),
-      "j" -> new AttributeValue().withB(ByteBuffer.wrap("hello".getBytes)),
-      "k" -> new AttributeValue().withBS(
-        ByteBuffer.wrap("is fast".getBytes),
-        ByteBuffer.wrap("scylladb".getBytes)
+      "j" -> AttributeValue.fromB(SdkBytes.fromUtf8String("hello")),
+      "k" -> AttributeValue.fromBs(
+        List(
+          SdkBytes.fromUtf8String("is fast"),
+          SdkBytes.fromUtf8String("scylladb")
+        ).asJava
       )
     )
     checkItemWasMigrated(tableName, item3Key, item3Data)
@@ -86,11 +90,11 @@ class DynamoDBS3ExportMigrationTest extends MigratorSuite {
     setup = _ => {
       deleteTableIfExists(targetAlternator, tableName)
       deleteBucket(bucketName)
-      s3Client.createBucket(bucketName)
+      s3Client.createBucket(CreateBucketRequest.builder().bucket(bucketName).build())
       (bucketName, tableName)
     },
     teardown = _ => {
-      targetAlternator.deleteTable(tableName)
+      targetAlternator.deleteTable(DeleteTableRequest.builder().tableName(tableName).build())
       deleteBucket(bucketName)
     }
   )
@@ -98,25 +102,21 @@ class DynamoDBS3ExportMigrationTest extends MigratorSuite {
   def deleteBucket(bucketName: String): Unit = {
     val bucketExists =
       try {
-        s3Client.headBucket(new HeadBucketRequest(bucketName))
+        s3Client.headBucket(HeadBucketRequest.builder().bucket(bucketName).build())
         true
       } catch {
-        case _: AmazonS3Exception => false
+        case _: NoSuchBucketException => false
       }
     if (bucketExists) {
-      // Remove the existing objects
-      def deleteObjects(listing: ObjectListing): Unit = {
-        for (summary <- listing.getObjectSummaries.asScala) {
-          s3Client.deleteObject(bucketName, summary.getKey)
+      s3Client.listObjectsV2Paginator(ListObjectsV2Request.builder().bucket(bucketName).build())
+        .stream()
+        .forEach { response =>
+          response.contents().stream().forEach { s3Object =>
+            s3Client.deleteObject(DeleteObjectRequest.builder().bucket(bucketName).key(s3Object.key).build())
+          }
         }
-        if (listing.isTruncated) {
-          deleteObjects(s3Client.listNextBatchOfObjects(listing))
-        }
-      }
 
-      deleteObjects(s3Client.listObjects(bucketName))
-
-      s3Client.deleteBucket(bucketName)
+      s3Client.deleteBucket(DeleteBucketRequest.builder().bucket(bucketName).build())
     }
   }
 

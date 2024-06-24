@@ -32,7 +32,7 @@ object SparkUtils {
         "docker",
         "compose",
         "-f",
-        "docker-compose-tests.yml",
+        "../docker-compose-tests.yml",
         "exec",
         "spark-master",
         "/spark/bin/spark-submit",

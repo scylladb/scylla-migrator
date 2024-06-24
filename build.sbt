@@ -99,7 +99,18 @@ lazy val tests = project.in(file("tests")).settings(
     "org.apache.hadoop"        % "hadoop-client"             % hadoopVersion,
     "org.scalameta"            %% "munit"                    % "0.7.29"
   ),
-  Test / parallelExecution := false
+  Test / parallelExecution := false,
+  // Needed to build a Spark session on Java 17+, see https://stackoverflow.com/questions/73465937/apache-spark-3-3-0-breaks-on-java-17-with-cannot-access-class-sun-nio-ch-direct
+  Test / javaOptions ++= {
+    val maybeJavaMajorVersion =
+      sys.props.get("java.version")
+        .map(version => version.takeWhile(_ != '.').toInt)
+    if (maybeJavaMajorVersion.exists(_ > 11))
+      Seq("--add-exports", "java.base/sun.nio.ch=ALL-UNNAMED")
+    else
+      Nil
+  },
+  Test / fork := true,
 ).dependsOn(migrator)
 
 lazy val root = project.in(file("."))

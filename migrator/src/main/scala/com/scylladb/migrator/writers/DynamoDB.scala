@@ -1,6 +1,5 @@
 package com.scylladb.migrator.writers
 
-import com.amazonaws.services.dynamodbv2.model.TableDescription
 import com.scylladb.migrator.DynamoUtils
 import com.scylladb.migrator.DynamoUtils.{ setDynamoDBJobConf, setOptionalConf }
 import com.scylladb.migrator.config.TargetSettings
@@ -9,7 +8,7 @@ import org.apache.hadoop.io.Text
 import org.apache.hadoop.mapred.JobConf
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
-import software.amazon.awssdk.services.dynamodb.model.AttributeValue
+import software.amazon.awssdk.services.dynamodb.model.{ AttributeValue, TableDescription }
 
 import java.util
 

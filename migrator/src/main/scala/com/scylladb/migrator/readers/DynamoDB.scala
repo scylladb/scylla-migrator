@@ -1,6 +1,5 @@
 package com.scylladb.migrator.readers
 
-import com.amazonaws.services.dynamodbv2.model.TableDescription
 import com.scylladb.migrator.{ AWSCredentials, DynamoUtils }
 import com.scylladb.migrator.DynamoUtils.{ setDynamoDBJobConf, setOptionalConf }
 import com.scylladb.migrator.alternator.DynamoDBInputFormat
@@ -10,6 +9,7 @@ import org.apache.hadoop.io.Text
 import org.apache.hadoop.mapred.JobConf
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
+import software.amazon.awssdk.services.dynamodb.model.{ DescribeTableRequest, TableDescription }
 
 object DynamoDB {
 
@@ -44,8 +44,8 @@ object DynamoDB {
 
     val tableDescription = DynamoUtils
       .buildDynamoClient(endpoint, credentials.map(_.toProvider), region)
-      .describeTable(table)
-      .getTable
+      .describeTable(DescribeTableRequest.builder().tableName(table).build())
+      .table
 
     val jobConf =
       makeJobConf(
@@ -81,12 +81,12 @@ object DynamoDB {
     throughputReadPercent: Option[Float],
     description: TableDescription
   ): JobConf = {
-    val maybeItemCount = Option(description.getItemCount).map(_.toLong)
+    val maybeItemCount = Option(description.itemCount).map(_.toLong)
     val maybeAvgItemSize =
       for {
         itemCount <- maybeItemCount
         if itemCount != 0L
-        tableSize <- Option(description.getTableSizeBytes)
+        tableSize <- Option(description.tableSizeBytes)
       } yield tableSize / itemCount
 
     val jobConf = new JobConf(spark.sparkContext.hadoopConfiguration)
@@ -105,7 +105,7 @@ object DynamoDB {
     setOptionalConf(
       jobConf,
       DynamoDBConstants.TABLE_SIZE_BYTES,
-      Option(description.getTableSizeBytes).map(_.toString))
+      Option(description.tableSizeBytes).map(_.toString))
     jobConf.set(
       DynamoDBConstants.READ_THROUGHPUT,
       readThroughput

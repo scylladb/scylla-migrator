@@ -1,32 +1,35 @@
 package com.scylladb.migrator
 
-import com.amazonaws.auth.AWSCredentialsProvider
-import com.amazonaws.services.dynamodbv2.{
-  AmazonDynamoDB,
-  AmazonDynamoDBClientBuilder,
-  AmazonDynamoDBStreams,
-  AmazonDynamoDBStreamsClientBuilder
-}
-import com.amazonaws.services.dynamodbv2.model.{
-  BillingMode,
-  CreateTableRequest,
-  DescribeStreamRequest,
-  ProvisionedThroughput,
-  ProvisionedThroughputDescription,
-  ResourceNotFoundException,
-  StreamSpecification,
-  StreamViewType,
-  TableDescription,
-  TableStatus,
-  UpdateTableRequest
-}
 import com.scylladb.migrator.config.{ DynamoDBEndpoint, SourceSettings, TargetSettings }
 import org.apache.hadoop.dynamodb.DynamoDBConstants
 import org.apache.hadoop.mapred.JobConf
 import org.apache.log4j.LogManager
-import software.amazon.awssdk.auth.credentials.{ AwsCredentials, ProfileCredentialsProvider }
+import software.amazon.awssdk.auth.credentials.{
+  AwsCredentials,
+  AwsCredentialsProvider,
+  ProfileCredentialsProvider
+}
+import software.amazon.awssdk.core.waiters.{ Waiter, WaiterAcceptor }
+import software.amazon.awssdk.services.dynamodb.DynamoDbClient
+import software.amazon.awssdk.services.dynamodb.model.{
+  BillingMode,
+  CreateTableRequest,
+  DescribeStreamRequest,
+  DescribeStreamResponse,
+  DescribeTableRequest,
+  ProvisionedThroughput,
+  ProvisionedThroughputDescription,
+  ResourceNotFoundException,
+  StreamSpecification,
+  StreamStatus,
+  StreamViewType,
+  TableDescription,
+  UpdateTableRequest
+}
+import software.amazon.awssdk.services.dynamodb.streams.DynamoDbStreamsClient
 
 import scala.util.{ Failure, Success, Try }
+import scala.jdk.OptionConverters._
 
 object DynamoUtils {
   val log = LogManager.getLogger("com.scylladb.migrator.DynamoUtils")
@@ -38,43 +41,48 @@ object DynamoUtils {
       buildDynamoClient(target.endpoint, target.finalCredentials.map(_.toProvider), target.region)
 
     log.info("Checking for table existence at destination")
-    val targetDescription = Try(targetClient.describeTable(target.table))
+    val describeTargetTableRequest =
+      DescribeTableRequest.builder().tableName(target.table).build()
+    val targetDescription = Try(targetClient.describeTable(describeTargetTableRequest))
     targetDescription match {
       case Success(desc) =>
         log.info(s"Table ${target.table} exists at destination")
-        desc.getTable
+        desc.table()
 
       case Failure(e: ResourceNotFoundException) =>
-        val request = new CreateTableRequest()
-          .withTableName(target.table)
-          .withKeySchema(sourceDescription.getKeySchema)
-          .withAttributeDefinitions(sourceDescription.getAttributeDefinitions)
-        if (sourceDescription.getProvisionedThroughput.getReadCapacityUnits != 0L && sourceDescription.getProvisionedThroughput.getWriteCapacityUnits != 0) {
+        val request = CreateTableRequest
+          .builder()
+          .tableName(target.table)
+          .keySchema(sourceDescription.keySchema)
+          .attributeDefinitions(sourceDescription.attributeDefinitions)
+        if (sourceDescription.provisionedThroughput.readCapacityUnits != 0L && sourceDescription.provisionedThroughput.writeCapacityUnits != 0) {
           request
-            .setProvisionedThroughput(
-              new ProvisionedThroughput(
-                sourceDescription.getProvisionedThroughput.getReadCapacityUnits,
-                sourceDescription.getProvisionedThroughput.getWriteCapacityUnits
-              )
+            .provisionedThroughput(
+              ProvisionedThroughput
+                .builder()
+                .readCapacityUnits(sourceDescription.provisionedThroughput.readCapacityUnits)
+                .writeCapacityUnits(sourceDescription.provisionedThroughput.writeCapacityUnits)
+                .build()
             )
         } else {
-          request.setBillingMode(BillingMode.PAY_PER_REQUEST.toString)
+          request.billingMode(BillingMode.PAY_PER_REQUEST)
         }
 
         log.info(
           s"Table ${target.table} does not exist at destination - creating it according to definition:")
         log.info(sourceDescription.toString)
-        targetClient.createTable(request)
+        targetClient.createTable(request.build())
         log.info(s"Table ${target.table} created.")
 
-        var targetTableDesc = targetClient.describeTable(target.table).getTable
-        while (TableStatus.ACTIVE.toString != targetTableDesc.getTableStatus) {
-          log.debug(s"Target table not ready yet. Waiting 1 second.")
-          Thread.sleep(1000)
-          targetTableDesc = targetClient.describeTable(target.table).getTable
+        val waiterResponse =
+          targetClient.waiter().waitUntilTableExists(describeTargetTableRequest).matched
+        waiterResponse.response.toScala match {
+          case Some(describeTableResponse) => describeTableResponse.table
+          case None =>
+            throw new RuntimeException(
+              "Unable to replicate table definition",
+              waiterResponse.exception.get)
         }
-
-        targetClient.describeTable(target.table).getTable
 
       case Failure(otherwise) =>
         throw new RuntimeException("Failed to check for table existence", otherwise)
@@ -92,49 +100,57 @@ object DynamoUtils {
 
     sourceClient
       .updateTable(
-        new UpdateTableRequest()
-          .withTableName(source.table)
-          .withStreamSpecification(
-            new StreamSpecification()
-              .withStreamEnabled(true)
-              .withStreamViewType(StreamViewType.NEW_IMAGE)
+        UpdateTableRequest
+          .builder()
+          .tableName(source.table)
+          .streamSpecification(
+            StreamSpecification
+              .builder()
+              .streamEnabled(true)
+              .streamViewType(StreamViewType.NEW_IMAGE)
+              .build()
           )
+          .build()
       )
 
-    var done = false
-    while (!done) {
-      val tableDesc = sourceClient.describeTable(source.table)
-      val latestStreamArn = tableDesc.getTable.getLatestStreamArn
-      val describeStream = sourceStreamsClient.describeStream(
-        new DescribeStreamRequest().withStreamArn(latestStreamArn))
-
-      val streamStatus = describeStream.getStreamDescription.getStreamStatus
-      if (streamStatus == "ENABLED") {
-        log.info("Stream enabled successfully")
-        done = true
-      } else {
-        log.info(
-          s"Stream not yet enabled (status ${streamStatus}); waiting for 5 seconds and retrying")
-        Thread.sleep(5000)
-      }
+    val waiterResponse =
+      Waiter
+        .builder(classOf[DescribeStreamResponse])
+        .addAcceptor(
+          WaiterAcceptor.successOnResponseAcceptor { (response: DescribeStreamResponse) =>
+            response.streamDescription.streamStatus == StreamStatus.ENABLED
+          }
+        )
+        .build()
+        .run(() => {
+          val tableDesc =
+            sourceClient.describeTable(
+              DescribeTableRequest.builder().tableName(source.table).build())
+          val latestStreamArn = tableDesc.table.latestStreamArn
+          sourceStreamsClient.describeStream(
+            DescribeStreamRequest.builder().streamArn(latestStreamArn).build()
+          )
+        })
+    if (waiterResponse.matched.response.isPresent) {
+      log.info("Stream enabled successfully")
+    } else {
+      throw new RuntimeException("Unable to enable streams", waiterResponse.matched.exception.get)
     }
   }
 
   def buildDynamoClient(endpoint: Option[DynamoDBEndpoint],
-                        creds: Option[AWSCredentialsProvider],
-                        region: Option[String]): AmazonDynamoDB = {
-    val builder = AmazonDynamoDBClientBuilder.standard()
+                        creds: Option[AwsCredentialsProvider],
+                        region: Option[String]): DynamoDbClient =
     AwsUtils
-      .configureClientBuilder(builder, endpoint, region, creds)
+      .configureClientBuilder(DynamoDbClient.builder(), endpoint, region, creds)
       .build()
-  }
 
   def buildDynamoStreamsClient(endpoint: Option[DynamoDBEndpoint],
-                               creds: Option[AWSCredentialsProvider],
-                               region: Option[String]): AmazonDynamoDBStreams = {
-    val builder = AmazonDynamoDBStreamsClientBuilder.standard()
-    AwsUtils.configureClientBuilder(builder, endpoint, region, creds).build()
-  }
+                               creds: Option[AwsCredentialsProvider],
+                               region: Option[String]): DynamoDbStreamsClient =
+    AwsUtils
+      .configureClientBuilder(DynamoDbStreamsClient.builder(), endpoint, region, creds)
+      .build()
 
   /**
     * Optionally set a configuration. If `maybeValue` is empty, nothing is done. Otherwise,
@@ -202,7 +218,7 @@ object DynamoUtils {
     tableThroughput(
       description,
       DynamoDBConstants.BYTES_PER_READ_CAPACITY_UNIT.longValue(),
-      _.getReadCapacityUnits)
+      _.readCapacityUnits)
 
   /**
     * @return The write throughput (in bytes per second) of the
@@ -217,13 +233,13 @@ object DynamoUtils {
     tableThroughput(
       description,
       DynamoDBConstants.BYTES_PER_WRITE_CAPACITY_UNIT.longValue(),
-      _.getWriteCapacityUnits)
+      _.writeCapacityUnits)
 
   private def tableThroughput(description: TableDescription,
                               bytesPerCapacityUnit: Long,
                               capacityUnits: ProvisionedThroughputDescription => Long): Long =
-    if (description.getBillingModeSummary == null || description.getBillingModeSummary.getBillingMode == BillingMode.PROVISIONED.toString) {
-      capacityUnits(description.getProvisionedThroughput) * bytesPerCapacityUnit
+    if (description.billingModeSummary == null || description.billingModeSummary.billingMode == BillingMode.PROVISIONED) {
+      capacityUnits(description.provisionedThroughput) * bytesPerCapacityUnit
     } else {
       DynamoDBConstants.DEFAULT_CAPACITY_FOR_ON_DEMAND * bytesPerCapacityUnit
     }

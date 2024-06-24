@@ -1,7 +1,7 @@
 package com.scylladb.migrator.alternator
 
-import com.amazonaws.services.dynamodbv2.model.{ AttributeAction, AttributeValue, AttributeValueUpdate }
-import com.scylladb.migrator.SparkUtils.{ submitSparkJob, successfullyPerformMigration }
+import com.scylladb.migrator.SparkUtils.{submitSparkJob, successfullyPerformMigration}
+import software.amazon.awssdk.services.dynamodb.model.{AttributeAction, AttributeValue, AttributeValueUpdate, PutItemRequest, UpdateItemRequest}
 
 import scala.jdk.CollectionConverters._
 import scala.util.chaining._
@@ -11,12 +11,12 @@ class ValidatorTest extends MigratorSuite {
   withTable("BasicTest").test("Validate migration") { tableName =>
     val configFile = "dynamodb-to-alternator-basic.yaml"
 
-    val keys = Map("id"   -> new AttributeValue().withS("12345"))
-    val attrs = Map("foo" -> new AttributeValue().withS("bar"))
+    val keys = Map("id"   -> AttributeValue.fromS("12345"))
+    val attrs = Map("foo" -> AttributeValue.fromS("bar"))
     val itemData = keys ++ attrs
 
     // Insert some items
-    sourceDDb.putItem(tableName, itemData.asJava)
+    sourceDDb.putItem(PutItemRequest.builder().tableName(tableName).item(itemData.asJava).build())
 
     // Perform the migration
     successfullyPerformMigration(configFile)
@@ -28,12 +28,19 @@ class ValidatorTest extends MigratorSuite {
 
     // Change the value of an item
     targetAlternator.updateItem(
-      tableName,
-      keys.asJava,
-      Map(
-        "foo" -> new AttributeValueUpdate()
-          .withValue(new AttributeValue().withS("baz"))
-          .withAction(AttributeAction.PUT)).asJava)
+      UpdateItemRequest
+        .builder()
+        .tableName(tableName)
+        .key(keys.asJava)
+        .attributeUpdates(
+          Map(
+            "foo" -> AttributeValueUpdate.builder()
+              .value(AttributeValue.fromS("baz"))
+              .action(AttributeAction.PUT).build()
+          ).asJava
+        )
+        .build()
+    )
 
     // Check that the validation failed because of the introduced change
     submitSparkJob(configFile, "com.scylladb.migrator.Validator").exitValue().tap { statusCode =>

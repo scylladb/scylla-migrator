@@ -37,7 +37,7 @@ class ParquetToScyllaBasicMigrationTest extends munit.FunSuite {
 
     // Create the Parquet data source
     ParquetWriter.writeAndClose(
-      "tests/docker/parquet/basic.parquet",
+      "docker/parquet/basic.parquet",
       List(BasicTestSchema(id = "12345", foo = "bar")),
       ParquetWriter.Options(writeMode = ParquetFileWriter.Mode.OVERWRITE)
     )

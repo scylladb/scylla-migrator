@@ -1,9 +1,8 @@
 package com.scylladb.migrator.writers
 
-import com.amazonaws.services.dynamodbv2.model.TableDescription
 import com.amazonaws.services.dynamodbv2.streamsadapter.model.RecordAdapter
 import com.scylladb.migrator.AttributeValueUtils
-import com.scylladb.migrator.config.{ AWSCredentials, Rename, SourceSettings, TargetSettings }
+import com.scylladb.migrator.config.{ AWSCredentials, SourceSettings, TargetSettings }
 import org.apache.hadoop.dynamodb.DynamoDBItemWritable
 import org.apache.hadoop.io.Text
 import org.apache.log4j.LogManager
@@ -14,7 +13,7 @@ import org.apache.spark.streaming.kinesis.{
   KinesisInitialPositions,
   SparkAWSCredentials
 }
-import software.amazon.awssdk.services.dynamodb.model.AttributeValue
+import software.amazon.awssdk.services.dynamodb.model.{ AttributeValue, TableDescription }
 
 import java.util
 
@@ -22,8 +21,8 @@ object DynamoStreamReplication {
   val log = LogManager.getLogger("com.scylladb.migrator.writers.DynamoStreamReplication")
 
   private val operationTypeColumn = "_dynamo_op_type"
-  private val putOperation = AttributeValueUtils.boolValue(true)
-  private val deleteOperation = AttributeValueUtils.boolValue(false)
+  private val putOperation = AttributeValue.fromBool(true)
+  private val deleteOperation = AttributeValue.fromBool(false)
 
   def createDStream(spark: SparkSession,
                     streamingContext: StreamingContext,

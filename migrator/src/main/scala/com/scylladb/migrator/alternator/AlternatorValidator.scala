@@ -23,7 +23,7 @@ object AlternatorValidator {
     config: MigratorConfig)(implicit spark: SparkSession): List[RowComparisonFailure] = {
 
     val (source, sourceTableDesc) = readers.DynamoDB.readRDD(spark, sourceSettings)
-    val sourceTableKeys = sourceTableDesc.getKeySchema.asScala.toList
+    val sourceTableKeys = sourceTableDesc.keySchema.asScala.toList
 
     val sourceByKey: RDD[(List[DdbValue], collection.Map[String, DdbValue])] =
       source
@@ -31,7 +31,7 @@ object AlternatorValidator {
           case (_, item) =>
             val key = sourceTableKeys
               .map(keySchemaElement =>
-                DdbValue.from(item.getItem.get(keySchemaElement.getAttributeName)))
+                DdbValue.from(item.getItem.get(keySchemaElement.attributeName)))
             (key, item.getItem.asScala.map { case (k, v) => (k, DdbValue.from(v)) })
         }
 
@@ -57,7 +57,7 @@ object AlternatorValidator {
           case (_, item) =>
             val key = sourceTableKeys
               .map { keySchemaElement =>
-                val columnName = keySchemaElement.getAttributeName
+                val columnName = keySchemaElement.attributeName
                 DdbValue.from(item.getItem.get(renamedColumn(columnName)))
               }
             (key, item.getItem.asScala.map { case (k, v) => (k, DdbValue.from(v)) })
