@@ -1,6 +1,7 @@
 package com.scylladb.migrator.writers
 
 import com.amazonaws.services.dynamodbv2.streamsadapter.model.RecordAdapter
+import com.amazonaws.services.dynamodbv2.model.{ AttributeValue => AttributeValueV1 }
 import com.scylladb.migrator.AttributeValueUtils
 import com.scylladb.migrator.config.{ AWSCredentials, SourceSettings, TargetSettings }
 import org.apache.hadoop.dynamodb.DynamoDBItemWritable
@@ -13,16 +14,21 @@ import org.apache.spark.streaming.kinesis.{
   KinesisInitialPositions,
   SparkAWSCredentials
 }
-import software.amazon.awssdk.services.dynamodb.model.{ AttributeValue, TableDescription }
+import software.amazon.awssdk.services.dynamodb.model.TableDescription
 
 import java.util
+import java.util.stream.Collectors
 
 object DynamoStreamReplication {
   val log = LogManager.getLogger("com.scylladb.migrator.writers.DynamoStreamReplication")
 
+  // We enrich the table items with a column `operationTypeColumn` describing the type of change
+  // applied to the item.
+  // We have to deal with multiple representation of the data because `spark-kinesis-dynamodb`
+  // uses the AWS SDK V1, whereas `emr-dynamodb-hadoop` uses the AWS SDK V2
   private val operationTypeColumn = "_dynamo_op_type"
-  private val putOperation = AttributeValue.fromBool(true)
-  private val deleteOperation = AttributeValue.fromBool(false)
+  private val putOperation = new AttributeValueV1().withBOOL(true)
+  private val deleteOperation = new AttributeValueV1().withBOOL(false)
 
   def createDStream(spark: SparkSession,
                     streamingContext: StreamingContext,
@@ -39,17 +45,13 @@ object DynamoStreamReplication {
       messageHandler = {
         case recAdapter: RecordAdapter =>
           val rec = recAdapter.getInternalObject
-          val newMap = new util.HashMap[String, AttributeValue]()
+          val newMap = new util.HashMap[String, AttributeValueV1]()
 
           if (rec.getDynamodb.getNewImage ne null) {
-            rec.getDynamodb.getNewImage.forEach { (key, value) =>
-              newMap.put(key, AttributeValueUtils.fromV1(value))
-            }
+            newMap.putAll(rec.getDynamodb.getNewImage)
           }
 
-          rec.getDynamodb.getKeys.forEach { (key, value) =>
-            newMap.put(key, AttributeValueUtils.fromV1(value))
-          }
+          newMap.putAll(rec.getDynamodb.getKeys)
 
           val operationType =
             rec.getEventName match {
@@ -73,15 +75,13 @@ object DynamoStreamReplication {
       }.orNull
     ).foreachRDD { msgs =>
       val rdd = msgs
-        .collect { case Some(item) => new DynamoDBItemWritable(item) }
+        .collect { case Some(item) => item: util.Map[String, AttributeValueV1] }
         .repartition(Runtime.getRuntime.availableProcessors() * 2)
-        .map(item => (new Text, item)) // Create the key after repartitioning to avoid Serialization issues
 
       val changes =
         rdd
-          .map(_._2) // Remove keys because they are not serializable
-          .groupBy { itemWritable =>
-            itemWritable.getItem.get(operationTypeColumn) match {
+          .groupBy { item =>
+            item.get(operationTypeColumn) match {
               case `putOperation`    => "UPSERT"
               case `deleteOperation` => "DELETE"
               case _                 => "UNKNOWN"
@@ -98,7 +98,26 @@ object DynamoStreamReplication {
         log.info("No changes to apply")
       }
 
-      DynamoDB.writeRDD(target, renamesMap, rdd, targetTableDesc)(spark)
+      val writableRdd =
+        rdd.map { item =>
+          (
+            new Text,
+            new DynamoDBItemWritable(
+              item
+                .entrySet()
+                .stream()
+                .collect(
+                  Collectors.toMap(
+                    (e: util.Map.Entry[String, AttributeValueV1]) => e.getKey,
+                    (e: util.Map.Entry[String, AttributeValueV1]) =>
+                      AttributeValueUtils.fromV1(e.getValue)
+                  )
+                )
+            )
+          )
+        }
+
+      DynamoDB.writeRDD(target, renamesMap, writableRdd, targetTableDesc)(spark)
     }
 
 }

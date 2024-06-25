@@ -89,17 +89,21 @@ trait MigratorSuite extends munit.FunSuite {
       database.deleteTable(DeleteTableRequest.builder().tableName(name).build()).ensuring { result =>
         result.sdkHttpResponse().isSuccessful
       }
-      val waiterResponse =
+      val maybeFailure =
         database
           .waiter()
           .waitUntilTableNotExists(describeTableRequest(name))
-      assert(waiterResponse.matched().response().isPresent, s"Failed to delete table ${name}: ${waiterResponse.matched().exception().get()}")
+          .matched()
+          .exception()
+      if (maybeFailure.isPresent) {
+        throw maybeFailure.get()
+      }
     } catch {
       case _: ResourceNotFoundException =>
-        // OK, the table was not existing
+        // OK, the table was not existing or the waiter completed with the ResourceNotFoundException
         ()
       case any: Throwable =>
-        fail(s"Something did not work as expected: ${any}")
+        fail(s"Failed to delete table ${name}", any)
     }
 
   /** Check that the table schema in the target database is the same as in the source database */

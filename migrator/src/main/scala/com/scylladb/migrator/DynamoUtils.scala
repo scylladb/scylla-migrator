@@ -9,13 +9,11 @@ import software.amazon.awssdk.auth.credentials.{
   AwsCredentialsProvider,
   ProfileCredentialsProvider
 }
-import software.amazon.awssdk.core.waiters.{ Waiter, WaiterAcceptor }
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
 import software.amazon.awssdk.services.dynamodb.model.{
   BillingMode,
   CreateTableRequest,
   DescribeStreamRequest,
-  DescribeStreamResponse,
   DescribeTableRequest,
   ProvisionedThroughput,
   ProvisionedThroughputDescription,
@@ -113,28 +111,24 @@ object DynamoUtils {
           .build()
       )
 
-    val waiterResponse =
-      Waiter
-        .builder(classOf[DescribeStreamResponse])
-        .addAcceptor(
-          WaiterAcceptor.successOnResponseAcceptor { (response: DescribeStreamResponse) =>
-            response.streamDescription.streamStatus == StreamStatus.ENABLED
-          }
-        )
-        .build()
-        .run(() => {
-          val tableDesc =
-            sourceClient.describeTable(
-              DescribeTableRequest.builder().tableName(source.table).build())
-          val latestStreamArn = tableDesc.table.latestStreamArn
-          sourceStreamsClient.describeStream(
-            DescribeStreamRequest.builder().streamArn(latestStreamArn).build()
-          )
-        })
-    if (waiterResponse.matched.response.isPresent) {
-      log.info("Stream enabled successfully")
-    } else {
-      throw new RuntimeException("Unable to enable streams", waiterResponse.matched.exception.get)
+    var done = false
+    while (!done) {
+      val tableDesc =
+        sourceClient.describeTable(DescribeTableRequest.builder().tableName(source.table).build())
+      val latestStreamArn = tableDesc.table.latestStreamArn
+      val describeStream =
+        sourceStreamsClient.describeStream(
+          DescribeStreamRequest.builder().streamArn(latestStreamArn).build())
+
+      val streamStatus = describeStream.streamDescription.streamStatus
+      if (streamStatus == StreamStatus.ENABLED) {
+        log.info("Stream enabled successfully")
+        done = true
+      } else {
+        log.info(
+          s"Stream not yet enabled (status ${streamStatus}); waiting for 5 seconds and retrying")
+        Thread.sleep(5000)
+      }
     }
   }
 
