@@ -70,6 +70,7 @@ lazy val migrator = (project in file("migrator")).settings(
       val oldStrategy = (assembly / assemblyMergeStrategy).value
       oldStrategy(x)
   },
+  assembly / assemblyJarName := s"${name.value}-assembly.jar",
   // uses compile classpath for the run task, including "provided" jar (cf http://stackoverflow.com/a/21803413/3827)
   Compile / run := Defaults
     .runTask(Compile / fullClasspath, Compile / run / mainClass, Compile / run / runner)

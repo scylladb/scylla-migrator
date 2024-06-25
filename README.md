@@ -26,14 +26,6 @@ An ansible playbook is provided in ansible folder.  The ansible playbook will in
 12. You can monitor progress by observing the spark web console you opened in step 7.  Additionally, after the job has started, you can track progress via http://<spark-master-hostname>:4040.  
   FYI: When no spark jobs are actively running, the spark progress page at port 4040 displays unavailable.  It is only useful and renders when a spark job is in progress.
 
-
-# Building
-
-1. Make sure the Java 8+ JDK and `sbt` are installed on your machine.
-2. Export the `JAVA_HOME` environment variable with the path to the
-JDK installation.
-3. Run `build.sh`.
-
 # Configuring the Migrator
 
 Create a `config.yaml` for your migration using the template `config.yaml.example` in the repository root. Read the comments throughout carefully.
@@ -42,8 +34,15 @@ Create a `config.yaml` for your migration using the template `config.yaml.exampl
 
 The Scylla Migrator is built against Spark 3.5.1, so you'll need to run that version on your cluster.
 
-If you didn't build Scylla Migrator on the master node:
-After running `build.sh`, copy the jar from `./migrator/target/scala-2.13/scylla-migrator-assembly-0.0.1.jar` and the `config.yaml` you've created to the Spark master server.
+Download the latest [release](https://github.com/scylladb/scylla-migrator/releases) of the migrator:
+
+~~~ sh
+wget https://github.com/scylladb/scylla-migrator/releases/latest/download/scylla-migrator-assembly.jar
+~~~
+
+Alternatively, you can [build](#building) a custom version of the migrator.
+
+Copy the jar `scylla-migrator-assembly.jar` and the `config.yaml` you've created to the Spark master server.
 
 Start the spark master and slaves.
 `cd scylla-migrator`
@@ -63,7 +62,7 @@ Then, run this command on the Spark master server:
 spark-submit --class com.scylladb.migrator.Migrator \
   --master spark://<spark-master-hostname>:7077 \
   --conf spark.scylla.config=<path to config.yaml> \
-  <path to scylla-migrator-assembly-0.0.1.jar>
+  <path to scylla-migrator-assembly.jar>
 ```
 
 If you pass on the truststore file or ssl related files use `--files` option:
@@ -72,7 +71,7 @@ spark-submit --class com.scylladb.migrator.Migrator \
   --master spark://<spark-master-hostname>:7077 \
   --conf spark.scylla.config=<path to config.yaml> \
   --files truststorefilename \
-  <path to scylla-migrator-assembly-0.0.1.jar>
+  <path to scylla-migrator-assembly.jar>
 ```
 
 # Running the validator
@@ -85,7 +84,7 @@ the previous steps):
 spark-submit --class com.scylladb.migrator.Validator \
   --master spark://<spark-master-hostname>:7077 \
   --conf spark.scylla.config=<path to config.yaml> \
-  <path to scylla-migrator-assembly-0.0.1.jar>
+  <path to scylla-migrator-assembly.jar>
 ```
 
 # Running locally
@@ -119,7 +118,17 @@ docker compose exec spark-master /spark/bin/spark-submit --class com.scylladb.mi
   --master spark://spark-master:7077 \
   --conf spark.driver.host=spark-master \
   --conf spark.scylla.config=/app/config.yaml \
-  /jars/scylla-migrator-assembly-0.0.1.jar
+  /jars/scylla-migrator-assembly.jar
 ```
 
 The `spark-master` container mounts the `./migrator/target/scala-2.13` dir on `/jars` and the repository root on `/app`. To update the jar with new code, just run `build.sh` and then run `spark-submit` again.
+
+# Building
+
+To test a custom version of the migrator that has not been [released](https://github.com/scylladb/scylla-migrator/releases), you can build it yourself by cloning this Git repository and following the steps below:
+
+1. Make sure the Java 8+ JDK and `sbt` are installed on your machine.
+2. Export the `JAVA_HOME` environment variable with the path to the
+   JDK installation.
+3. Run `build.sh`.
+4. This will produce the .jar file to use in the `spark-submit` command at path `migrator/target/scala-2.13/scylla-migrator-assembly.jar`.
