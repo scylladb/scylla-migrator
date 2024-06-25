@@ -50,10 +50,22 @@ source:
 #   path: s3a://bucket-name/path/to/parquet-directory
 #   # Optional AWS access/secret key for loading from S3.
 #   # This section can be left out if running on EC2 instances that have instance profiles with the
-#   # appropriate permissions. Assuming roles is not supported currently.
+#   # appropriate permissions.
 #   credentials:
 #     accessKey: <user>
 #     secretKey: <pass>
+#     # Optional - assume role, see https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html
+#     assumeRole:
+#       arn: <roleArn>
+#       # Optional - the session name to use. If not set, we use 'scylla-migrator'
+#       sessionName: <roleSessionName>
+#   # Optional - specify the region:
+#   region: <region>
+#   # Optional - specify the endpoint
+#   endpoint:
+#     # Specify the hostname without a protocol
+#     host: <host>
+#     port: <port>
 
 # Example for loading from DynamoDB:
 # source:
