@@ -1,12 +1,5 @@
 package com.scylladb.migrator.readers
 
-import com.amazonaws.services.dynamodbv2.model.{
-  AttributeDefinition,
-  KeySchemaElement,
-  ProvisionedThroughputDescription,
-  TableDescription
-}
-import com.amazonaws.services.s3.{ AmazonS3, AmazonS3ClientBuilder }
 import com.scylladb.migrator.AwsUtils
 import com.scylladb.migrator.config.SourceSettings
 import com.scylladb.migrator.config.SourceSettings.DynamoDBS3Export.{ AttributeType, KeyType }
@@ -16,29 +9,39 @@ import io.circe.parser.decode
 import org.apache.log4j.LogManager
 import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
-import software.amazon.awssdk.services.dynamodb.model.AttributeValue
+import software.amazon.awssdk.core.SdkBytes
+import software.amazon.awssdk.services.dynamodb.model.{
+  AttributeDefinition,
+  AttributeValue,
+  KeySchemaElement,
+  ProvisionedThroughputDescription,
+  ScalarAttributeType,
+  TableDescription,
+  KeyType => DdbKeyType
+}
+import software.amazon.awssdk.services.s3.S3Client
+import software.amazon.awssdk.services.s3.model.GetObjectRequest
 
-import java.nio.ByteBuffer
 import java.util.Base64
 import java.util.zip.GZIPInputStream
-import scala.collection.immutable.ArraySeq
 import scala.io.Source
+import scala.jdk.CollectionConverters._
 
 object DynamoDBS3Export {
 
   val log = LogManager.getLogger("com.scylladb.migrator.readers.DynamoDBS3Export")
 
-  def buildS3Client(source: SourceSettings.DynamoDBS3Export): AmazonS3 = {
+  def buildS3Client(source: SourceSettings.DynamoDBS3Export): S3Client = {
     val s3ClientBuilder =
       AwsUtils
         .configureClientBuilder(
-          AmazonS3ClientBuilder.standard(),
+          S3Client.builder(),
           source.endpoint,
           source.region,
           source.finalCredentials.map(_.toProvider)
         )
     for (usePathStyleAccess <- source.usePathStyleAccess) {
-      s3ClientBuilder.withPathStyleAccessEnabled(usePathStyleAccess)
+      s3ClientBuilder.forcePathStyle(usePathStyleAccess)
     }
     s3ClientBuilder.build()
   }
@@ -56,7 +59,12 @@ object DynamoDBS3Export {
     val summary =
       decode[ManifestSummary](
         Source
-          .fromInputStream(s3Client.getObject(source.bucket, source.manifestKey).getObjectContent)
+          .fromInputStream(
+            s3Client
+              .getObjectAsBytes(
+                GetObjectRequest.builder().bucket(source.bucket).key(source.manifestKey).build())
+              .asInputStream()
+          )
           .mkString
       ).fold(error => sys.error(s"Unable to read the export manifest summary: ${error}"), identity)
 
@@ -78,7 +86,15 @@ object DynamoDBS3Export {
     val manifestFiles =
       Source
         .fromInputStream(
-          s3Client.getObject(source.bucket, summary.manifestFilesS3Key).getObjectContent)
+          s3Client
+            .getObjectAsBytes(
+              GetObjectRequest
+                .builder()
+                .bucket(source.bucket)
+                .key(summary.manifestFilesS3Key)
+                .build())
+            .asInputStream()
+        )
         .getLines()
         .toSeq // Load all the manifest files to fail early in case of issue
         .map { manifestFileJson =>
@@ -100,8 +116,17 @@ object DynamoDBS3Export {
           val s3Client = buildS3Client(source)
           manifestFilesPartition.flatMap { manifestFile =>
             Source
-              .fromInputStream(new GZIPInputStream(
-                s3Client.getObject(source.bucket, manifestFile.dataFileS3Key).getObjectContent))
+              .fromInputStream(
+                new GZIPInputStream(
+                  s3Client
+                    .getObjectAsBytes(
+                      GetObjectRequest
+                        .builder()
+                        .bucket(source.bucket)
+                        .key(manifestFile.dataFileS3Key)
+                        .build())
+                    .asInputStream()
+                ))
               .getLines()
           }
         }
@@ -110,19 +135,37 @@ object DynamoDBS3Export {
 
     // Make up a table description although we don’t have an actual table as a source but a data export
     val tableDescription =
-      new TableDescription()
-        .withKeySchema(source.tableDescription.keySchema.map(key =>
-          new KeySchemaElement(key.name, key.`type` match {
-            case KeyType.Hash  => "HASH"
-            case KeyType.Range => "RANGE"
-          })): _*)
-        .withAttributeDefinitions(source.tableDescription.attributeDefinitions.map(attr =>
-          new AttributeDefinition(attr.name, attr.`type` match {
-            case AttributeType.S => "S"
-            case AttributeType.N => "N"
-            case AttributeType.B => "B"
-          })): _*)
-        .withProvisionedThroughput(new ProvisionedThroughputDescription())
+      TableDescription
+        .builder()
+        .keySchema(
+          source.tableDescription.keySchema.map(
+            key =>
+              KeySchemaElement
+                .builder()
+                .attributeName(key.name)
+                .keyType(key.`type` match {
+                  case KeyType.Hash  => DdbKeyType.HASH
+                  case KeyType.Range => DdbKeyType.RANGE
+                })
+                .build()
+          ): _*
+        )
+        .attributeDefinitions(
+          source.tableDescription.attributeDefinitions.map(
+            attr =>
+              AttributeDefinition
+                .builder()
+                .attributeName(attr.name)
+                .attributeType(attr.`type` match {
+                  case AttributeType.S => ScalarAttributeType.S
+                  case AttributeType.N => ScalarAttributeType.N
+                  case AttributeType.B => ScalarAttributeType.B
+                })
+                .build()
+          ): _*
+        )
+        .provisionedThroughput(ProvisionedThroughputDescription.builder().build())
+        .build()
 
     (rdd, tableDescription)
   }
@@ -143,37 +186,37 @@ object DynamoDBS3Export {
   // Decode the DynamoDB JSON format as shown here:
   // https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/S3DataExport.Output.html
   val itemDecoder: Decoder[Map[String, AttributeValue]] = {
-    implicit val binaryDataDecoder: Decoder[ByteBuffer] =
-      Decoder.decodeString.map(str => ByteBuffer.wrap(Base64.getDecoder.decode(str)))
+    implicit val binaryDataDecoder: Decoder[SdkBytes] =
+      Decoder.decodeString.map(str => SdkBytes.fromByteArray(Base64.getDecoder.decode(str)))
 
     lazy val attributeValueDecoder: Decoder[AttributeValue] = Decoder.decodeJsonObject.map {
       jsonObject =>
         import com.scylladb.migrator.AttributeValueUtils._
 
         (jsonObject.toMap.head match {
-          case ("S", value)    => value.as[String].map(stringValue)
-          case ("N", value)    => value.as[String].map(numericalValue)
-          case ("BOOL", value) => value.as[Boolean].map(boolValue)
+          case ("S", value)    => value.as[String].map(AttributeValue.fromS)
+          case ("N", value)    => value.as[String].map(AttributeValue.fromN)
+          case ("BOOL", value) => value.as[Boolean].map(AttributeValue.fromBool(_))
           case ("L", value) =>
             value
-              .as(Decoder.decodeArray(attributeValueDecoder, Array.toFactory(Array)))
-              .map(l => listValue(ArraySeq.unsafeWrapArray(l): _*))
-          case ("NULL", _)  => Right(nullValue)
-          case ("B", value) => value.as[ByteBuffer].map(binaryValue)
+              .as(Decoder.decodeList(attributeValueDecoder))
+              .map(l => AttributeValue.fromL(l.asJava))
+          case ("NULL", _)  => Right(AttributeValue.fromNul(true))
+          case ("B", value) => value.as[SdkBytes].map(AttributeValue.fromB)
           case ("M", value) =>
-            value.as(dataDecoder).map(mapValue)
+            value.as(dataDecoder).map(m => AttributeValue.fromM(m.asJava))
           case ("SS", value) =>
             value
-              .as[Array[String]]
-              .map(ss => stringValues(ArraySeq.unsafeWrapArray(ss): _*))
+              .as[List[String]]
+              .map(ss => AttributeValue.fromSs(ss.asJava))
           case ("NS", value) =>
             value
-              .as[Array[String]]
-              .map(ns => numericalValues(ArraySeq.unsafeWrapArray(ns): _*))
+              .as[List[String]]
+              .map(ns => AttributeValue.fromNs(ns.asJava))
           case ("BS", value) =>
             value
-              .as[Array[ByteBuffer]]
-              .map(byteBuffers => binaryValues(ArraySeq.unsafeWrapArray(byteBuffers): _*))
+              .as[List[SdkBytes]]
+              .map(bs => AttributeValue.fromBs(bs.asJava))
           case (tpe, _) => Left(DecodingFailure(s"Unknown item type: ${tpe}", Nil))
         }).fold(error => sys.error(s"Unable to decode AttributeValue: ${error}"), identity)
     }

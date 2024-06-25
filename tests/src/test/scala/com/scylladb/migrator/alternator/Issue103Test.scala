@@ -1,7 +1,7 @@
 package com.scylladb.migrator.alternator
 
-import com.amazonaws.services.dynamodbv2.model.AttributeValue
 import com.scylladb.migrator.SparkUtils.successfullyPerformMigration
+import software.amazon.awssdk.services.dynamodb.model.{AttributeValue, PutItemRequest}
 
 import scala.jdk.CollectionConverters._
 
@@ -10,25 +10,25 @@ class Issue103Test extends MigratorSuite {
 
   withTable("Issue103Items").test("Issue #103 is fixed") { tableName =>
     // Insert two items
-    val keys1 = Map("id" -> new AttributeValue().withS("4"))
+    val keys1 = Map("id" -> AttributeValue.fromS("4"))
     val attrs1 = Map(
-      "AlbumTitle" -> new AttributeValue().withS("aaaaa"),
-      "Awards"     -> new AttributeValue().withN("4")
+      "AlbumTitle" -> AttributeValue.fromS("aaaaa"),
+      "Awards"     -> AttributeValue.fromN("4")
     )
     val item1Data = keys1 ++ attrs1
 
-    val keys2 = Map("id" -> new AttributeValue().withS("999"))
+    val keys2 = Map("id" -> AttributeValue.fromS("999"))
     val attrs2 = Map(
-      "asdfg" -> new AttributeValue().withM(
+      "asdfg" -> AttributeValue.fromM(
         Map(
-        "fffff" -> new AttributeValue().withS("asdfasdfs")
+        "fffff" -> AttributeValue.fromS("asdfasdfs")
         ).asJava
       )
     )
     val item2Data = keys2 ++ attrs2
 
-    sourceDDb.putItem(tableName, item1Data.asJava)
-    sourceDDb.putItem(tableName, item2Data.asJava)
+    sourceDDb.putItem(PutItemRequest.builder().tableName(tableName).item(item1Data.asJava).build())
+    sourceDDb.putItem(PutItemRequest.builder().tableName(tableName).item(item2Data.asJava).build())
 
     // Perform the migration
     successfullyPerformMigration("dynamodb-to-alternator-issue-103.yaml")

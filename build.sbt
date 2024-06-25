@@ -18,7 +18,7 @@ inThisBuild(
 lazy val `spark-kinesis-dynamodb` = project.in(file("spark-kinesis-dynamodb")).settings(
   libraryDependencies ++= Seq(
     ("org.apache.spark" %% "spark-streaming-kinesis-asl" % sparkVersion)
-      .excludeAll(InclExclRule("org.apache.spark", "spark-streaming_2.13")), // For some reason, the Spark dependency is not marked as provided in spark-streaming-kinesis-asl. We exclude it and then add it as provided.
+      .excludeAll(InclExclRule("org.apache.spark", s"spark-streaming_${scalaBinaryVersion.value}")), // For some reason, the Spark dependency is not marked as provided in spark-streaming-kinesis-asl. We exclude it and then add it as provided.
     "org.apache.spark" %% "spark-streaming" % sparkVersion % Provided,
     "com.amazonaws"    % "dynamodb-streams-kinesis-adapter" % dynamodbStreamsKinesisAdapterVersion
   )
@@ -99,7 +99,18 @@ lazy val tests = project.in(file("tests")).settings(
     "org.apache.hadoop"        % "hadoop-client"             % hadoopVersion,
     "org.scalameta"            %% "munit"                    % "0.7.29"
   ),
-  Test / parallelExecution := false
+  Test / parallelExecution := false,
+  // Needed to build a Spark session on Java 17+, see https://stackoverflow.com/questions/73465937/apache-spark-3-3-0-breaks-on-java-17-with-cannot-access-class-sun-nio-ch-direct
+  Test / javaOptions ++= {
+    val maybeJavaMajorVersion =
+      sys.props.get("java.version")
+        .map(version => version.takeWhile(_ != '.').toInt)
+    if (maybeJavaMajorVersion.exists(_ > 11))
+      Seq("--add-exports", "java.base/sun.nio.ch=ALL-UNNAMED")
+    else
+      Nil
+  },
+  Test / fork := true,
 ).dependsOn(migrator)
 
 lazy val root = project.in(file("."))

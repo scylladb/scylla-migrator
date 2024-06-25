@@ -1,6 +1,7 @@
 source:
   type: dynamodb
   table: BasicTest
+  region: dummy
   endpoint:
     host: http://dynamodb
     port: 8000
@@ -11,6 +12,7 @@ source:
 target:
   type: dynamodb
   table: BasicTest
+  region: dummy
   endpoint:
     host: http://scylla
     port: 8000

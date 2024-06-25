@@ -1,6 +1,5 @@
 package com.scylladb.migrator.alternator
 
-import com.amazonaws.services.dynamodbv2.model.TableDescription
 import com.scylladb.migrator.{ readers, writers, DynamoUtils }
 import com.scylladb.migrator.config.{ SourceSettings, TargetSettings }
 import com.scylladb.migrator.writers.DynamoStreamReplication
@@ -10,6 +9,7 @@ import org.apache.log4j.LogManager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.streaming.{ Seconds, StreamingContext }
+import software.amazon.awssdk.services.dynamodb.model.TableDescription
 
 import scala.util.control.NonFatal
 import scala.jdk.CollectionConverters._

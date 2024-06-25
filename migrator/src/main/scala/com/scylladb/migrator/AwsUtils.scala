@@ -1,15 +1,19 @@
 package com.scylladb.migrator
 
-import com.amazonaws.auth.{
-  AWSCredentialsProvider,
-  AWSStaticCredentialsProvider,
-  BasicAWSCredentials,
-  BasicSessionCredentials
+import com.scylladb.migrator.config.DynamoDBEndpoint
+import software.amazon.awssdk.auth.credentials.{
+  AwsBasicCredentials,
+  AwsCredentialsProvider,
+  AwsSessionCredentials,
+  StaticCredentialsProvider
 }
-import com.amazonaws.client.builder.AwsClientBuilder
-import com.amazonaws.services.securitytoken.AWSSecurityTokenServiceClientBuilder
-import com.amazonaws.services.securitytoken.model.AssumeRoleRequest
-import com.scylladb.migrator.config.{ AWSAssumeRole, DynamoDBEndpoint }
+import software.amazon.awssdk.awscore.client.builder.AwsClientBuilder
+import software.amazon.awssdk.regions.Region
+import software.amazon.awssdk.services.sts.StsClient
+import software.amazon.awssdk.services.sts.model.AssumeRoleRequest
+
+import java.net.URI
+
 object AwsUtils {
 
   /** Configure an AWS SDK builder to use the provided endpoint, region and credentials provider */
@@ -17,16 +21,13 @@ object AwsUtils {
     builder: AwsClientBuilder[Builder, Client],
     maybeEndpoint: Option[DynamoDBEndpoint],
     maybeRegion: Option[String],
-    maybeCredentialsProvider: Option[AWSCredentialsProvider]): builder.type = {
+    maybeCredentialsProvider: Option[AwsCredentialsProvider]): builder.type = {
 
     for (endpoint <- maybeEndpoint) {
-      builder.setEndpointConfiguration(
-        new AwsClientBuilder.EndpointConfiguration(
-          endpoint.renderEndpoint,
-          maybeRegion.getOrElse("empty")))
+      builder.endpointOverride(new URI(endpoint.renderEndpoint))
     }
-    maybeCredentialsProvider.foreach(builder.setCredentials)
-    maybeRegion.foreach(builder.setRegion)
+    maybeCredentialsProvider.foreach(builder.credentialsProvider)
+    maybeRegion.map(Region.of).foreach(builder.region)
 
     builder
   }
@@ -48,26 +49,26 @@ object AwsUtils {
         case Some(role) =>
           val stsClient =
             configureClientBuilder(
-              AWSSecurityTokenServiceClientBuilder.standard(),
+              StsClient.builder(),
               endpoint,
               region,
               Some(
-                new AWSStaticCredentialsProvider(
-                  new BasicAWSCredentials(
-                    configuredCredentials.accessKey,
-                    configuredCredentials.secretKey)))
+                StaticCredentialsProvider.create(AwsBasicCredentials
+                  .create(configuredCredentials.accessKey, configuredCredentials.secretKey)))
             ).build()
           val response =
             stsClient.assumeRole(
-              new AssumeRoleRequest()
-                .withRoleArn(role.arn)
-                .withRoleSessionName(role.getSessionName)
+              AssumeRoleRequest
+                .builder()
+                .roleArn(role.arn)
+                .roleSessionName(role.getSessionName)
+                .build()
             )
-          val assumedCredentials = response.getCredentials
+          val assumedCredentials = response.credentials
           AWSCredentials(
-            assumedCredentials.getAccessKeyId,
-            assumedCredentials.getSecretAccessKey,
-            Some(assumedCredentials.getSessionToken)
+            assumedCredentials.accessKeyId,
+            assumedCredentials.secretAccessKey,
+            Some(assumedCredentials.sessionToken)
           )
       }
     }
@@ -78,13 +79,13 @@ object AwsUtils {
 case class AWSCredentials(accessKey: String, secretKey: String, maybeSessionToken: Option[String]) {
 
   /** Convenient method to use our credentials with the AWS SDK */
-  def toProvider: AWSCredentialsProvider = {
+  def toProvider: AwsCredentialsProvider = {
     val staticCredentials =
       maybeSessionToken match {
-        case Some(sessionToken) => new BasicSessionCredentials(accessKey, secretKey, sessionToken)
-        case None               => new BasicAWSCredentials(accessKey, secretKey)
+        case Some(sessionToken) => AwsSessionCredentials.create(accessKey, secretKey, sessionToken)
+        case None               => AwsBasicCredentials.create(accessKey, secretKey)
       }
-    new AWSStaticCredentialsProvider(staticCredentials)
+    StaticCredentialsProvider.create(staticCredentials)
   }
 
 }

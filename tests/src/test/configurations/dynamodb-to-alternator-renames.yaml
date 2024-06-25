@@ -1,6 +1,7 @@
 source:
   type: dynamodb
   table: RenamedItems
+  region: dummy
   endpoint:
     host: http://dynamodb
     port: 8000
@@ -12,6 +13,7 @@ source:
 target:
   type: dynamodb
   table: RenamedItems
+  region: dummy
   endpoint:
     host: http://scylla
     port: 8000
