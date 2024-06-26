@@ -35,6 +35,8 @@ object Validator {
     Logger.getLogger("org.apache.spark.scheduler.TaskSetManager").setLevel(Level.INFO)
     Logger.getLogger("com.datastax.spark.connector.cql.CassandraConnector").setLevel(Level.INFO)
 
+    log.info(s"ScyllaDB Migrator Validator ${BuildInfo.version}")
+
     val migratorConfig =
       MigratorConfig.loadFrom(spark.conf.get("spark.scylla.config"))
 

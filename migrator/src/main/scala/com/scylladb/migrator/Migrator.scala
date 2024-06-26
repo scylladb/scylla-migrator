@@ -22,6 +22,8 @@ object Migrator {
     Logger.getLogger("org.apache.spark.scheduler.TaskSetManager").setLevel(Level.WARN)
     Logger.getLogger("com.datastax.spark.connector.cql.CassandraConnector").setLevel(Level.WARN)
 
+    log.info(s"ScyllaDB Migrator ${BuildInfo.version}")
+
     val migratorConfig =
       MigratorConfig.loadFrom(spark.conf.get("spark.scylla.config"))
 
