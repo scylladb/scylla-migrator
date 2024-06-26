@@ -14,4 +14,4 @@ time spark-submit --class com.scylladb.migrator.Migrator \
 --conf spark.scylla.config=/home/ubuntu/scylla-migrator/config.dynamodb.yml \
 --conf spark.executor.memory=$MEMORY \
 --conf spark.driver.memory=64G \
-/home/ubuntu/scylla-migrator/migrator/target/scala-2.13/scylla-migrator-assembly-0.0.1.jar
+/home/ubuntu/scylla-migrator/migrator/target/scala-2.13/scylla-migrator-assembly.jar

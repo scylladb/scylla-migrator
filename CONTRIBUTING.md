@@ -76,3 +76,7 @@ Follow the procedure documented [here](https://stackoverflow.com/a/15505308/5617
    but you can see it in the worker web UI: http://localhost:8081/.
 5. Start the remote debugger from your IDE.
 6. The test execution resumes, and you can interact with it from your debugger.
+
+## Publishing
+
+Create a new [GitHub release](https://github.com/scylladb/scylla-migrator/releases), give it a tag name, a title, and a description, and then click Publish. A workflow will be triggered and will build the application fat-jar and upload it as a release asset.
