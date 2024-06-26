@@ -79,4 +79,10 @@ Follow the procedure documented [here](https://stackoverflow.com/a/15505308/5617
 
 ## Publishing
 
-Create a new [GitHub release](https://github.com/scylladb/scylla-migrator/releases), give it a tag name, a title, and a description, and then click Publish. A workflow will be triggered and will build the application fat-jar and upload it as a release asset.
+Create a new [GitHub release](https://github.com/scylladb/scylla-migrator/releases), give it a tag name (please see below), a title, and a description, and then click Publish. A workflow will be triggered and will build the application fat-jar and upload it as a release asset.
+
+Rules for the release tag name:
+- Make sure to use tag names like `v1.2.3`, starting with `v` and followed by a [semantic version number](https://semver.org/).
+- Bump the major version number if the new release breaks the backward compatibility (e.g., an existing configuration or setup will not work anymore with the new release).
+- Bump the minor version number if the new release introduces new features in a backward compatible manner.
+- Bump the patch version number if the new release only introduces bugfixes in a backward compatible manner.

@@ -24,9 +24,8 @@ lazy val `spark-kinesis-dynamodb` = project.in(file("spark-kinesis-dynamodb")).s
   )
 )
 
-lazy val migrator = (project in file("migrator")).settings(
+lazy val migrator = (project in file("migrator")).enablePlugins(BuildInfoPlugin).settings(
   name      := "scylla-migrator",
-  version   := "0.0.1",
   mainClass := Some("com.scylladb.migrator.Migrator"),
   javacOptions ++= Seq("-source", "1.8", "-target", "1.8"),
   javaOptions ++= Seq(
@@ -71,24 +70,12 @@ lazy val migrator = (project in file("migrator")).settings(
       oldStrategy(x)
   },
   assembly / assemblyJarName := s"${name.value}-assembly.jar",
+  buildInfoKeys := Seq[BuildInfoKey](version),
+  buildInfoPackage := "com.scylladb.migrator",
   // uses compile classpath for the run task, including "provided" jar (cf http://stackoverflow.com/a/21803413/3827)
   Compile / run := Defaults
     .runTask(Compile / fullClasspath, Compile / run / mainClass, Compile / run / runner)
-    .evaluated,
-  pomIncludeRepository := { x =>
-    false
-  },
-  pomIncludeRepository := { x =>
-    false
-  },
-  // publish settings
-  publishTo := {
-    val nexus = "https://oss.sonatype.org/"
-    if (isSnapshot.value)
-      Some("snapshots" at nexus + "content/repositories/snapshots")
-    else
-      Some("releases" at nexus + "service/local/staging/deploy/maven2")
-  }
+    .evaluated
 ).dependsOn(`spark-kinesis-dynamodb`)
 
 lazy val tests = project.in(file("tests")).settings(
