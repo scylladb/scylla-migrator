@@ -6,18 +6,24 @@ This page describes how to set up a Spark cluster on your infrastructure and to 
 
 1. Follow the `official documentation <https://spark.apache.org/docs/latest/spark-standalone.html>`_ to install Spark on each node of your cluster, and start the Spark master and the Spark workers.
 
-2. In the Spark master node, download the latest release of the Migrator. ::
+2. In the Spark master node, download the latest release of the Migrator.
+
+   .. code-block:: bash
 
      wget https://github.com/scylladb/scylla-migrator/releases/latest/download/scylla-migrator-assembly.jar
 
-3. In the Spark master node, copy the file ``config.yaml.example`` from our Git repository. ::
+3. In the Spark master node, copy the file ``config.yaml.example`` from our Git repository.
+
+   .. code-block:: bash
 
      wget https://github.com/scylladb/scylla-migrator/raw/master/config.yaml.example \
        --output-document=config.yaml
 
 4. `Configure the migration </getting-started/#configure-the-migration>`_ according to your needs.
 
-5. Finally, run the migration as follows from the Spark master node. ::
+5. Finally, run the migration as follows from the Spark master node.
+
+   .. code-block:: bash
 
      spark-submit --class com.scylladb.migrator.Migrator \
        --master spark://<spark-master-hostname>:7077 \

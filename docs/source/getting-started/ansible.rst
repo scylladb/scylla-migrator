@@ -2,18 +2,22 @@
 Set Up a Spark Cluster with Ansible
 ===================================
 
-An `Ansible <https://www.ansible.com/>`_ playbook is provided in the `ansible <https://github.com/scylladb/scylla-migrator/tree/master/ansible>`_ folder of our Git repository.  The Ansible playbook will install the pre-requisites, Spark, on the master and workers added to the ``ansible/inventory/hosts`` file.  Scylla-migrator will be installed on the spark master node.
+An `Ansible <https://www.ansible.com/>`_ playbook is provided in the `ansible folder <https://github.com/scylladb/scylla-migrator/tree/master/ansible>`_ folder of our Git repository.  The Ansible playbook will install the pre-requisites, Spark, on the master and workers added to the ``ansible/inventory/hosts`` file.  Scylla-migrator will be installed on the spark master node.
 
 1. Update ``ansible/inventory/hosts`` file with master and worker instances
 2. Update ``ansible/ansible.cfg`` with location of private key if necessary
 3. The ``ansible/template/spark-env-master-sample`` and ``ansible/template/spark-env-worker-sample`` contain environment variables determining number of workers, CPUs per worker, and memory allocations - as well as considerations for setting them.
 4. run ``ansible-playbook scylla-migrator.yml``
-5. On the Spark master node: ::
+5. On the Spark master node:
+
+   .. code-block:: bash
 
      cd scylla-migrator
      ./start-spark.sh
 
-6. On the Spark worker nodes: ::
+6. On the Spark worker nodes:
+
+   .. code-block:: bash
 
      ./start-slave.sh
 
