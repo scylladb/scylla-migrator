@@ -7,9 +7,21 @@ The Scylla Migrator is a Spark application that migrates data to ScyllaDB. Its m
 * it can read from Cassandra, Parquet, DynamoDB, or a DynamoDB S3 export,
 * it can be distributed over multiple nodes of a Spark cluster to scale with your database cluster,
 * it can rename columns along the way,
-* it can transfer a snapshot of the source data, or continuously migrate new data as they come.
+* when migrating from DynamoDB it can transfer a snapshot of the source data, or continuously migrate new data as they come.
 
 Read over the :doc:`Getting Started </getting-started/index>` page to set up a Spark cluster for a migration.
+
+--------------------
+Compatibility Matrix
+--------------------
+
+The following table summarizes the required version of Spark and Scala for each release of the migrator. Please make sure to set up a Spark environment compatible with the version of the migrator that you are using.
+
+========  =====  ======
+Migrator  Spark  Scala
+========  =====  ======
+0.9.x     3.5.x  2.13.x
+========  =====  ======
 
 .. toctree::
   :hidden:

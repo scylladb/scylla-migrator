@@ -20,6 +20,8 @@ This page describes how to use the Migrator in `Amazon EMR <https://aws.amazon.c
 
      wget https://github.com/scylladb/scylla-migrator/releases/latest/download/scylla-migrator-assembly.jar
 
+   Alternatively, `download a specific release of scylla-migrator-assembly.jar <https://github.com/scylladb/scylla-migrator/releases>`_.
+
 4. Upload them to an S3 bucket.
 
    .. code-block:: bash

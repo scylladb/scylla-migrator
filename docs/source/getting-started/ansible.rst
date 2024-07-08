@@ -2,7 +2,7 @@
 Set Up a Spark Cluster with Ansible
 ===================================
 
-An `Ansible <https://www.ansible.com/>`_ playbook is provided in the `ansible folder <https://github.com/scylladb/scylla-migrator/tree/master/ansible>`_ folder of our Git repository.  The Ansible playbook will install the pre-requisites, Spark, on the master and workers added to the ``ansible/inventory/hosts`` file.  Scylla-migrator will be installed on the spark master node.
+An `Ansible <https://www.ansible.com/>`_ playbook is provided in the `ansible folder <https://github.com/scylladb/scylla-migrator/tree/master/ansible>`_ of our Git repository.  The Ansible playbook will install the pre-requisites, Spark, on the master and workers added to the ``ansible/inventory/hosts`` file.  Scylla-migrator will be installed on the spark master node.
 
 1. Update ``ansible/inventory/hosts`` file with master and worker instances
 2. Update ``ansible/ansible.cfg`` with location of private key if necessary
@@ -26,7 +26,7 @@ An `Ansible <https://www.ansible.com/>`_ playbook is provided in the `ansible fo
    - Ensure networking is configured to allow you access spark master node via TCP ports 8080 and 4040
    - visit ``http://<spark-master-hostname>:8080``
 
-8. Review and modify ``config.yaml`` based whether you're performing a migration to CQL or Alternator
+8. `Review and modify config.yaml </getting-started/#configure-the-migration>`_ based whether you're performing a migration to CQL or Alternator
 
    - If you're migrating to Scylla CQL interface (from Cassandra, Scylla, or other CQL source), make a copy review the comments in ``config.yaml.example``, and edit as directed.
    - If you're migrating to Alternator (from DynamoDB or other Scylla Alternator), make a copy, review the comments in ``config.dynamodb.yml``, and edit as directed.

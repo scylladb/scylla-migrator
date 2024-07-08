@@ -12,6 +12,8 @@ This page describes how to set up a Spark cluster on your infrastructure and to 
 
      wget https://github.com/scylladb/scylla-migrator/releases/latest/download/scylla-migrator-assembly.jar
 
+   Alternatively, `download a specific release of scylla-migrator-assembly.jar <https://github.com/scylladb/scylla-migrator/releases>`_.
+
 3. In the Spark master node, copy the file ``config.yaml.example`` from our Git repository.
 
    .. code-block:: bash

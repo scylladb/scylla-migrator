@@ -19,6 +19,8 @@ This page describes how to set up a Spark cluster locally on your machine by usi
      wget https://github.com/scylladb/scylla-migrator/releases/latest/download/scylla-migrator-assembly.jar \
        --directory-prefix=migrator/target/scala-2.13
 
+   Alternatively, `download a specific release of scylla-migrator-assembly.jar <https://github.com/scylladb/scylla-migrator/releases>`_.
+
 3. Start the Spark cluster.
 
    .. code-block:: bash

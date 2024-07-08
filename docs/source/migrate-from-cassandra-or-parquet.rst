@@ -139,7 +139,9 @@ The migration ``target`` can be Cassandra or Scylla. In both cases, we use the t
     type: cassandra
     # Host name of one of the nodes of your target database cluster
     host: <scylla-server-01>
+    # TCP port for CQL
     port: 9042
+    # Keyspace to use
     keyspace: <keyspace>
     # Name of the table to write. If it does not exist, it will be created on the fly.
     # It has to have the same schema as the source table. If needed, you can rename

@@ -1,7 +1,3 @@
-# Configuring the Migrator
-
-Create a `config.yaml` for your migration using the template `config.yaml.example` in the repository root. Read the comments throughout carefully.
-
 # Running on a live Spark cluster
 
 The Scylla Migrator is built against Spark 3.5.1, so you'll need to run that version on your cluster.

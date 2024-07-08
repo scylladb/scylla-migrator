@@ -2,7 +2,7 @@
 Getting Started
 ===============
 
-Since the Migrator is packaged as a Spark application, you have to set up a Spark cluster to use it. Then, you submit the application along with its :doc:`configuration </configuration>` on the Spark cluster, which will execute the migration by reading from your source database and writing to your target database.
+Since the Migrator is packaged as a Spark application, you first have to set up a Spark cluster to use it. Then, submit the application along with its :doc:`configuration </configuration>` on the Spark cluster, which will execute the migration by reading from the source database and writing to the target database.
 
 ----------------------
 Set Up a Spark Cluster
@@ -10,10 +10,10 @@ Set Up a Spark Cluster
 
 The following pages describe various alternative ways to set up a Spark cluster:
 
-* on your infrastructure, using :doc:`Ansible </getting-started/ansible>`,
-* on your infrastructure, :doc:`manually </getting-started/spark-standalone>`,
-* using :doc:`AWS EMR </getting-started/aws-emr>`,
-* or, on a single machine, using :doc:`Docker </getting-started/docker>`.
+* :doc:`on your infrastructure, using Ansible </getting-started/ansible>`,
+* :doc:`on your infrastructure, manually </getting-started/spark-standalone>`,
+* :doc:`using AWS EMR </getting-started/aws-emr>`,
+* or, :doc:`on a single machine, using Docker </getting-started/docker>`.
 
 -----------------------
 Configure the Migration
@@ -31,7 +31,7 @@ Extra Features
 You might also be interested in the following extra features:
 
 * :doc:`rename columns along the migration </rename-columns>`,
-* :doc:`replicate changes applied to the source data after the initial snapshot transfer has completed </stream-changes>`,
+* :doc:`replicate changes applied to the source table after the initial snapshot transfer has completed </stream-changes>`,
 * :doc:`validate that the migration was complete and correct </validate>`.
 
 .. toctree::
