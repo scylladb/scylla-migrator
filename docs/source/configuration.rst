@@ -156,9 +156,9 @@ A source of type ``dynamodb`` can be used together with a target of type ``dynam
     # Optional - At most how many tasks per Spark executor? The default is to use the same as 'scanSegments'.
     maxMapTasks: 1
 
-The properties ``scanSegments`` and ``maxMapTasks`` can have significant impact on the migration throughput.
+The properties ``scanSegments`` and ``maxMapTasks`` can have significant impact on the migration throughput. By default, the migrator splits the data into segments of 128 MB each.
 
-TODO: recommendations.
+Use ``maxMapTasks`` to cap the parallelism level used by the Spark executor when processing each segment.
 
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 DynamoDB S3 Export Source

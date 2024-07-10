@@ -52,6 +52,8 @@ This page describes how to set up a Spark cluster locally on your machine by usi
 
    The ``spark-master`` container mounts the ``./migrator/target/scala-2.13`` dir on ``/jars`` and the repository root on ``/app``.
 
+   See also our `general recommendations to tune the Spark job </getting-started/#run-the-migration>`_.
+
 7. You can monitor progress by observing the Spark web console you opened in step 4. Additionally, after the job has started, you can track progress via ``http://localhost:4040``.
 
     FYI: When no Spark jobs are actively running, the Spark progress page at port 4040 displays unavailable. It is only useful and renders when a Spark job is in progress.

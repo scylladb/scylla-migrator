@@ -32,4 +32,6 @@ This page describes how to set up a Spark cluster on your infrastructure and to 
        --conf spark.scylla.config=<path to config.yaml> \
        <path to scylla-migrator-assembly.jar>
 
+   See also our `general recommendations to tune the Spark job </getting-started/#run-the-migration>`_.
+
 6. You can monitor progress from the `Spark web UI <https://spark.apache.org/docs/latest/spark-standalone.html#monitoring-and-logging>`_.
