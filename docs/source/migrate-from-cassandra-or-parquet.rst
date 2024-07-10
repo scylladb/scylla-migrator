@@ -204,3 +204,5 @@ Additionally, you can also set the following optional properties:
     writeWritetimestampInuS: 1640998861000
 
 Where ``<datacenter>``, ``<username>``, ``<pass>``, and ``<path>`` should be replaced with your specific values.
+
+In case you use the option ``trustStorePath`` or ``keyStorePath``, use the ``--files`` option in the ``spark-submit`` invocation to let Spark copy the file to the worker nodes.

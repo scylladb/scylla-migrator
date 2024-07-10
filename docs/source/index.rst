@@ -2,7 +2,7 @@
 ScyllaDB Migrator Documentation
 ===============================
 
-The Scylla Migrator is a Spark application that migrates data to ScyllaDB. Its main features are the following:
+The ScyllaDB Migrator is a Spark application that migrates data to ScyllaDB. Its main features are the following:
 
 * it can read from Cassandra, Parquet, DynamoDB, or a DynamoDB S3 export,
 * it can be distributed over multiple nodes of a Spark cluster to scale with your database cluster,
