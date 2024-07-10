@@ -15,7 +15,7 @@ time spark-submit --class com.scylladb.migrator.Migrator \
   --num-executors $SPARK_WORKER_INSTANCES \
   --executor-memory $MEMORY \
   --conf spark.cassandra.connection.localConnectionsPerExecutor=4 \
-  migrator/target/scala-2.13/scylla-migrator-assembly.jar
+  /home/ubuntu/scylla-migrator/scylla-migrator-assembly.jar
 
 #sometimes you will need a tuning for driver memory size
 #add this config to above to tune it:
@@ -32,6 +32,6 @@ time spark-submit --class com.scylladb.migrator.Migrator \
 #  --executor-memory $MEMORY \
 #  --conf "spark.executor.extraJavaOptions=-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=64000 -XX:+HeapDumpOnOutOfMemoryError" \
 #  --conf spark.cassandra.connection.localConnectionsPerExecutor=4 \
-#  migrator/target/scala-2.13/scylla-migrator-assembly.jar
+#  /home/ubuntu/scylla-migrator/scylla-migrator-assembly.jar
 
 #-XX:+HeapDumpOnOutOfMemoryError -XX:+PrintGCDetails

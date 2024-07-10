@@ -19,8 +19,8 @@
       become: true
       package: name={{ item }} state=present
       with_items:
-        - openjdk-8-jre
-        - openjdk-8-jdk
+        - openjdk-17-jre
+        - openjdk-17-jdk
         - unzip
         - python3-pip
 
@@ -64,32 +64,6 @@
         state: absent
         path: "{{ home_dir }}/aws"
 
-    - name: Download sbt
-      ansible.builtin.get_url:
-        url: https://github.com/coursier/coursier/releases/latest/download/cs-x86_64-pc-linux.gz
-        dest: "{{ home_dir }}"
-
-    - name: unarchive sbt
-      shell: gzip -d cs-x86_64-pc-linux.gz
-
-    - name: Delete /tmp/cs-x86_64-pc-linux.gz
-      ansible.builtin.file:
-        state: absent
-        path: "{{ home_dir }}/cs-x86_64-pc-linux.gz"
-
-    - name: rename cs-x86_64-pc-linux to cs
-      become: yes
-      shell: mv cs-x86_64-pc-linux cs
-  
-    - name: Change permission on sbt
-      file:
-        path: cs
-        state: file
-        mode: 0755
-
-    - name: setup sbt
-      shell: "{{ home_dir }}/cs setup -y"
-
     - name: Download spark
       get_url: 
         url: https://archive.apache.org/dist/spark/spark-3.5.1/spark-3.5.1-bin-hadoop3-scala2.13.tgz
@@ -115,7 +89,7 @@
       ansible.builtin.lineinfile:
         path: "{{ home_dir }}/.profile"
         regexp: '^JAVA_HOME='
-        line: export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+        line: export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 
     - name: Add JAVA_HOME to PATH
       ansible.builtin.lineinfile:
@@ -180,15 +154,15 @@
     home_dir: /home/ubuntu
     spark_home: /opt/spark
   environment:
-    JAVA_HOME: /usr/lib/jvm/java-8-openjdk-amd64
+    JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
     SPARK_HOME: /opt/spark
-    PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/ubuntu/.local/share/coursier/bin:/usr/lib/jvm/java-8-openjdk-amd64:/opt/spark/bin:/opt/spark/sbin"
+    PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/ubuntu/.local/share/coursier/bin:/usr/lib/jvm/java-17-openjdk-amd64:/opt/spark/bin:/opt/spark/sbin"
 
   tasks:
-    - name: Clone scylla-migrator repo
-      ansible.builtin.git:
-        repo: https://github.com/scylladb/scylla-migrator.git
-        dest: "{{ home_dir }}/scylla-migrator"
+    - name: Create scylla-migrator directory
+      ansible.builtin.file:
+        path: "{{ home_dir }}/scylla-migrator"
+        state: directory
 
     - name: copy master start/stop convenience scripts
       copy:
@@ -225,13 +199,8 @@
         - spark-env
         - config.dynamodb.yml
 
-    - name: build scylla-migrator
-      shell: "./build.sh"
-      register: build
-      args:
-        chdir: "{{ home_dir }}/scylla-migrator"
-
-    - debug: msg="{{ build.stdout }}"
-
-    - debug: msg="{{ build.stderr }}"
+    - name: download scylla-migrator
+      get_url:
+        url: https://github.com/scylladb/scylla-migrator/releases/latest/download/scylla-migrator-assembly.jar
+        dest: "{{ home_dir }}/scylla-migrator/scylla-migrator-assembly.jar"
 ...
