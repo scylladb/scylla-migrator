@@ -6,6 +6,7 @@ import com.scylladb.migrator.config.TargetSettings
 import org.apache.hadoop.dynamodb.{ DynamoDBConstants, DynamoDBItemWritable }
 import org.apache.hadoop.io.Text
 import org.apache.hadoop.mapred.JobConf
+import org.apache.log4j.{ Level, LogManager }
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import software.amazon.awssdk.services.dynamodb.model.{ AttributeValue, TableDescription }
@@ -46,6 +47,14 @@ object DynamoDB {
           itemWritable.setItem(item)
           itemWritable
         }
-    finalRdd.saveAsHadoopDataset(jobConf)
+    finalRdd
+      .mapPartitions { partitions =>
+        // Adjust the log level of the DynamoDBClient logger in the executors, see https://github.com/scylladb/scylla-migrator/issues/167
+        LogManager
+          .getLogger(classOf[org.apache.hadoop.dynamodb.DynamoDBClient])
+          .setLevel(Level.WARN)
+        partitions
+      }
+      .saveAsHadoopDataset(jobConf)
   }
 }
