@@ -25,8 +25,8 @@ Configure the Migration
 
 Once you have a Spark cluster ready to run the ``scylla-migrator-assembly.jar``, download the file `config.yaml.example <https://github.com/scylladb/scylla-migrator/blob/master/config.yaml.example>`_ and rename it to ``config.yaml``. This file contains properties such as ``source`` or ``target`` defining how to connect to the source database and to the target database, as well as other settings to perform the migration. Adapt it to your case according to the following guides:
 
-- :doc:`migrate from Cassandra or Parquet files to ScyllaDB </migrate-from-cassandra-or-parquet>`,
-- or, :doc:`migrate from DynamoDB to ScyllaDB’s Alternator </migrate-from-dynamodb>`.
+- :doc:`Migrate from Apache Cassandra or Parquet files to ScyllaDB </migrate-from-cassandra-or-parquet>`.
+- Or, :doc:`migrate from DynamoDB to ScyllaDB’s Alternator </migrate-from-dynamodb>`.
 
 -----------------
 Run the Migration

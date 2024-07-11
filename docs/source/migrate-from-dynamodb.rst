@@ -2,7 +2,7 @@
 Migrate from DynamoDB
 =====================
 
-This page explains how to fill the ``source`` and ``target`` properties of the `configuration file </configuration>`_ to migrate data:
+This page explains how to fill the ``source`` and ``target`` properties of the `configuration file <../configuration>`_ to migrate data:
 
 - from a DynamoDB table, a ScyllaDB Alternator table, or a `DynamoDB S3 export <https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/S3DataExport.HowItWorks.html>`_,
 - to a DynamoDB table or a ScyllaDB Alternator table.
@@ -57,7 +57,7 @@ In practice, your source database (DynamoDB or Alternator) may require authentic
 
 Where ``<access-key>`` and ``<secret-key>`` should be replaced with your actual AWS access key and secret key.
 
-The Migrator also supports advanced AWS authentication options such as using `AssumeRole <https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html>`_. Please read the `configuration reference </configuration#aws-authentication>`_ for more details.
+The Migrator also supports advanced AWS authentication options such as using `AssumeRole <https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html>`_. Please read the `configuration reference <../configuration#aws-authentication>`_ for more details.
 
 Last, you can provide the following optional properties:
 
@@ -150,7 +150,7 @@ Additionally, you can provide the following optional properties:
 
 Where ``<host>``, ``<port>``, ``<region>``, ``<access-key>``, and ``<secret-key>`` should be replaced with your specific values.
 
-The Migrator also supports advanced AWS authentication options such as using `AssumeRole <https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html>`_. Please read the `configuration reference </configuration#aws-authentication>`_ for more details.
+The Migrator also supports advanced AWS authentication options such as using `AssumeRole <https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html>`_. Please read the `configuration reference <../configuration#aws-authentication>`_ for more details.
 
 ---------------------------
 Configuring the Destination
@@ -179,9 +179,9 @@ Additionally, you can also set the following optional properties:
   target:
     # ... same as above
 
-    # Connect to a custom endpoint. Mandatory if writing to Scylla Alternator.
+    # Connect to a custom endpoint. Mandatory if writing to ScyllaDB Alternator.
     endpoint:
-      # If writing to Scylla Alternator, prefix the hostname with 'http://'.
+      # If writing to ScyllaDB Alternator, prefix the hostname with 'http://'.
       host: <host>
       port: <port>
 
@@ -214,4 +214,4 @@ Additionally, you can also set the following optional properties:
 
 Where ``<host>``, ``<port>``, ``<region>``, ``<access-key>``, and ``<secret-key>`` are replaced with your specific values.
 
-The Migrator also supports advanced AWS authentication options such as using `AssumeRole <https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html>`_. Please read the `configuration reference </configuration#aws-authentication>`_ for more details.
+The Migrator also supports advanced AWS authentication options such as using `AssumeRole <https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html>`_. Please read the `configuration reference <../configuration#aws-authentication>`_ for more details.

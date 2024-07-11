@@ -26,10 +26,10 @@ An `Ansible <https://www.ansible.com/>`_ playbook is provided in the `ansible fo
    - Ensure networking is configured to allow you access spark master node via TCP ports 8080 and 4040
    - visit ``http://<spark-master-hostname>:8080``
 
-8. `Review and modify config.yaml </getting-started/#configure-the-migration>`_ based whether you're performing a migration to CQL or Alternator
+8. `Review and modify config.yaml <../#configure-the-migration>`_ based whether you're performing a migration to CQL or Alternator
 
-   - If you're migrating to Scylla CQL interface (from Cassandra, Scylla, or other CQL source), make a copy review the comments in ``config.yaml.example``, and edit as directed.
-   - If you're migrating to Alternator (from DynamoDB or other Scylla Alternator), make a copy, review the comments in ``config.dynamodb.yml``, and edit as directed.
+   - If you're migrating to ScyllaDB CQL interface (from Apache Cassandra, ScyllaDB, or other CQL source), make a copy review the comments in ``config.yaml.example``, and edit as directed.
+   - If you're migrating to Alternator (from DynamoDB or other ScyllaDB Alternator), make a copy, review the comments in ``config.dynamodb.yml``, and edit as directed.
 
 9. As part of ansible deployment, sample submit jobs were created.  You may edit and use the submit jobs.
 

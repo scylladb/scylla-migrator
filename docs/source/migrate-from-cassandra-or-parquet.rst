@@ -1,11 +1,11 @@
-=============================================
-Migrate from Cassandra or from a Parquet File
-=============================================
+====================================================
+Migrate from Apache Cassandra or from a Parquet File
+====================================================
 
-This page explains how to fill the ``source`` and ``target`` properties of the `configuration file </configuration>`_ to migrate data:
+This page explains how to fill the ``source`` and ``target`` properties of the `configuration file <../configuration>`_ to migrate data:
 
-- from Cassandra, ScyllaDB, or from a `Parquet <https://parquet.apache.org/>`_ file,
-- to Cassandra or ScyllaDB.
+- from Apache Cassandra, ScyllaDB, or from a `Parquet <https://parquet.apache.org/>`_ file,
+- to Apache Cassandra or ScyllaDB.
 
 In file ``config.yaml``, make sure to keep only one ``source`` property and one ``target`` property, and configure them as explained in the following subsections according to your case.
 
@@ -13,13 +13,13 @@ In file ``config.yaml``, make sure to keep only one ``source`` property and one 
 Configuring the Source
 ----------------------
 
-The data ``source`` can be a Cassandra or ScyllaDB table, or a Parquet file.
+The data ``source`` can be an Apache Cassandra or ScyllaDB table, or a Parquet file.
 
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-Reading from Cassandra or ScyllaDB
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Reading from Apache Cassandra or ScyllaDB
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-In both cases, when reading from Cassandra or ScyllaDB, the type of source should be ``cassandra`` in the configuration file. Here is a minimal ``source`` configuration:
+In both cases, when reading from Apache Cassandra or ScyllaDB, the type of source should be ``cassandra`` in the configuration file. Here is a minimal ``source`` configuration:
 
 .. code-block:: yaml
 
@@ -44,7 +44,7 @@ In both cases, when reading from Cassandra or ScyllaDB, the type of source shoul
     # available in the Spark cluster, and optimally more; higher splits will lead
     # to more fine-grained resumes. Aim for 8 * (Spark cores).
     splitCount: 256
-    # Number of connections to use to Cassandra when copying
+    # Number of connections to use to Apache Cassandra when copying
     connections: 8
     # Number of rows to fetch in each read
     fetchSize: 1000
@@ -124,13 +124,13 @@ In case the object is not public in the S3 bucket, you can provide the AWS crede
 
 Where ``<access-key>`` and ``<secret-key>`` should be replaced with your actual AWS access key and secret key.
 
-The Migrator also supports advanced AWS authentication options such as using `AssumeRole <https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html>`_. Please read the `configuration reference </configuration#aws-authentication>`__ for more details.
+The Migrator also supports advanced AWS authentication options such as using `AssumeRole <https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html>`_. Please read the `configuration reference <../configuration#aws-authentication>`__ for more details.
 
 ---------------------------
 Configuring the Destination
 ---------------------------
 
-The migration ``target`` can be Cassandra or Scylla. In both cases, we use the type ``cassandra`` in the configuration. Here is a minimal ``target`` configuration to write to Cassandra or ScyllaDB:
+The migration ``target`` can be Apache Cassandra or ScyllaDB. In both cases, we use the type ``cassandra`` in the configuration. Here is a minimal ``target`` configuration to write to Cassandra or ScyllaDB:
 
 .. code-block:: yaml
 
@@ -150,7 +150,7 @@ The migration ``target`` can be Cassandra or Scylla. In both cases, we use the t
     # Consistency Level for the target connection
     # Options are: LOCAL_ONE, ONE, LOCAL_QUORUM, QUORUM.
     consistencyLevel: LOCAL_QUORUM
-    # Number of connections to use to Scylla/Cassandra when copying
+    # Number of connections to use to ScyllaDB / Apache Cassandra when copying
     connections: 16
     # Spark pads decimals with zeros appropriate to their scale. This causes values
     # like '3.5' to be copied as '3.5000000000...' to the target. There's no good way

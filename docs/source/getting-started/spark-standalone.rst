@@ -21,7 +21,7 @@ This page describes how to set up a Spark cluster on your infrastructure and to 
      wget https://github.com/scylladb/scylla-migrator/raw/master/config.yaml.example \
        --output-document=config.yaml
 
-4. `Configure the migration </getting-started/#configure-the-migration>`_ according to your needs.
+4. `Configure the migration <../#configure-the-migration>`_ according to your needs.
 
 5. Finally, run the migration as follows from the Spark master node.
 
@@ -32,6 +32,6 @@ This page describes how to set up a Spark cluster on your infrastructure and to 
        --conf spark.scylla.config=<path to config.yaml> \
        <path to scylla-migrator-assembly.jar>
 
-   See also our `general recommendations to tune the Spark job </getting-started/#run-the-migration>`_.
+   See also our `general recommendations to tune the Spark job <../#run-the-migration>`_.
 
 6. You can monitor progress from the `Spark web UI <https://spark.apache.org/docs/latest/spark-standalone.html#monitoring-and-logging>`_.

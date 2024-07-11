@@ -38,16 +38,16 @@ The ``source`` property describes the type of data to read from. It must be an o
 
 Valid values for the source ``type`` are:
 
-- ``cassandra`` for a CQL-compatible source (Cassandra or ScyllaDB).
+- ``cassandra`` for a CQL-compatible source (Apache Cassandra or ScyllaDB).
 - ``parquet`` for a dataset stored using the Parquet format.
 - ``dynamodb`` for a DynamoDB-compatible source (AWS DynamoDB or ScyllaDB Alternator).
 - ``dynamodb-s3-export`` for a DynamoDB table exported to S3.
 
 The following subsections detail the schema of each source type.
 
-^^^^^^^^^^^^^^^^
-Cassandra Source
-^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^
+Apache Cassandra Source
+^^^^^^^^^^^^^^^^^^^^^^^
 
 A source of type ``cassandra`` can be used together with a target of type ``cassandra`` only.
 
@@ -80,7 +80,7 @@ A source of type ``cassandra`` can be used together with a target of type ``cass
     # available in the Spark cluster, and optimally more; higher splits will lead
     # to more fine-grained resumes. Aim for 8 * (Spark cores).
     splitCount: 256
-    # Number of connections to use to Cassandra when copying
+    # Number of connections to use to Apache Cassandra when copying
     connections: 8
     # Number of rows to fetch in each read
     fetchSize: 1000
@@ -132,9 +132,9 @@ A source of type ``dynamodb`` can be used together with a target of type ``dynam
     type: dynamodb
     # Name of the table to write. If it does not exist, it will be created on the fly.
     table: <table>
-    # Connect to a custom endpoint. Mandatory if writing to Scylla Alternator.
+    # Connect to a custom endpoint. Mandatory if writing to ScyllaDB Alternator.
     endpoint:
-      # If writing to Scylla Alternator, prefix the hostname with 'http://'.
+      # If writing to ScyllaDB Alternator, prefix the hostname with 'http://'.
       host: <host>
       port: <port>
     # Optional - AWS availability region.
@@ -208,14 +208,14 @@ The ``target`` property describes the type of data to write. It must be an objec
 
 Valid values for the target ``type`` are:
 
-- ``cassandra`` for a CQL-compatible target (Cassandra or ScyllaDB).
+- ``cassandra`` for a CQL-compatible target (Apache Cassandra or ScyllaDB).
 - ``dynamodb`` for a DynamoDB-compatible target (DynamoDB or ScyllaDB Alternator).
 
 The following subsections detail the schema of each target type.
 
-^^^^^^^^^^^^^^^^
-Cassandra Target
-^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^
+Apache Cassandra Target
+^^^^^^^^^^^^^^^^^^^^^^^
 
 .. code-block:: yaml
 
@@ -240,7 +240,7 @@ Cassandra Target
     # Consistency Level for the target connection
     # Options are: LOCAL_ONE, ONE, LOCAL_QUORUM, QUORUM.
     consistencyLevel: LOCAL_QUORUM
-    # Number of connections to use to Scylla/Cassandra when copying
+    # Number of connections to use to ScyllaDB / Apache Cassandra when copying
     connections: 16
     # Spark pads decimals with zeros appropriate to their scale. This causes values
     # like '3.5' to be copied as '3.5000000000...' to the target. There's no good way
