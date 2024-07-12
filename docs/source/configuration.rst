@@ -6,7 +6,17 @@ This page documents the schema of the YAML configuration file used by the Migrat
 
 The configuration file is a YAML object whose fields are enumerated, preceded by a comment describing their role. All the fields are mandatory except if their documentation starts with “Optional”. All the values of the form ``<xxx>`` are placeholders that should be replaced with your specific settings.
 
-The configuration file requires the following top-level properties, which are documented further below:
+The YAML format is whitespace sensitive, make sure to use the proper number of spaces to keep on the same level of indentation all the properties that belong to the same object. If the configuration file is not correctly formatted, the Migrator will fail at startup with a message like “DecodingFailure at ...” or “ParsingFailure ...” describing the problem. For instance, the following line in the logs means that the mandatory property ``target`` is missing from the configuration file:
+
+.. code-block:: text
+
+  Exception in thread "main" DecodingFailure at .target: Missing required field
+
+--------
+Overview
+--------
+
+The configuration file requires the following top-level properties (ie, with no leading space before the property names), which are documented further below:
 
 .. code-block:: yaml
 
