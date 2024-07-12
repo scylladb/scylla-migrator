@@ -15,6 +15,8 @@ import software.amazon.awssdk.services.dynamodb.model.{
   CreateTableRequest,
   DescribeStreamRequest,
   DescribeTableRequest,
+  GlobalSecondaryIndex,
+  LocalSecondaryIndex,
   ProvisionedThroughput,
   ProvisionedThroughputDescription,
   ResourceNotFoundException,
@@ -26,6 +28,7 @@ import software.amazon.awssdk.services.dynamodb.model.{
 }
 import software.amazon.awssdk.services.dynamodb.streams.DynamoDbStreamsClient
 
+import java.util.stream.Collectors
 import scala.util.{ Failure, Success, Try }
 import scala.jdk.OptionConverters._
 
@@ -64,6 +67,41 @@ object DynamoUtils {
             )
         } else {
           request.billingMode(BillingMode.PAY_PER_REQUEST)
+        }
+        if (sourceDescription.hasLocalSecondaryIndexes) {
+          request.localSecondaryIndexes(
+            sourceDescription.localSecondaryIndexes.stream
+              .map(
+                index =>
+                  LocalSecondaryIndex
+                    .builder()
+                    .indexName(index.indexName())
+                    .keySchema(index.keySchema())
+                    .projection(index.projection())
+                    .build())
+              .collect(Collectors.toList[LocalSecondaryIndex])
+          )
+        }
+        if (sourceDescription.hasGlobalSecondaryIndexes) {
+          request.globalSecondaryIndexes(
+            sourceDescription.globalSecondaryIndexes.stream
+              .map(
+                index =>
+                  GlobalSecondaryIndex
+                    .builder()
+                    .indexName(index.indexName())
+                    .keySchema(index.keySchema())
+                    .projection(index.projection())
+                    .provisionedThroughput(
+                      ProvisionedThroughput
+                        .builder()
+                        .readCapacityUnits(index.provisionedThroughput.readCapacityUnits)
+                        .writeCapacityUnits(index.provisionedThroughput.writeCapacityUnits)
+                        .build()
+                    )
+                    .build())
+              .collect(Collectors.toList[GlobalSecondaryIndex])
+          )
         }
 
         log.info(
