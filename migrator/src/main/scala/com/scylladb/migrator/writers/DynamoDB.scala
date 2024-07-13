@@ -3,7 +3,11 @@ package com.scylladb.migrator.writers
 import com.scylladb.migrator.DynamoUtils
 import com.scylladb.migrator.DynamoUtils.{ setDynamoDBJobConf, setOptionalConf }
 import com.scylladb.migrator.config.TargetSettings
-import org.apache.hadoop.dynamodb.{ DynamoDBConstants, DynamoDBItemWritable }
+import org.apache.hadoop.dynamodb.{
+  DynamoDBConstants,
+  DynamoDBItemWritable,
+  LoadBalancedDynamoDBClient
+}
 import org.apache.hadoop.io.Text
 import org.apache.hadoop.mapred.JobConf
 import org.apache.log4j.{ Level, LogManager }
@@ -51,7 +55,7 @@ object DynamoDB {
       .mapPartitions { partitions =>
         // Adjust the log level of the DynamoDBClient logger in the executors, see https://github.com/scylladb/scylla-migrator/issues/167
         LogManager
-          .getLogger(classOf[org.apache.hadoop.dynamodb.DynamoDBClient])
+          .getLogger(classOf[LoadBalancedDynamoDBClient])
           .setLevel(Level.WARN)
         partitions
       }

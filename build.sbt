@@ -11,6 +11,7 @@ inThisBuild(
     organization := "com.scylladb",
     scalaVersion := "2.13.14",
     scalacOptions ++= Seq("-release:8", "-deprecation", "-unchecked", "-feature"),
+    javacOptions ++= Seq("-source", "1.8", "-target", "1.8"),
   )
 )
 
@@ -26,16 +27,19 @@ lazy val `spark-kinesis-dynamodb` = project.in(file("spark-kinesis-dynamodb")).s
 
 lazy val `load-balanced-emr-dynamodb-hadoop` = project.in(file("load-balanced-emr-dynamodb-hadoop")).settings(
   libraryDependencies ++= Seq(
+    "com.scylladb.alternator" % "load-balancing" % "1.0.0",
     "com.amazon.emr" % "emr-dynamodb-hadoop" % "5.3.0",
     "org.apache.hadoop" % "hadoop-mapreduce-client-app" % hadoopVersion % Provided,
     "org.apache.hadoop" % "hadoop-common" % hadoopVersion % Provided,
+    "software.amazon.awssdk" % "auth" % awsSdkVersion % Provided,
+    "software.amazon.awssdk" % "dynamodb" % awsSdkVersion % Provided,
+    "joda-time" % "joda-time" % "2.8.1" % Provided
   )
 )
 
 lazy val migrator = (project in file("migrator")).enablePlugins(BuildInfoPlugin).settings(
   name      := "scylla-migrator",
   mainClass := Some("com.scylladb.migrator.Migrator"),
-  javacOptions ++= Seq("-source", "1.8", "-target", "1.8"),
   javaOptions ++= Seq(
     "-Xms512M",
     "-Xmx2048M",

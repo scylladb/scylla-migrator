@@ -195,7 +195,7 @@ object DynamoUtils {
       "com.scylladb.migrator.DynamoUtils$ProfileCredentialsProvider")
     jobConf.set(
       "mapred.output.format.class",
-      "org.apache.hadoop.dynamodb.write.DynamoDBOutputFormat")
+      "org.apache.hadoop.dynamodb.write.LoadBalancedDynamoDBOutputFormat")
     jobConf.set("mapred.input.format.class", "com.scylladb.migrator.alternator.DynamoDBInputFormat")
   }
 

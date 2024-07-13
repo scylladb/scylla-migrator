@@ -14,7 +14,7 @@ import com.google.common.base.Strings;
 import java.io.IOException;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.dynamodb.DynamoDBClient;
+import org.apache.hadoop.dynamodb.LoadBalancedDynamoDBClient;
 import org.apache.hadoop.dynamodb.DynamoDBConstants;
 import org.apache.hadoop.dynamodb.DynamoDBUtil;
 import org.apache.hadoop.dynamodb.IopsCalculator;
@@ -24,11 +24,11 @@ import software.amazon.awssdk.services.dynamodb.model.BillingMode;
 import software.amazon.awssdk.services.dynamodb.model.ProvisionedThroughputDescription;
 import software.amazon.awssdk.services.dynamodb.model.TableDescription;
 
-public class WriteIopsCalculator implements IopsCalculator {
+public class LoadBalancedWriteIopsCalculator implements IopsCalculator {
 
-  private static final Log log = LogFactory.getLog(WriteIopsCalculator.class);
+  private static final Log log = LogFactory.getLog(LoadBalancedWriteIopsCalculator.class);
 
-  private final DynamoDBClient dynamoDBClient;
+  private final LoadBalancedDynamoDBClient dynamoDBClient;
   private final JobClient jobClient;
   private final JobConf jobConf;
   private final String tableName;
@@ -36,7 +36,7 @@ public class WriteIopsCalculator implements IopsCalculator {
   private final int maxParallelTasks;
   private final double throughputPercent;
 
-  public WriteIopsCalculator(JobClient jobClient, DynamoDBClient dynamoDBClient, String tableName) {
+  public LoadBalancedWriteIopsCalculator(JobClient jobClient, LoadBalancedDynamoDBClient dynamoDBClient, String tableName) {
     this.jobConf = (JobConf) jobClient.getConf();
     this.jobClient = jobClient;
 

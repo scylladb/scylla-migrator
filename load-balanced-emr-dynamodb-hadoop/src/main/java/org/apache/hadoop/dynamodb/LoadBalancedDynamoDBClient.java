@@ -39,6 +39,8 @@ import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.stream.Collectors;
+
+import com.scylladb.alternator.AlternatorEndpointProvider;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -79,9 +81,9 @@ import software.amazon.awssdk.services.dynamodb.model.ScanResponse;
 import software.amazon.awssdk.services.dynamodb.model.TableDescription;
 import software.amazon.awssdk.services.dynamodb.model.WriteRequest;
 
-public class DynamoDBClient {
+public class LoadBalancedDynamoDBClient {
 
-  private static final Log log = LogFactory.getLog(DynamoDBClient.class);
+  private static final Log log = LogFactory.getLog(LoadBalancedDynamoDBClient.class);
 
   private static final int DEFAULT_RETRY_DURATION = 10;
   private static final long MAX_BACKOFF_IN_MILLISECONDS = 1000 * 3;
@@ -110,22 +112,22 @@ public class DynamoDBClient {
   private final long maxItemByteSize;
 
   // For unit testing only
-  public DynamoDBClient() {
+  public LoadBalancedDynamoDBClient() {
     this((DynamoDbClient) null, null);
   }
 
-  public DynamoDBClient(DynamoDbClient amazonDynamoDBClient, Configuration conf) {
+  public LoadBalancedDynamoDBClient(DynamoDbClient amazonDynamoDBClient, Configuration conf) {
     dynamoDB = amazonDynamoDBClient;
     config = conf;
     maxBatchSize = DEFAULT_MAX_BATCH_SIZE;
     maxItemByteSize = DEFAULT_MAX_ITEM_SIZE;
   }
 
-  public DynamoDBClient(Configuration conf) {
+  public LoadBalancedDynamoDBClient(Configuration conf) {
     this(conf, null);
   }
 
-  public DynamoDBClient(Configuration conf, String region) {
+  public LoadBalancedDynamoDBClient(Configuration conf, String region) {
     Preconditions.checkNotNull(conf, "conf cannot be null.");
     config = conf;
     dynamoDB = getDynamoDBClient(conf, region);
@@ -408,7 +410,7 @@ public class DynamoDBClient {
 
     String customEndpoint = getDynamoDBEndpoint(conf, region);
     if (!Strings.isNullOrEmpty(customEndpoint)) {
-      dynamoDbClientBuilder.endpointOverride(URI.create(customEndpoint));
+      dynamoDbClientBuilder.endpointProvider(new AlternatorEndpointProvider(URI.create(customEndpoint)));
     }
 
     return dynamoDbClientBuilder.httpClient(ApacheHttpClient.builder()
