@@ -26,16 +26,16 @@ The configuration file requires the following top-level properties (ie, with no 
   # Target configuration
   target:
     # ...
-  # Columns to rename
+  # Optional - Columns to rename
   renames:
     # ...
   # Savepoints configuration
   savepoints:
     # ...
-  # Validator configuration
+  # Validator configuration. Required only if the app is executed in validation mode.
   validation:
     # ...
-  # Used internally
+  # Optional- Used internally
   skipTokenRanges: []
 
 These top-level properties are documented in the following sections (except ``skipTokenRanges``, which is used internally).
@@ -319,7 +319,7 @@ DynamoDB Target
 Renames
 -------
 
-The ``renames`` property lists the item columns to rename along the migration. To not rename any columns, use the empty array ``renames: []``.
+The optional ``renames`` property lists the item columns to rename along the migration.
 
 .. code-block:: yaml
 
@@ -347,7 +347,7 @@ When migrating data over CQL-compatible storages, the migrator is able to resume
 Validation
 ----------
 
-The properties of the ``validation`` field are used only when the application is executed in :doc:`validation mode </validate>`.
+The ``validation`` field and its properties are mandatory only when the application is executed in :doc:`validation mode </validate>`.
 
 .. code-block:: yaml
 
