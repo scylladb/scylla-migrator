@@ -49,7 +49,8 @@ object AlternatorValidator {
 
     // Define some aliases to prevent the Spark engine to try to serialize the whole object graph
     val renamedColumn = config.renamesMap
-    val configValidation = config.validation
+    val configValidation = config.validation.getOrElse(
+      sys.error("Missing required property 'validation' in the configuration file."))
 
     val targetByKey: RDD[(List[DdbValue], collection.Map[String, DdbValue])] =
       target
@@ -74,7 +75,7 @@ object AlternatorValidator {
             configValidation.floatingPointTolerance
           )
       }
-      .take(config.validation.failuresToFetch)
+      .take(configValidation.failuresToFetch)
       .toList
   }
 

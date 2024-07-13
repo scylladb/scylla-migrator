@@ -10,15 +10,20 @@ import io.circe.{ Decoder, DecodingFailure, Encoder, Error, Json }
 
 case class MigratorConfig(source: SourceSettings,
                           target: TargetSettings,
-                          renames: List[Rename],
+                          renames: Option[List[Rename]],
                           savepoints: Savepoints,
-                          skipTokenRanges: Set[(Token[_], Token[_])],
-                          validation: Validation) {
+                          skipTokenRanges: Option[Set[(Token[_], Token[_])]],
+                          validation: Option[Validation]) {
   def render: String = this.asJson.asYaml.spaces2
+
+  def getRenamesOrNil: List[Rename] = renames.getOrElse(Nil)
 
   /** The list of renames modelled as a Map from the old column name to the new column name */
   lazy val renamesMap: Map[String, String] =
-    renames.map(rename => rename.from -> rename.to).toMap.withDefault(identity)
+    getRenamesOrNil.map(rename => rename.from -> rename.to).toMap.withDefault(identity)
+
+  def getSkipTokenRangesOrEmptySet: Set[(Token[_], Token[_])] = skipTokenRanges.getOrElse(Set.empty)
+
 }
 object MigratorConfig {
   implicit val tokenEncoder: Encoder[Token[_]] = Encoder.instance {

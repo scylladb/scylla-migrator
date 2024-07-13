@@ -76,7 +76,7 @@ object ScyllaMigrator {
         log.info(
           "Savepoints array defined, size of the array: " + migratorConfig.skipTokenRanges.size)
 
-        val diff = allTokenRanges.diff(migratorConfig.skipTokenRanges)
+        val diff = allTokenRanges.diff(migratorConfig.getSkipTokenRangesOrEmptySet)
         log.info("Diff ... total diff of full ranges to savepoints is: " + diff.size)
         log.debug("Dump of the missing tokens: ")
         log.debug(diff)
@@ -88,7 +88,7 @@ object ScyllaMigrator {
     try {
       writers.Scylla.writeDataframe(
         target,
-        migratorConfig.renames,
+        migratorConfig.getRenamesOrNil,
         sourceDF.dataFrame,
         sourceDF.timestampColumns,
         tokenRangeAccumulator)
@@ -147,7 +147,7 @@ object ScyllaMigrator {
       (range.range.start.asInstanceOf[Token[_]], range.range.end.asInstanceOf[Token[_]]))
 
     val modifiedConfig = config.copy(
-      skipTokenRanges = config.skipTokenRanges ++ rangesToSkip
+      skipTokenRanges = Some(config.getSkipTokenRangesOrEmptySet ++ rangesToSkip)
     )
 
     Files.write(filename, modifiedConfig.render.getBytes(StandardCharsets.UTF_8))
