@@ -31,11 +31,3 @@ renames:
 savepoints:
   path: /app/savepoints
   intervalSeconds: 300
-skipTokenRanges: []
-validation:
-  compareTimestamps: true
-  ttlToleranceMillis: 60000
-  writetimeToleranceMillis: 1000
-  failuresToFetch: 100
-  floatingPointTolerance: 0.001
-  timestampMsTolerance: 0

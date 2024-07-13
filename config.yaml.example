@@ -260,26 +260,27 @@ savepoints:
   # Interval in which savepoints will be created
   intervalSeconds: 300
 
-# Column renaming configuration. If you'd like to rename any columns, specify them like so:
+# Optional - Column renaming configuration. If you'd like to rename any columns, specify them like so:
 # - from: source_column_name
 #   to: dest_column_name
-renames: []
-# Which token ranges to skip. You shouldn't need to fill this in normally; the migrator will
+# renames: []
+
+# Optional - Which token ranges to skip. You shouldn't need to fill this in normally; the migrator will
 # create a savepoint file with this filled.
-skipTokenRanges: []
+# skipTokenRanges: []
 
-# Configuration section for running the validator. The validator is run manually (see README).
-validation:
-  # Should WRITETIMEs and TTLs be compared?
-  compareTimestamps: true
-  # What difference should we allow between TTLs?
-  ttlToleranceMillis: 60000
-  # What difference should we allow between WRITETIMEs?
-  writetimeToleranceMillis: 1000
-  # How many differences to fetch and print
-  failuresToFetch: 100
-  # What difference should we allow between floating point numbers?
-  floatingPointTolerance: 0.001
-  # What difference in ms should we allow between timestamps?
-  timestampMsTolerance: 0
-
+# Configuration section for running the validator. The validator is run manually (see documentation).
+# Mandatory if the application is executed in validation mode.
+# validation:
+#   # Should WRITETIMEs and TTLs be compared?
+#   compareTimestamps: true
+#   # What difference should we allow between TTLs?
+#   ttlToleranceMillis: 60000
+#   # What difference should we allow between WRITETIMEs?
+#   writetimeToleranceMillis: 1000
+#   # How many differences to fetch and print
+#   failuresToFetch: 100
+#   # What difference should we allow between floating point numbers?
+#   floatingPointTolerance: 0.001
+#   # What difference in ms should we allow between timestamps?
+#   timestampMsTolerance: 0

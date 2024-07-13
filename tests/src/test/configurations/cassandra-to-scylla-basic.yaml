@@ -28,12 +28,10 @@ target:
   connections: 16
   stripTrailingZerosForDecimals: false
 
-renames: []
-
 savepoints:
   path: /app/savepoints
   intervalSeconds: 300
-skipTokenRanges: []
+
 validation:
   compareTimestamps: true
   ttlToleranceMillis: 60000
