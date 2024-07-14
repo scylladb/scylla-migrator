@@ -1,23 +1,4 @@
-version: '3'
-
 services:
-  scylla:
-    image: scylladb/scylla:latest
-    networks:
-      - scylla
-    volumes:
-      - ./data/scylla:/var/lib/scylla
-    ports:
-      - "8000:8000"
-    command: "--smp 2 --memory 2048M --alternator-port 8000 --alternator-write-isolation always_use_lwt"
-
-  cassandra:
-    image: cassandra:latest
-    networks:
-      - scylla
-    volumes:
-      - ./data/cassandra:/var/lib/cassandra
-
   spark-master:
     build: dockerfiles/spark
     command: master
@@ -26,7 +7,7 @@ services:
     environment:
       SPARK_PUBLIC_DNS: spark-master
     networks:
-      - scylla
+      - spark
     expose:
       - 7001
       - 7002
@@ -58,7 +39,7 @@ services:
       SPARK_WORKER_WEBUI_PORT: 8081
       SPARK_PUBLIC_DNS: spark-worker
     networks:
-      - scylla
+      - spark
     expose:
       - 7012
       - 7013
@@ -75,4 +56,4 @@ services:
       - spark-master
 
 networks:
-  scylla:
+  spark:

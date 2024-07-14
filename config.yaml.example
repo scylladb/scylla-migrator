@@ -268,8 +268,7 @@ renames: []
 # create a savepoint file with this filled.
 skipTokenRanges: []
 
-# Configuration section for running the validator. The validator is run manually (see README)
-# and currently only supports comparing a Cassandra source to a Scylla target.
+# Configuration section for running the validator. The validator is run manually (see README).
 validation:
   # Should WRITETIMEs and TTLs be compared?
   compareTimestamps: true

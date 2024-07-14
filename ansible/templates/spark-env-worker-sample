@@ -8,7 +8,7 @@
 # MEMORY is used in the spark-submit job and allocates the memory per executor.
 # You can have one or more executors per worker.
 # 
-# By using multiple workers on an instance, we can control the velocit of the migration.
+# By using multiple workers on an instance, we can control the velocity of the migration.
 #
 # Eg. 
 #    Target system is 3 x i4i.4xlarge (16 vCPU, 128G)
