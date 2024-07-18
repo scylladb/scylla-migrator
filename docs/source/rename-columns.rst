@@ -13,3 +13,5 @@ Indicate in the migration configuration which columns to rename with the ``renam
       to: bar
     - from: xxx
       to: yyy
+
+To not perform any renames, leave out the ``renames`` property from the configuration file.

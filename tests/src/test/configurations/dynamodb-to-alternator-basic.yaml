@@ -21,13 +21,11 @@ target:
     secretKey: dummy
   streamChanges: false
 
-renames: []
-
 # Below are unused but mandatory settings
 savepoints:
   path: /app/savepoints
   intervalSeconds: 300
-skipTokenRanges: []
+
 validation:
   compareTimestamps: true
   ttlToleranceMillis: 60000

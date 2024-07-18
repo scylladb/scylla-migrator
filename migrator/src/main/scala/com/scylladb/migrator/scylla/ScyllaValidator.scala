@@ -25,6 +25,11 @@ object ScyllaValidator {
     sourceSettings: SourceSettings.Cassandra,
     targetSettings: TargetSettings.Scylla,
     config: MigratorConfig)(implicit spark: SparkSession): List[RowComparisonFailure] = {
+
+    val validationConfig =
+      config.validation.getOrElse(
+        sys.error("Missing required property 'validation' in the configuration file."))
+
     val sourceConnector: CassandraConnector =
       Connectors.sourceConnector(spark.sparkContext.getConf, sourceSettings)
     val targetConnector: CassandraConnector =
@@ -118,14 +123,14 @@ object ScyllaValidator {
           RowComparisonFailure.compareCassandraRows(
             l,
             r,
-            config.validation.floatingPointTolerance,
-            config.validation.timestampMsTolerance,
-            config.validation.ttlToleranceMillis,
-            config.validation.writetimeToleranceMillis,
-            config.validation.compareTimestamps
+            validationConfig.floatingPointTolerance,
+            validationConfig.timestampMsTolerance,
+            validationConfig.ttlToleranceMillis,
+            validationConfig.writetimeToleranceMillis,
+            validationConfig.compareTimestamps
           )
       }
-      .take(config.validation.failuresToFetch)
+      .take(validationConfig.failuresToFetch)
       .toList
 
   }
