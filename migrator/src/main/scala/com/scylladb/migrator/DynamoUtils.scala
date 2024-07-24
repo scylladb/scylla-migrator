@@ -1,8 +1,11 @@
 package com.scylladb.migrator
 
+import com.scylladb.alternator.AlternatorEndpointProvider
 import com.scylladb.migrator.config.{ DynamoDBEndpoint, SourceSettings, TargetSettings }
-import org.apache.hadoop.dynamodb.DynamoDBConstants
+import org.apache.hadoop.conf.{ Configurable, Configuration }
 import org.apache.hadoop.dynamodb.read.DynamoDBInputFormat
+import org.apache.hadoop.dynamodb.write.DynamoDBOutputFormat
+import org.apache.hadoop.dynamodb.{ DynamoDBConstants, DynamoDbClientBuilderTransformer }
 import org.apache.hadoop.mapred.JobConf
 import org.apache.log4j.LogManager
 import software.amazon.awssdk.auth.credentials.{
@@ -10,7 +13,7 @@ import software.amazon.awssdk.auth.credentials.{
   AwsCredentialsProvider,
   ProfileCredentialsProvider
 }
-import software.amazon.awssdk.services.dynamodb.DynamoDbClient
+import software.amazon.awssdk.services.dynamodb.{ DynamoDbClient, DynamoDbClientBuilder }
 import software.amazon.awssdk.services.dynamodb.model.{
   BillingMode,
   CreateTableRequest,
@@ -30,6 +33,7 @@ import software.amazon.awssdk.services.dynamodb.model.{
 import software.amazon.awssdk.services.dynamodb.streams.DynamoDbStreamsClient
 
 import java.util.stream.Collectors
+import java.net.URI
 import scala.util.{ Failure, Success, Try }
 import scala.jdk.OptionConverters._
 
@@ -230,11 +234,13 @@ object DynamoUtils {
     jobConf.set(DynamoDBConstants.YARN_RESOURCE_MANAGER_ENABLED, "false")
 
     jobConf.set(
-      DynamoDBConstants.CUSTOM_CREDENTIALS_PROVIDER_CONF,
-      "com.scylladb.migrator.DynamoUtils$ProfileCredentialsProvider")
+      DynamoDBConstants.CUSTOM_CLIENT_BUILDER_TRANSFORMER,
+      classOf[AlternatorLoadBalancingEnabler].getName)
+
     jobConf.set(
-      "mapred.output.format.class",
-      "org.apache.hadoop.dynamodb.write.DynamoDBOutputFormat")
+      DynamoDBConstants.CUSTOM_CREDENTIALS_PROVIDER_CONF,
+      classOf[ProfileCredentialsProvider].getName)
+    jobConf.set("mapred.output.format.class", classOf[DynamoDBOutputFormat].getName)
     jobConf.set("mapred.input.format.class", classOf[DynamoDBInputFormat].getName)
   }
 
@@ -282,6 +288,19 @@ object DynamoUtils {
       extends software.amazon.awssdk.auth.credentials.AwsCredentialsProvider {
     private lazy val delegate = ProfileCredentialsProvider.create()
     def resolveCredentials(): AwsCredentials = delegate.resolveCredentials()
+  }
+
+  class AlternatorLoadBalancingEnabler extends DynamoDbClientBuilderTransformer with Configurable {
+    private var conf: Configuration = null
+
+    override def apply(builder: DynamoDbClientBuilder): DynamoDbClientBuilder =
+      builder.endpointProvider(
+        new AlternatorEndpointProvider(URI.create(conf.get(DynamoDBConstants.ENDPOINT)))
+      )
+
+    override def setConf(configuration: Configuration): Unit =
+      conf = configuration
+    override def getConf: Configuration = conf
   }
 
 }
