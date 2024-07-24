@@ -15,4 +15,4 @@ time spark-submit --class com.scylladb.migrator.Validator \
   --num-executors $SPARK_WORKER_INSTANCES \
   --executor-memory $MEMORY \
   --conf spark.cassandra.connection.localConnectionsPerExecutor=4 \
-  migrator/target/scala-2.13/scylla-migrator-assembly.jar
+  /home/ubuntu/scylla-migrator/scylla-migrator-assembly.jar
