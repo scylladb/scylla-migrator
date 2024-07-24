@@ -3,7 +3,7 @@ package com.scylladb.migrator.alternator
 import software.amazon.awssdk.auth.credentials.{AwsBasicCredentials, StaticCredentialsProvider}
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
-import software.amazon.awssdk.services.dynamodb.model.{AttributeDefinition, AttributeValue, CreateTableRequest, DeleteTableRequest, DescribeTableRequest, GetItemRequest, KeySchemaElement, KeyType, ProvisionedThroughput, ResourceNotFoundException, ScalarAttributeType}
+import software.amazon.awssdk.services.dynamodb.model.{AttributeDefinition, AttributeValue, CreateTableRequest, DeleteTableRequest, DescribeTableRequest, GetItemRequest, GlobalSecondaryIndexDescription, KeySchemaElement, KeyType, LocalSecondaryIndex, LocalSecondaryIndexDescription, ProvisionedThroughput, ResourceNotFoundException, ScalarAttributeType}
 
 import java.net.URI
 import scala.util.chaining._
@@ -57,7 +57,7 @@ trait MigratorSuite extends munit.FunSuite {
             .tableName(name)
             .keySchema(KeySchemaElement.builder().attributeName("id").keyType(KeyType.HASH).build())
             .attributeDefinitions(AttributeDefinition.builder().attributeName("id").attributeType(ScalarAttributeType.S).build())
-            .provisionedThroughput(ProvisionedThroughput.builder.readCapacityUnits(25L).writeCapacityUnits(25L).build())
+            .provisionedThroughput(ProvisionedThroughput.builder().readCapacityUnits(25L).writeCapacityUnits(25L).build())
             .build()
         sourceDDb.createTable(createTableRequest)
         val waiterResponse =
@@ -67,7 +67,7 @@ trait MigratorSuite extends munit.FunSuite {
         assert(waiterResponse.matched().response().isPresent, s"Failed to create table ${name}: ${waiterResponse.matched().exception().get()}")
       } catch {
         case any: Throwable =>
-          fail(s"Failed to created table ${name} in database ${sourceDDb}", any)
+          fail(s"Failed to create table ${name} in database ${sourceDDb}", any)
       }
       name
     },
@@ -112,18 +112,44 @@ trait MigratorSuite extends munit.FunSuite {
     checkSchemaWasMigrated(
       tableName,
       sourceTableDesc.keySchema,
-      sourceTableDesc.attributeDefinitions
+      sourceTableDesc.attributeDefinitions,
+      sourceTableDesc.localSecondaryIndexes,
+      sourceTableDesc.globalSecondaryIndexes
     )
   }
 
   /** Check that the table schema in the target database is equal to the provided schema */
-  def checkSchemaWasMigrated(tableName: String, keySchema: java.util.List[KeySchemaElement], attributeDefinitions: java.util.List[AttributeDefinition]): Unit = {
+  def checkSchemaWasMigrated(
+                              tableName: String,
+                              keySchema: java.util.List[KeySchemaElement],
+                              attributeDefinitions: java.util.List[AttributeDefinition],
+                              localSecondaryIndexes: java.util.List[LocalSecondaryIndexDescription],
+                              globalSecondaryIndexes: java.util.List[GlobalSecondaryIndexDescription]): Unit = {
     targetAlternator
       .describeTable(describeTableRequest(tableName))
       .table
       .tap { targetTableDesc =>
+        // Partition key
         assertEquals(targetTableDesc.keySchema, keySchema)
-        assertEquals(targetTableDesc.attributeDefinitions, attributeDefinitions)
+
+        // Attribute definitions
+        assertEquals(targetTableDesc.attributeDefinitions.asScala.toSet, attributeDefinitions.asScala.toSet)
+
+        // Local secondary indexes: do not compare their ARN, which always unique
+        def localIndexRelevantProperties(index: LocalSecondaryIndexDescription) =
+          (index.indexName, index.keySchema, index.projection)
+        assertEquals(
+          targetTableDesc.localSecondaryIndexes.asScala.map(localIndexRelevantProperties),
+          localSecondaryIndexes.asScala.map(localIndexRelevantProperties)
+        )
+
+        // Global secondary indexes: do not compare ARN and provisioned throughput (see https://github.com/scylladb/scylladb/issues/19718)
+        def globalIndexRelevantProperties(index: GlobalSecondaryIndexDescription) =
+          (index.indexName, index.keySchema, index.projection/*, index.provisionedThroughput*/)
+        assertEquals(
+          targetTableDesc.globalSecondaryIndexes.asScala.map(globalIndexRelevantProperties),
+          globalSecondaryIndexes.asScala.map(globalIndexRelevantProperties)
+        )
       }
   }
 

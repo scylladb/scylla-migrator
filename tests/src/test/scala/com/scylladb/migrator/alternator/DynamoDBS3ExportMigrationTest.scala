@@ -47,7 +47,9 @@ class DynamoDBS3ExportMigrationTest extends MigratorSuite {
     checkSchemaWasMigrated(
       tableName,
       Seq(KeySchemaElement.builder().attributeName("id").keyType(KeyType.HASH).build()).asJava,
-      Seq(AttributeDefinition.builder().attributeName("id").attributeType(ScalarAttributeType.S).build()).asJava
+      Seq(AttributeDefinition.builder().attributeName("id").attributeType(ScalarAttributeType.S).build()).asJava,
+      Nil.asJava,
+      Nil.asJava
     )
 
     // Check that the items have been migrated to the target table
