@@ -52,6 +52,7 @@ lazy val migrator = (project in file("migrator")).enablePlugins(BuildInfoPlugin)
     "com.datastax.spark" %% "spark-cassandra-connector" % "3.5.0-1-g468079b4",
     "com.github.jnr" % "jnr-posix" % "3.1.19", // Needed by the cassandra connector
     "com.scylladb.alternator" % "emr-dynamodb-hadoop" % "5.6.1",
+    "com.scylladb.alternator" % "load-balancing" % "1.0.0",
     "io.circe"       %% "circe-generic"      % "0.14.7",
     "io.circe"       %% "circe-parser"       % "0.14.7",
     "io.circe"       %% "circe-yaml"         % "0.15.1",
