@@ -171,7 +171,7 @@ object DynamoDBS3Export {
   }
 
   case class ManifestSummary(manifestFilesS3Key: String,
-                             itemCount: Int,
+                             itemCount: Long,
                              exportType: Option[String],
                              outputFormat: String)
   object ManifestSummary {
