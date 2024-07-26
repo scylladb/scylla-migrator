@@ -36,7 +36,8 @@ object ScyllaMigrator {
       else {
         val savepointsDirectory = Paths.get(migratorConfig.savepoints.path)
         if (!Files.exists(savepointsDirectory)) {
-          log.debug(s"Directory ${savepointsDirectory.normalize().toString} does not exist. Creating it...")
+          log.debug(
+            s"Directory ${savepointsDirectory.normalize().toString} does not exist. Creating it...")
           Files.createDirectories(savepointsDirectory)
         }
 
