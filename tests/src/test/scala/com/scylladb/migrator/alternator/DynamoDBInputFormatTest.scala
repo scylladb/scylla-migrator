@@ -1,6 +1,7 @@
 package com.scylladb.migrator.alternator
 
 import com.scylladb.migrator.readers.DynamoDB
+import org.apache.hadoop.dynamodb.read.DynamoDBInputFormat
 import org.apache.spark.sql.SparkSession
 import software.amazon.awssdk.services.dynamodb.model.{BillingMode, BillingModeSummary, ProvisionedThroughputDescription, TableDescription}
 
