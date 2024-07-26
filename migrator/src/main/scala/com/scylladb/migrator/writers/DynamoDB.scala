@@ -47,14 +47,6 @@ object DynamoDB {
           itemWritable.setItem(item)
           itemWritable
         }
-    finalRdd
-      .mapPartitions { partitions =>
-        // Adjust the log level of the DynamoDBClient logger in the executors, see https://github.com/scylladb/scylla-migrator/issues/167
-        LogManager
-          .getLogger(classOf[org.apache.hadoop.dynamodb.DynamoDBClient])
-          .setLevel(Level.WARN)
-        partitions
-      }
-      .saveAsHadoopDataset(jobConf)
+    finalRdd.saveAsHadoopDataset(jobConf)
   }
 }
