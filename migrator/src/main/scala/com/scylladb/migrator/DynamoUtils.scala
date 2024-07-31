@@ -2,6 +2,7 @@ package com.scylladb.migrator
 
 import com.scylladb.migrator.config.{ DynamoDBEndpoint, SourceSettings, TargetSettings }
 import org.apache.hadoop.dynamodb.DynamoDBConstants
+import org.apache.hadoop.dynamodb.read.DynamoDBInputFormat
 import org.apache.hadoop.mapred.JobConf
 import org.apache.log4j.LogManager
 import software.amazon.awssdk.auth.credentials.{
@@ -234,7 +235,7 @@ object DynamoUtils {
     jobConf.set(
       "mapred.output.format.class",
       "org.apache.hadoop.dynamodb.write.DynamoDBOutputFormat")
-    jobConf.set("mapred.input.format.class", "com.scylladb.migrator.alternator.DynamoDBInputFormat")
+    jobConf.set("mapred.input.format.class", classOf[DynamoDBInputFormat].getName)
   }
 
   /**

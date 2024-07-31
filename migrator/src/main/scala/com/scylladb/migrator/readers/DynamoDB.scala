@@ -2,8 +2,8 @@ package com.scylladb.migrator.readers
 
 import com.scylladb.migrator.{ AWSCredentials, DynamoUtils }
 import com.scylladb.migrator.DynamoUtils.{ setDynamoDBJobConf, setOptionalConf }
-import com.scylladb.migrator.alternator.DynamoDBInputFormat
 import com.scylladb.migrator.config.{ DynamoDBEndpoint, SourceSettings }
+import org.apache.hadoop.dynamodb.read.DynamoDBInputFormat
 import org.apache.hadoop.dynamodb.{ DynamoDBConstants, DynamoDBItemWritable }
 import org.apache.hadoop.io.Text
 import org.apache.hadoop.mapred.JobConf
