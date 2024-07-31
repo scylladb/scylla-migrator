@@ -2,7 +2,9 @@
 Set Up a Spark Cluster with Docker
 ==================================
 
-This page describes how to set up a Spark cluster locally on your machine by using Docker containers. This approach is useful if you do not need a high-level of performance, and want to quickly try out the Migrator without having to set up a real cluster of nodes. It requires Docker and Git.
+This page describes how to set up a Spark cluster locally on your machine by using Docker containers. It requires Docker and Git.
+
+.. note:: This approach is useful if you do not need a high-level of performance, and want to quickly try out the Migrator without having to set up a real cluster of nodes. We recommend using a real cluster for production, though.
 
 1. Clone the Migrator repository.
 
@@ -30,13 +32,6 @@ This page describes how to set up a Spark cluster locally on your machine by usi
 4. Open the Spark web UI.
 
    http://localhost:8080
-
-   Tip: add the following aliases to your ``/etc/hosts`` to make links work in the Spark UI
-
-   .. code-block:: text
-
-     127.0.0.1   spark-master
-     127.0.0.1   spark-worker
 
 5. Rename the file ``config.yaml.example`` to ``config.yaml``, and `configure <../#configure-the-migration>`_ it according to your needs.
 
