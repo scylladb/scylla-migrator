@@ -2,7 +2,9 @@
 Set Up a Spark Cluster with Docker
 ==================================
 
-This page describes how to set up a Spark cluster locally on your machine by using Docker containers. This approach is useful if you do not need a high-level of performance, and want to quickly try out the Migrator without having to set up a real cluster of nodes. It requires Docker and Git.
+This page describes how to set up a Spark cluster locally on your machine by using Docker containers. It requires Docker and Git.
+
+.. note:: This approach is useful if you do not need a high-level of performance, and want to quickly try out the Migrator without having to set up a real cluster of nodes. We recommend using a real cluster for production, though.
 
 1. Clone the Migrator repository.
 
