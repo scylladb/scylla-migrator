@@ -22,7 +22,7 @@ object AlternatorValidator {
     targetSettings: TargetSettings.DynamoDB,
     config: MigratorConfig)(implicit spark: SparkSession): List[RowComparisonFailure] = {
 
-    val (source, sourceTableDesc) = readers.DynamoDB.readRDD(spark, sourceSettings)
+    val (source, sourceTableDesc) = readers.DynamoDB.readRDD(spark, sourceSettings, None)
     val sourceTableKeys = sourceTableDesc.keySchema.asScala.toList
 
     val sourceByKey: RDD[(List[DdbValue], collection.Map[String, DdbValue])] =
@@ -44,7 +44,8 @@ object AlternatorValidator {
       sourceSettings.scanSegments, // Reuse same settings as source table
       sourceSettings.maxMapTasks,
       sourceSettings.readThroughput,
-      sourceSettings.throughputReadPercent
+      sourceSettings.throughputReadPercent,
+      skipSegments = None
     )
 
     // Define some aliases to prevent the Spark engine to try to serialize the whole object graph
