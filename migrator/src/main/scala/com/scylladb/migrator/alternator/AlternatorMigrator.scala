@@ -1,7 +1,7 @@
 package com.scylladb.migrator.alternator
 
 import com.scylladb.migrator.{ readers, writers, DynamoUtils }
-import com.scylladb.migrator.config.{ SourceSettings, TargetSettings }
+import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
 import com.scylladb.migrator.writers.DynamoStreamReplication
 import org.apache.hadoop.dynamodb.DynamoDBItemWritable
 import org.apache.hadoop.io.Text
@@ -13,16 +13,22 @@ import software.amazon.awssdk.services.dynamodb.model.TableDescription
 
 import scala.util.control.NonFatal
 import scala.jdk.CollectionConverters._
+import scala.util.Using
 
 object AlternatorMigrator {
   private val log = LogManager.getLogger("com.scylladb.migrator.alternator")
 
   def migrateFromDynamoDB(source: SourceSettings.DynamoDB,
                           target: TargetSettings.DynamoDB,
-                          renamesMap: Map[String, String])(implicit spark: SparkSession): Unit = {
-    val (sourceRDD, sourceTableDesc) = readers.DynamoDB.readRDD(spark, source)
-    val maybeStreamedSource = if (target.streamChanges) Some(source) else None
-    migrate(sourceRDD, sourceTableDesc, maybeStreamedSource, target, renamesMap)
+                          migratorConfig: MigratorConfig)(implicit spark: SparkSession): Unit = {
+    val (sourceRDD, sourceTableDesc) =
+      readers.DynamoDB.readRDD(spark, source, migratorConfig.skipSegments)
+    val savepointsManager =
+      DynamoDbSavepointsManager.setup(migratorConfig, sourceRDD, spark.sparkContext)
+    Using.resource(savepointsManager) { _ =>
+      val maybeStreamedSource = if (target.streamChanges) Some(source) else None
+      migrate(sourceRDD, sourceTableDesc, maybeStreamedSource, target, migratorConfig.renamesMap)
+    }
   }
 
   def migrateFromS3Export(source: SourceSettings.DynamoDBS3Export,
@@ -96,7 +102,7 @@ object AlternatorMigrator {
       }
     } catch {
       case NonFatal(e) =>
-        log.error("Caught error while writing the RDD.", e)
+        throw new Exception("Caught error while writing the RDD.", e)
     }
 
   }

@@ -12,7 +12,7 @@ This page describes how to use the Migrator in `Amazon EMR <https://aws.amazon.c
        --output-document=config.yaml
 
 
-2. `Configure the migration <../#configure-the-migration>`_ according to your needs.
+2. `Configure the migration <./#configure-the-migration>`_ according to your needs.
 
 3. Download the latest release of the Migrator.
 

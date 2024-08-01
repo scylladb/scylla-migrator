@@ -38,7 +38,7 @@ This page describes how to set up a Spark cluster locally on your machine by usi
      127.0.0.1   spark-master
      127.0.0.1   spark-worker
 
-5. Rename the file ``config.yaml.example`` to ``config.yaml``, and `configure <../#configure-the-migration>`_ it according to your needs.
+5. Rename the file ``config.yaml.example`` to ``config.yaml``, and `configure <./#configure-the-migration>`_ it according to your needs.
 
 6. Finally, run the migration.
 
