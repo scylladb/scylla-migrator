@@ -1,0 +1,52 @@
+name: "Tests / Tutorials"
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+env:
+  TUTORIAL_DIR: docs/source/tutorials/dynamodb-to-scylladb-alternator
+
+jobs:
+  test:
+    name: DynamoDB migration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache Docker images
+        uses: ScribeMD/docker-cache@0.5.0
+        with:
+          key: docker-${{ runner.os }}-${{ hashFiles('docker-compose-tests.yml') }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 8
+          cache: sbt
+      - name: Build migrator
+        run: |
+          ./build.sh
+          mv migrator/target/scala-2.13/scylla-migrator-assembly.jar "$TUTORIAL_DIR/spark-data"
+      - name: Set up services
+        run: |
+          cd $TUTORIAL_DIR
+          docker compose up -d
+      - name: Wait for the services to be up
+        run: |
+          .github/wait-for-port.sh 8000 # DynamoDB
+          .github/wait-for-port.sh 8001 # ScyllaDB Alternator
+          .github/wait-for-port.sh 8080 # Spark master
+          .github/wait-for-port.sh 8081 # Spark worker
+      - name: Run tutorial
+        run: |
+          cd $TUTORIAL_DIR
+          aws configure set region us-west-1
+          aws configure set aws_access_key_id dummy
+          aws configure set aws_secret_access_key dummy
+          sed -i 's/seq 1 40000/seq 1 40/g' ./create-data.sh
+          ./create-data.sh
+          . ./run-migrator.sh
+      - name: Stop services
+        run: |
+          cd $TUTORIAL_DIR
+          docker compose down

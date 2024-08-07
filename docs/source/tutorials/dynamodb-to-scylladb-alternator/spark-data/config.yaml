@@ -1,0 +1,26 @@
+source:
+  type: dynamodb
+  endpoint:
+    host: http://dynamodb
+    port: 8000
+  region: us-west-1
+  credentials:
+    accessKey: dummy
+    secretKey: dummy
+  table: Example
+
+target:
+  type: dynamodb
+  endpoint:
+    host: http://scylla
+    port: 8001
+  region: us-west-1
+  credentials:
+    accessKey: dummy
+    secretKey: dummy
+  table: Example
+  streamChanges: false
+
+savepoints:
+  path: /app/savepoints
+  intervalSeconds: 300
