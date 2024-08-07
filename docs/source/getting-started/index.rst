@@ -12,6 +12,10 @@ A Spark cluster is made of several *nodes*, which can contain several *workers* 
 
 We recommend provisioning at least 2 GB of memory per CPU on each node. For instance, a cluster node with 4 CPUs should have at least 8 GB of memory.
 
+.. caution::
+
+  Make sure the Spark version, the Scala version, and the Migrator version you use are `compatible together <../#compatibility-matrix>`_.
+
 The following pages describe various alternative ways to set up a Spark cluster:
 
 * :doc:`on your infrastructure, using Ansible </getting-started/ansible>`,
