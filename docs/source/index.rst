@@ -33,6 +33,7 @@ Migrator  Spark  Scala
   run-the-migration
   stream-changes
   rename-columns
+  resume-interrupted-migration
   validate
   configuration
   tutorials/index

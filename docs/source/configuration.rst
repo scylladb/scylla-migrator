@@ -331,15 +331,15 @@ The optional ``renames`` property lists the item columns to rename along the mig
 Savepoints
 ----------
 
-When migrating data from Apache Cassandra or DynamoDB, the migrator is able to resume an interrupted migration. To achieve this, it stores so-called “savepoints” along the process to remember which data items have already been migrated and should be skipped when the migration is restarted.
+When migrating data from Apache Cassandra or DynamoDB, the migrator is able to :doc:`resume an interrupted migration </resume-interrupted-migration>`. To achieve this, it stores so-called “savepoints” along the process to remember which data items have already been migrated and should be skipped when the migration is restarted.
 
 .. code-block:: yaml
 
   savepoints:
-    # Whe should savepoint configurations be stored? This is a path on the host running
+    # Where should savepoint configurations be stored? This is a path on the host running
     # the Spark driver - usually the Spark master.
     path: /app/savepoints
-    # Interval in which savepoints will be created
+    # Interval at which savepoints will be created
     intervalSeconds: 300
 
 ----------
