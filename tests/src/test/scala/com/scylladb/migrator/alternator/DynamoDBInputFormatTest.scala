@@ -1,6 +1,7 @@
 package com.scylladb.migrator.alternator
 
 import com.scylladb.migrator.readers.DynamoDB
+import org.apache.hadoop.dynamodb.read.DynamoDBInputFormat
 import org.apache.spark.sql.SparkSession
 import software.amazon.awssdk.services.dynamodb.model.{BillingMode, BillingModeSummary, ProvisionedThroughputDescription, TableDescription}
 
@@ -11,7 +12,7 @@ class DynamoDBInputFormatTest extends munit.FunSuite {
   val GB: Long = 1024 * 1024 * 1024
 
   test("no configured scanSegments in on-demand billing mode") {
-    checkPartitions(11)(tableSizeBytes = 1 * GB, tableProvisionedThroughput = None)
+    checkPartitions(10)(tableSizeBytes = 1 * GB, tableProvisionedThroughput = None)
   }
 
   test("no configured scanSegments in on-demand billing mode and table size is 100 GB") {
@@ -19,7 +20,7 @@ class DynamoDBInputFormatTest extends munit.FunSuite {
   }
 
   test("no configured scanSegments in provisioned billing mode") {
-    checkPartitions(11)(tableSizeBytes = 1 * GB, tableProvisionedThroughput = Some((25, 25)))
+    checkPartitions(10)(tableSizeBytes = 1 * GB, tableProvisionedThroughput = Some((25, 25)))
   }
 
   test("scanSegments = 42") {
