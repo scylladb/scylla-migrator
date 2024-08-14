@@ -193,20 +193,15 @@ Additionally, you can also set the following optional properties:
       accessKey: <access-key>
       secretKey: <secret-key>
 
-    # Split factor for writing.
-    scanSegments: 1
-
-    # Throttling settings, set based on your database capacity (or wanted capacity)
-    readThroughput: 1
+    # Throttling settings, set based on your database write capacity units (or wanted capacity).
+    # By default, for provisioned tables we use the configured write capacity units, and for on-demand tables we use the value 40000.
+    writeThroughput: 1
 
     # Can be between 0.1 and 1.5, inclusively.
-    # 0.5 represents the default read rate, meaning that the job will attempt to consume half of the read capacity of the table.
-    # If you increase the value above 0.5, spark will increase the request rate; decreasing the value below 0.5 decreases the read request rate.
-    # (The actual read rate will vary, depending on factors such as whether there is a uniform key distribution in the DynamoDB table.)
-    throughputReadPercent: 1.0
-
-    # At most how many tasks per Spark executor?
-    maxMapTasks: 1
+    # 0.5 represents the default write rate, meaning that the job will attempt to consume half of the write capacity of the table.
+    # If you increase the value above 0.5, spark will increase the request rate; decreasing the value below 0.5 decreases the write request rate.
+    # (The actual write rate will vary, depending on factors such as whether there is a uniform key distribution in the DynamoDB table.)
+    throughputWritePercent: 1.0
 
     # When streamChanges is true, skip the initial snapshot transfer and only stream changes.
     # This setting is ignored if streamChanges is false.

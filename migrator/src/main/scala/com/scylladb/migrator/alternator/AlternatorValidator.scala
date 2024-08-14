@@ -41,10 +41,10 @@ object AlternatorValidator {
       targetSettings.finalCredentials,
       targetSettings.region,
       targetSettings.table,
-      targetSettings.scanSegments,
-      targetSettings.maxMapTasks,
-      readThroughput        = None,
-      throughputReadPercent = None
+      sourceSettings.scanSegments, // Reuse same settings as source table
+      sourceSettings.maxMapTasks,
+      sourceSettings.readThroughput,
+      sourceSettings.throughputReadPercent
     )
 
     // Define some aliases to prevent the Spark engine to try to serialize the whole object graph

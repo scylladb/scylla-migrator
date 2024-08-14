@@ -26,8 +26,8 @@ object DynamoDB {
       jobConf,
       target.region,
       target.endpoint,
-      target.scanSegments,
-      target.maxMapTasks,
+      maybeScanSegments = None,
+      maybeMaxMapTasks  = None,
       target.finalCredentials)
     jobConf.set(DynamoDBConstants.OUTPUT_TABLE_NAME, target.table)
     val writeThroughput =

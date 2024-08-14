@@ -218,20 +218,14 @@ target:
 #       # Optional - the session name to use. If not set, we use 'scylla-migrator'
 #       sessionName: <roleSessionName>
 #
-#   # Split factor for reading/writing. This is required for Scylla targets.
-#   scanSegments: 1
+#   # throttling settings, set based on your write capacity units (or wanted capacity)
+#   writeThroughput: 1
 #
-#   # throttling settings, set based on your capacity (or wanted capacity)
-#   readThroughput: 1
-#
-#   # The value of dynamodb.throughput.read.percent can be between 0.1 and 1.5, inclusively.
-#   # 0.5 represents the default read rate, meaning that the job will attempt to consume half of the read capacity of the table.
-#   # If you increase the value above 0.5, spark will increase the request rate; decreasing the value below 0.5 decreases the read request rate.
-#   # (The actual read rate will vary, depending on factors such as whether there is a uniform key distribution in the DynamoDB table.)
-#   throughputReadPercent: 1.0
-#
-#   # how many tasks per executor?
-#   maxMapTasks: 1
+#   # The value of dynamodb.throughput.write.percent can be between 0.1 and 1.5, inclusively.
+#   # 0.5 represents the default write rate, meaning that the job will attempt to consume half of the write capacity of the table.
+#   # If you increase the value above 0.5, spark will increase the request rate; decreasing the value below 0.5 decreases the write request rate.
+#   # (The actual write rate will vary, depending on factors such as whether there is a uniform key distribution in the DynamoDB table.)
+#   throughputWritePercent: 1.0
 #
 #   # When transferring DynamoDB sources to DynamoDB targets (such as other DynamoDB tables or Alternator tables),
 #   # the migrator supports transferring live changes occuring on the source table after transferring an initial

@@ -156,7 +156,7 @@ A source of type ``dynamodb`` can be used together with a target of type ``dynam
     # Optional - Split factor for reading. The default is to split the source data into chunks
     # of 128 MB that can be processed in parallel by the Spark executors.
     scanSegments: 1
-    # Optional - Throttling settings, set based on your database capacity (or wanted capacity)
+    # Optional - Throttling settings, set based on your database read capacity units (or wanted capacity)
     readThroughput: 1
     # Optional - Can be between 0.1 and 1.5, inclusively.
     # 0.5 represents the default read rate, meaning that the job will attempt to consume half of the read capacity of the table.
@@ -295,17 +295,14 @@ DynamoDB Target
     type: dynamodb
     # Name of the table to write. If it does not exist, it will be created on the fly.
     table: <table>
-    # Optional - Split factor for writing.
-    scanSegments: 1
-    # Optional - Throttling settings, set based on your database capacity (or wanted capacity)
-    readThroughput: 1
+    # Optional - Throttling settings, set based on your database write capacity units (or wanted capacity).
+    # By default, for provisioned tables we use the configured write capacity units, and for on-demand tables we use the value 40000.
+    writeThroughput: 1
     # Optional - Can be between 0.1 and 1.5, inclusively.
-    # 0.5 represents the default read rate, meaning that the job will attempt to consume half of the read capacity of the table.
-    # If you increase the value above 0.5, spark will increase the request rate; decreasing the value below 0.5 decreases the read request rate.
-    # (The actual read rate will vary, depending on factors such as whether there is a uniform key distribution in the DynamoDB table.)
-    throughputReadPercent: 1.0
-    # Optional - At most how many tasks per Spark executor? Default is to use the same as 'scanSegments'.
-    maxMapTasks: 1
+    # 0.5 represents the default write rate, meaning that the job will attempt to consume half of the write capacity of the table.
+    # If you increase the value above 0.5, spark will increase the request rate; decreasing the value below 0.5 decreases the write request rate.
+    # (The actual write rate will vary, depending on factors such as whether there is a uniform key distribution in the DynamoDB table.)
+    throughputWritePercent: 1.0
     # When transferring DynamoDB sources to DynamoDB targets (such as other DynamoDB tables or Alternator tables),
     # the migrator supports transferring live changes occurring on the source table after transferring an initial
     # snapshot.

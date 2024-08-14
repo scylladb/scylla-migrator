@@ -245,42 +245,31 @@ object DynamoUtils {
   }
 
   /**
-    * @return The read throughput (in bytes per second) of the
-    *         provided table description.
+    * @return The read throughput (in RCU) of the provided table description.
     *         If the table billing mode is PROVISIONED, it returns the
-    *         table RCU multiplied by the number of bytes per read
-    *         capacity unit. Otherwise (e.g. ,in case of on-demand
+    *         table RCU. Otherwise (e.g., in case of on-demand
     *         billing mode), it returns
     *         [[DynamoDBConstants.DEFAULT_CAPACITY_FOR_ON_DEMAND]].
     */
   def tableReadThroughput(description: TableDescription): Long =
-    tableThroughput(
-      description,
-      DynamoDBConstants.BYTES_PER_READ_CAPACITY_UNIT.longValue(),
-      _.readCapacityUnits)
+    tableThroughput(description, _.readCapacityUnits)
 
   /**
-    * @return The write throughput (in bytes per second) of the
-    *         provided table description.
+    * @return The write throughput (in WCU) of the provided table description.
     *         If the table billing mode is PROVISIONED, it returns the
-    *         table WCU multiplied by the number of bytes per write
-    *         capacity unit. Otherwise (e.g. ,in case of on-demand
+    *         table WCU. Otherwise (e.g., in case of on-demand
     *         billing mode), it returns
     *         [[DynamoDBConstants.DEFAULT_CAPACITY_FOR_ON_DEMAND]].
     */
   def tableWriteThroughput(description: TableDescription): Long =
-    tableThroughput(
-      description,
-      DynamoDBConstants.BYTES_PER_WRITE_CAPACITY_UNIT.longValue(),
-      _.writeCapacityUnits)
+    tableThroughput(description, _.writeCapacityUnits)
 
   private def tableThroughput(description: TableDescription,
-                              bytesPerCapacityUnit: Long,
                               capacityUnits: ProvisionedThroughputDescription => Long): Long =
     if (description.billingModeSummary == null || description.billingModeSummary.billingMode == BillingMode.PROVISIONED) {
-      capacityUnits(description.provisionedThroughput) * bytesPerCapacityUnit
+      capacityUnits(description.provisionedThroughput)
     } else {
-      DynamoDBConstants.DEFAULT_CAPACITY_FOR_ON_DEMAND * bytesPerCapacityUnit
+      DynamoDBConstants.DEFAULT_CAPACITY_FOR_ON_DEMAND
     }
 
   /** Reflection-friendly credentials provider used by the EMR DynamoDB connector */

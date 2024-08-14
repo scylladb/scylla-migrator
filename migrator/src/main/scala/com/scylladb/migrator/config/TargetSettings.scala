@@ -26,10 +26,8 @@ object TargetSettings {
                       region: Option[String],
                       credentials: Option[AWSCredentials],
                       table: String,
-                      scanSegments: Option[Int],
                       writeThroughput: Option[Int],
                       throughputWritePercent: Option[Float],
-                      maxMapTasks: Option[Int],
                       streamChanges: Boolean,
                       skipInitialSnapshotTransfer: Option[Boolean])
       extends TargetSettings {

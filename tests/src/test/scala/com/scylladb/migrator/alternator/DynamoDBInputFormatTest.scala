@@ -16,11 +16,16 @@ class DynamoDBInputFormatTest extends munit.FunSuite {
   }
 
   test("no configured scanSegments in on-demand billing mode and table size is 100 GB") {
-    checkPartitions(1024)(tableSizeBytes = 100 * GB, tableProvisionedThroughput = None)
+    // segments are limited by the default read throughput
+    checkPartitions(200)(tableSizeBytes = 100 * GB, tableProvisionedThroughput = None)
+  }
+
+  test("no configured scanSegments in on-demand billing mode, table size is 100 GB, and read throughput is 1,000,000") {
+    checkPartitions(1024)(tableSizeBytes = 100 * GB, tableProvisionedThroughput = None, configuredReadThroughput = Some(1000000))
   }
 
   test("no configured scanSegments in provisioned billing mode") {
-    checkPartitions(10)(tableSizeBytes = 1 * GB, tableProvisionedThroughput = Some((25, 25)))
+    checkPartitions(10)(tableSizeBytes = 1 * GB, tableProvisionedThroughput = Some((10000, 10000)))
   }
 
   test("scanSegments = 42") {
