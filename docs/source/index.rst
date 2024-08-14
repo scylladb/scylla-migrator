@@ -9,7 +9,7 @@ The ScyllaDB Migrator is a Spark application that migrates data to ScyllaDB. Its
 * It can rename columns along the way.
 * When migrating from DynamoDB it can transfer a snapshot of the source data, or continuously migrate new data as they come.
 
-Read over the :doc:`Getting Started </getting-started/index>` page to set up a Spark cluster for a migration.
+Read over the :doc:`Getting Started </getting-started/index>` page to set up a Spark cluster and to configure your migration. Alternatively, follow our :doc:`step-by-step tutorial to perform a migration between fake databases using Docker </tutorials/dynamodb-to-scylladb-alternator/index>`.
 
 --------------------
 Compatibility Matrix
@@ -33,3 +33,4 @@ Migrator  Spark  Scala
   rename-columns
   validate
   configuration
+  tutorials/index

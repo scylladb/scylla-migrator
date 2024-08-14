@@ -33,7 +33,7 @@ This page describes how to set up a Spark cluster locally on your machine by usi
 
    http://localhost:8080
 
-5. Rename the file ``config.yaml.example`` to ``config.yaml``, and `configure <../#configure-the-migration>`_ it according to your needs.
+5. Rename the file ``config.yaml.example`` to ``config.yaml``, and `configure <./#configure-the-migration>`_ it according to your needs.
 
 6. Finally, run the migration.
 
@@ -47,7 +47,7 @@ This page describes how to set up a Spark cluster locally on your machine by usi
 
    The ``spark-master`` container mounts the ``./migrator/target/scala-2.13`` dir on ``/jars`` and the repository root on ``/app``.
 
-   See also our `general recommendations to tune the Spark job <../#run-the-migration>`_.
+   See also our `general recommendations to tune the Spark job <./#run-the-migration>`_.
 
 7. You can monitor progress by observing the Spark web console you opened in step 4. Additionally, after the job has started, you can track progress via ``http://localhost:4040``.
 

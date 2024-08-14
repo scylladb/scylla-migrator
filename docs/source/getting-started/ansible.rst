@@ -35,7 +35,7 @@ The Ansible playbook expects to be run in an Ubuntu environment where the direct
    - Ensure networking is configured to allow you access spark master node via TCP ports 8080 and 4040
    - visit ``http://<spark-master-hostname>:8080``
 
-9. `Review and modify config.yaml <../#configure-the-migration>`_ based whether you're performing a migration to CQL or Alternator
+9. `Review and modify config.yaml <./#configure-the-migration>`_ based whether you're performing a migration to CQL or Alternator
 
    - If you're migrating to ScyllaDB CQL interface (from Apache Cassandra, ScyllaDB, or other CQL source), make a copy review the comments in ``config.yaml.example``, and edit as directed.
    - If you're migrating to Alternator (from DynamoDB or other ScyllaDB Alternator), make a copy, review the comments in ``config.dynamodb.yml``, and edit as directed.
