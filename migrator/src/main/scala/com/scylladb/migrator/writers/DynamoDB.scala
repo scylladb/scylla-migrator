@@ -6,7 +6,7 @@ import com.scylladb.migrator.config.TargetSettings
 import org.apache.hadoop.dynamodb.{ DynamoDBConstants, DynamoDBItemWritable }
 import org.apache.hadoop.io.Text
 import org.apache.hadoop.mapred.JobConf
-import org.apache.log4j.{ Level, LogManager }
+import org.apache.log4j.LogManager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import software.amazon.awssdk.services.dynamodb.model.{ AttributeValue, TableDescription }
@@ -14,6 +14,8 @@ import software.amazon.awssdk.services.dynamodb.model.{ AttributeValue, TableDes
 import java.util
 
 object DynamoDB {
+
+  val log = LogManager.getLogger("com.scylladb.migrator.writers.DynamoDB")
 
   def writeRDD(target: TargetSettings.DynamoDB,
                renamesMap: Map[String, String],
@@ -31,7 +33,17 @@ object DynamoDB {
       target.finalCredentials)
     jobConf.set(DynamoDBConstants.OUTPUT_TABLE_NAME, target.table)
     val writeThroughput =
-      target.writeThroughput.getOrElse(DynamoUtils.tableWriteThroughput(targetTableDesc))
+      target.writeThroughput match {
+        case Some(value) =>
+          log.info(
+            s"Setting up Hadoop job to write table using a configured throughput of ${value} WCU(s)")
+          value
+        case None =>
+          val value = DynamoUtils.tableWriteThroughput(targetTableDesc)
+          log.info(
+            s"Setting up Hadoop job to write table using a calculated throughput of ${value} WCU(s)")
+          value
+      }
     jobConf.set(DynamoDBConstants.WRITE_THROUGHPUT, writeThroughput.toString)
     setOptionalConf(
       jobConf,

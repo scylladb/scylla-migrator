@@ -217,8 +217,14 @@ object DynamoUtils {
                          maybeScanSegments: Option[Int],
                          maybeMaxMapTasks: Option[Int],
                          maybeAwsCredentials: Option[AWSCredentials]): Unit = {
-    setOptionalConf(jobConf, DynamoDBConstants.REGION, maybeRegion)
-    setOptionalConf(jobConf, DynamoDBConstants.ENDPOINT, maybeEndpoint.map(_.renderEndpoint))
+    for (region <- maybeRegion) {
+      log.info(s"Using AWS region: ${region}")
+      jobConf.set(DynamoDBConstants.REGION, region)
+    }
+    for (endpoint <- maybeEndpoint) {
+      log.info(s"Using AWS endpoint: ${endpoint.renderEndpoint}")
+      jobConf.set(DynamoDBConstants.ENDPOINT, endpoint.renderEndpoint)
+    }
     setOptionalConf(jobConf, DynamoDBConstants.SCAN_SEGMENTS, maybeScanSegments.map(_.toString))
     setOptionalConf(jobConf, DynamoDBConstants.MAX_MAP_TASKS, maybeMaxMapTasks.map(_.toString))
     for (credentials <- maybeAwsCredentials) {
