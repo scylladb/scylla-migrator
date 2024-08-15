@@ -65,9 +65,10 @@ This page describes how to use the Migrator in `Amazon EMR <https://aws.amazon.c
 
        .. code-block:: text
 
-         spark-submit --deploy-mode cluster --class com.scylladb.migrator.Migrator --conf spark.scylla.config=/mnt1/config.yaml /mnt1/scylla-migrator-assembly.jar
+         spark-submit --deploy-mode cluster --class com.scylladb.migrator.Migrator --conf spark.scylla.config=/mnt1/config.yaml <... other arguments> /mnt1/scylla-migrator-assembly.jar
 
-       See also our `general recommendations to tune the Spark job <./#run-the-migration>`_.
+       See a complete description of the expected arguments to ``spark-submit`` in page :doc:`Run the Migration </run-the-migration>`, and replace “<... other arguments>” above with the appropriate arguments.
+
 
    - Add a Bootstrap action to download the Migrator and the migration configuration:
 
