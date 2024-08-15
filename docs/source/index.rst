@@ -30,6 +30,7 @@ Migrator  Spark  Scala
   getting-started/index
   migrate-from-cassandra-or-parquet
   migrate-from-dynamodb
+  run-the-migration
   stream-changes
   rename-columns
   validate

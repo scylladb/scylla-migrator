@@ -30,8 +30,9 @@ This page describes how to set up a Spark cluster on your infrastructure and to 
      spark-submit --class com.scylladb.migrator.Migrator \
        --master spark://<spark-master-hostname>:7077 \
        --conf spark.scylla.config=<path to config.yaml> \
+       <... other arguments> \
        <path to scylla-migrator-assembly.jar>
 
-   See also our `general recommendations to tune the Spark job <./#run-the-migration>`_.
+   See a complete description of the expected arguments to ``spark-submit`` in page :doc:`Run the Migration </run-the-migration>`, and replace “<spark-master-hostname>”, “<... other arguments>”, and “<path to scylla-migrator-assembly.jar>” above with appropriate values.
 
 6. You can monitor progress from the `Spark web UI <https://spark.apache.org/docs/latest/spark-standalone.html#monitoring-and-logging>`_.
