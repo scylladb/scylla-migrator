@@ -8,9 +8,9 @@ Since the Migrator is packaged as a Spark application, you first have to set up 
 Set Up a Spark Cluster
 ----------------------
 
-A Spark cluster is made of several *nodes*, which can contain several *workers* (although there is usually just one worker per node). When you start the Migrator, the Spark *driver* looks at the job content and splits it into tasks. It then spawns *executors* on the cluster workers and feeds them with the tasks to compute.
+A Spark cluster is made of several *nodes*, which can contain several *workers* (although there is usually just one worker per node). When you start the Migrator, the Spark *driver* looks at the job content and splits it into tasks. It then spawns *executors* on the cluster workers and feeds them with the tasks to compute. Since the tasks are processed in parallel, you can increase the possible throughput of the migration by increasing the number of worker nodes. Note that the migration throughput is also limited by the read throughput of the source database and the write throughput of the target database.
 
-We recommend provisioning at least 2 GB of memory per CPU on each node. For instance, a cluster node with 4 CPUs should have at least 8 GB of memory.
+We suggest starting with a small cluster containing a single worker node with 5 to 10 CPUs, and increasing the number of worker nodes (or the number of CPUs per node) if necessary, as long as the source and target database are not saturated. We recommend provisioning at least 2 GB of memory per CPU on each node. For instance, a cluster node with 8 CPUs should have at least 16 GB of memory.
 
 .. caution::
 
