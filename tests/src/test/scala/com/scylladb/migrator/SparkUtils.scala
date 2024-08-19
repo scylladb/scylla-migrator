@@ -44,6 +44,8 @@ object SparkUtils {
         "spark.driver.host=spark-master",
         "--conf",
         s"spark.scylla.config=/app/configurations/${migratorConfigFile}",
+        "--executor-cores", "2",
+        "--executor-memory", "4G",
         // Uncomment one of the following lines to plug a remote debugger on the Spark master or worker.
         // "--conf", "spark.driver.extraJavaOptions=-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=*:5005",
         // "--conf", "spark.executor.extraJavaOptions=-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=*:5006",
