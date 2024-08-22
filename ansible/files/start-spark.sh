@@ -15,4 +15,4 @@ cd $SPARK_HOME/sbin
 
 ./start-slave.sh spark://$SPARK_MASTER_HOST:7077 $SLAVESIZE
 
-./start-shuffle-service.sh
+./start-mesos-shuffle-service.sh
