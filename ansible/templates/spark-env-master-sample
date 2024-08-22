@@ -2,38 +2,31 @@
 # Master node requires a lot of memory.  We allocate 64G for the driver to avoid OOM when
 # there are a lot of tasks.
 # 
-# For this example, we're not using any workers on master.
-# so CORES = 0 and SPARK_WORKER_INSTANCES = 0.
+# EXECUTOR_MEMORY and EXECUTOR_CORES are used in the spark-submit job and controls the memory
+# and CPUs per executor. Here are our recommendations to set the number of cores per executor:
+#  - it should be between 5 and 10
+#  - the total number of cores per worker node should be a multiple of the number of cores
+#    per executor
+#  - it can not be higher than the number of cores on a worker node
+# For example, if there are 16 cores on each worker node, we could set EXECUTOR_CORES=8,
+# or if there are 2 cores on each worker node, we could set EXECUTOR_CORES=2.
 #
-# MEMORY is used in the spark-submit job and allocates the memory per executor.
-# You can have one or more executors per worker.
-# 
-# By using multiple workers on an instance, we can control the velocity of the migration.
+# By using multiple worker nodes, we can control the velocity of the migration.
 #
 # Eg. 
 #    Target system is 3 x i4i.4xlarge (16 vCPU, 128G)
-#    We can provision 3 x i4i.2xlarge (8vCPU, 64G)
+#    We can provision 2 x m7g.2xlarge (8vCPU, 32G)
 #
-#    SPARK_WORKER_INSTANCES = 1
-#    CORES = 4
-#    MEMORY = 8G     (4 cores per worker * 2G)
+#    EXECUTOR_CORES=8
+#    EXECUTOR_MEMORY=16G    # (8 cores per worker * 2G)
 #
-#    Start 1 worker per node,  or one at a time.  
+#    Start the Spark master node and the Spark worker node, and run the migration.
 #    - Monitor the pressure on the source system
-#    - Monitor the velocity of the migration in the spark jobs monito
-#
-#    You can increase the velocity by updating spark-env on worker nodes, increase the
-#    SPARK_WORKER_INSTANCES = 2, run ./start-worker.sh.  
-#    So long as there are tasks available, the new workers would pick up tasks and increase
-#    the velocity of the migration.
-#
-#    You should be mindful of over-provisioning the number of workers on an instance.
-#    Eg. if the node has 8 CPUs, then number of workers on an instance * cores <= 8...
+#    - Monitor the velocity of the migration in the spark jobs monitoring UI
+#    - If necessary, provision more worker nodes
 ##################################################################################################################
 
-export CORES=0                                          # 0 cores for slaves on master node
-export MEMORY=8G                                        # cores per worker x 2G
-export SPARK_WORKER_INSTANCES=0                         # no workers on master node
-export SPARK_MASTER_HOST={{ hostvars.spark_master.ansible_facts.default_ipv4.address }}
-
-export SLAVESIZE="-c $CORES "                 
+export SPARK_MASTER_HOST={{ hostvars.spark_master.ansible_default_ipv4.address }}
+export EXECUTOR_CORES=4
+# By default, allocate 2GB of memory per core
+export EXECUTOR_MEMORY="$((EXECUTOR_CORES * 2))G"
