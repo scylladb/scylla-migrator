@@ -19,7 +19,7 @@ time spark-submit --class com.scylladb.migrator.Migrator \
 
 #sometimes you will need a tuning for driver memory size
 #add this config to above to tune it:
-#  --conf spark.driver.memory=4G \
+#  --driver-memory 4G \
 
 # debug example
 #$SPARK_HOME/spark-submit --class com.scylladb.migrator.Migrator \
