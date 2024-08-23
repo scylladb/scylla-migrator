@@ -1,0 +1,25 @@
+source:
+  type: dynamodb
+  table: StreamedItemsTest
+  region: us-west-1
+  credentials:
+    accessKey: "{AWS_ACCESS_KEY}"
+    secretKey: "{AWS_SECRET_KEY}"
+    assumeRole:
+      arn: "{AWS_ROLE_ARN}"
+
+target:
+  type: dynamodb
+  table: StreamedItemsTest
+  region: dummy
+  endpoint:
+    host: http://scylla
+    port: 8000
+  credentials:
+    accessKey: dummy
+    secretKey: dummy
+  streamChanges: true
+
+savepoints:
+  path: /app/savepoints
+  intervalSeconds: 300

@@ -82,7 +82,8 @@ object DynamoDB {
         throughputReadPercent,
         tableDescription,
         maybeTtlDescription,
-        skipSegments)
+        skipSegments
+      )
 
     val rdd =
       spark.sparkContext.hadoopRDD(

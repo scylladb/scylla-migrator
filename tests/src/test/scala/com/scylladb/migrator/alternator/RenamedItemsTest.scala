@@ -5,7 +5,7 @@ import software.amazon.awssdk.services.dynamodb.model.{AttributeValue, PutItemRe
 
 import scala.jdk.CollectionConverters._
 
-class RenamedItemsTest extends MigratorSuite {
+class RenamedItemsTest extends MigratorSuiteWithDynamoDBLocal {
 
   withTable("RenamedItems").test("Rename items along the migration") { tableName =>
     // Insert several items
@@ -20,8 +20,8 @@ class RenamedItemsTest extends MigratorSuite {
     )
     val item2Data = keys2 ++ attrs2
 
-    sourceDDb.putItem(PutItemRequest.builder().tableName(tableName).item(item1Data.asJava).build())
-    sourceDDb.putItem(PutItemRequest.builder().tableName(tableName).item(item2Data.asJava).build())
+    sourceDDb().putItem(PutItemRequest.builder().tableName(tableName).item(item1Data.asJava).build())
+    sourceDDb().putItem(PutItemRequest.builder().tableName(tableName).item(item2Data.asJava).build())
 
     // Perform the migration
     successfullyPerformMigration("dynamodb-to-alternator-renames.yaml")

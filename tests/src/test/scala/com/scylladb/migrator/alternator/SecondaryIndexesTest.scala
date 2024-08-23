@@ -3,13 +3,13 @@ package com.scylladb.migrator.alternator
 import com.scylladb.migrator.SparkUtils.successfullyPerformMigration
 import software.amazon.awssdk.services.dynamodb.model.{AttributeDefinition, CreateTableRequest, DeleteTableRequest, GlobalSecondaryIndex, KeySchemaElement, KeyType, LocalSecondaryIndex, Projection, ProjectionType, ProvisionedThroughput, ScalarAttributeType}
 
-class SecondaryIndexesTest extends MigratorSuite {
+class SecondaryIndexesTest extends MigratorSuiteWithDynamoDBLocal {
 
   val tableName = "TableWithSecondaryIndexes"
   val withResources: FunFixture[Unit] = FunFixture(
     setup = _ => {
-      deleteTableIfExists(sourceDDb, tableName)
-      deleteTableIfExists(targetAlternator, tableName)
+      deleteTableIfExists(sourceDDb(), tableName)
+      deleteTableIfExists(targetAlternator(), tableName)
       try {
         val createTableRequest =
           CreateTableRequest
@@ -50,21 +50,21 @@ class SecondaryIndexesTest extends MigratorSuite {
                 .build()
             )
             .build()
-        sourceDDb.createTable(createTableRequest)
+        sourceDDb().createTable(createTableRequest)
         val waiterResponse =
-          sourceDDb
+          sourceDDb()
             .waiter()
             .waitUntilTableExists(describeTableRequest(tableName))
         assert(waiterResponse.matched().response().isPresent, s"Failed to create table ${tableName}: ${waiterResponse.matched().exception().get()}")
       } catch {
         case any: Throwable =>
-          fail(s"Failed to create table ${tableName} in database ${sourceDDb}", any)
+          fail(s"Failed to create table ${tableName} in database ${sourceDDb()}", any)
       }
       ()
     },
     teardown = _ => {
-      targetAlternator.deleteTable(DeleteTableRequest.builder().tableName(tableName).build())
-      sourceDDb.deleteTable(DeleteTableRequest.builder().tableName(tableName).build())
+      targetAlternator().deleteTable(DeleteTableRequest.builder().tableName(tableName).build())
+      sourceDDb().deleteTable(DeleteTableRequest.builder().tableName(tableName).build())
       ()
     }
   )

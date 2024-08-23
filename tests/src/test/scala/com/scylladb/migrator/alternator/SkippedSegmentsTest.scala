@@ -7,7 +7,7 @@ import java.util.UUID
 import scala.jdk.CollectionConverters._
 import scala.util.chaining._
 
-class SkippedSegmentsTest extends MigratorSuite {
+class SkippedSegmentsTest extends MigratorSuiteWithDynamoDBLocal {
 
   withTable("SkippedSegments").test("Run partial migrations") { tableName =>
     // We rely on the fact that both config files have `scanSegments: 3` and
@@ -19,7 +19,7 @@ class SkippedSegmentsTest extends MigratorSuite {
 
     // Initially, the target table does not exist
     try {
-      targetAlternator.describeTable(describeTableRequest(tableName))
+      targetAlternator().describeTable(describeTableRequest(tableName))
       fail(s"The table ${tableName} should not exist yet")
     } catch {
       case _: ResourceNotFoundException =>
@@ -54,12 +54,12 @@ class SkippedSegmentsTest extends MigratorSuite {
         "bar" -> AttributeValue.fromS(UUID.randomUUID().toString),
         "baz" -> AttributeValue.fromS(UUID.randomUUID().toString)
       )
-      sourceDDb.putItem(PutItemRequest.builder().tableName(tableName).item(itemData.asJava).build())
+      sourceDDb().putItem(PutItemRequest.builder().tableName(tableName).item(itemData.asJava).build())
     }
   }
 
   def targetAlternatorItemCount(tableName: String): Long =
-    targetAlternator
+    targetAlternator()
       .scanPaginator(ScanRequest.builder().tableName(tableName).build())
       .items()
       .stream()

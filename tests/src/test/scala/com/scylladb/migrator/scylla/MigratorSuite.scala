@@ -19,21 +19,48 @@ abstract class MigratorSuite(sourcePort: Int) extends munit.FunSuite {
 
   val keyspace = "test"
 
+  private val createKeyspaceStatement =
+    SchemaBuilder
+      .createKeyspace(keyspace)
+      .ifNotExists()
+      .withReplicationOptions(Map[String, AnyRef](
+        "class"              -> "SimpleStrategy",
+        "replication_factor" -> Integer.valueOf(1)).asJava)
+      .build()
+
   /** Client of a source Cassandra instance */
-  val sourceCassandra: CqlSession = CqlSession
-    .builder()
-    .addContactPoint(new InetSocketAddress("localhost", sourcePort))
-    .withLocalDatacenter("datacenter1")
-    .withAuthCredentials("dummy", "dummy")
-    .build()
+  val sourceCassandra: Fixture[CqlSession] = new Fixture[CqlSession]("sourceCassandra") {
+    private var session: CqlSession = null
+    def apply(): CqlSession = session
+    override def beforeAll(): Unit = {
+      session =
+        CqlSession
+          .builder()
+          .addContactPoint(new InetSocketAddress("localhost", sourcePort))
+          .withLocalDatacenter("datacenter1")
+          .withAuthCredentials("dummy", "dummy")
+          .build()
+      session.execute(createKeyspaceStatement)
+    }
+    override def afterAll(): Unit = session.close()
+  }
 
   /** Client of a target ScyllaDB instance */
-  val targetScylla: CqlSession = CqlSession
-    .builder()
-    .addContactPoint(new InetSocketAddress("localhost", 9042))
-    .withLocalDatacenter("datacenter1")
-    .withAuthCredentials("dummy", "dummy")
-    .build()
+  val targetScylla: Fixture[CqlSession] = new Fixture[CqlSession]("targetScylla") {
+    var session: CqlSession = null
+    def apply(): CqlSession = session
+    override def beforeAll(): Unit = {
+      session =
+        CqlSession
+          .builder()
+          .addContactPoint(new InetSocketAddress("localhost", 9042))
+          .withLocalDatacenter("datacenter1")
+          .withAuthCredentials("dummy", "dummy")
+          .build()
+      session.execute(createKeyspaceStatement)
+    }
+    override def afterAll(): Unit = session.close()
+  }
 
   /**
     * Fixture automating the house-keeping work when migrating a table.
@@ -51,9 +78,9 @@ abstract class MigratorSuite(sourcePort: Int) extends munit.FunSuite {
       setup = { _ =>
         // Make sure the source and target databases do not contain the table already
         try {
-          dropAndRecreateTable(sourceCassandra, keyspace, name, columnName = identity)
+          dropAndRecreateTable(sourceCassandra(), keyspace, name, columnName = identity)
           dropAndRecreateTable(
-            targetScylla,
+            targetScylla(),
             keyspace,
             name,
             columnName = originalName => renames.getOrElse(originalName, originalName))
@@ -66,28 +93,12 @@ abstract class MigratorSuite(sourcePort: Int) extends munit.FunSuite {
       teardown = { _ =>
         // Clean-up both the source and target databases
         val dropTableQuery = SchemaBuilder.dropTable(keyspace, name).build()
-        targetScylla.execute(dropTableQuery)
-        sourceCassandra.execute(dropTableQuery)
+        targetScylla().execute(dropTableQuery)
+        sourceCassandra().execute(dropTableQuery)
         ()
       }
     )
 
-  override def beforeAll(): Unit = {
-    val keyspaceStatement =
-      SchemaBuilder
-        .createKeyspace(keyspace)
-        .ifNotExists()
-        .withReplicationOptions(Map[String, AnyRef](
-          "class"              -> "SimpleStrategy",
-          "replication_factor" -> new Integer(1)).asJava)
-        .build()
-    sourceCassandra.execute(keyspaceStatement)
-    targetScylla.execute(keyspaceStatement)
-  }
-
-  override def afterAll(): Unit = {
-    sourceCassandra.close()
-    targetScylla.close()
-  }
+  override def munitFixtures: Seq[Fixture[_]] = Seq(sourceCassandra, targetScylla)
 
 }

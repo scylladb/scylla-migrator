@@ -23,7 +23,7 @@ class ValidatorTest extends MigratorSuite(sourcePort = 9043) {
             "foo" -> literal("bar")
           ).asJava)
         .build()
-    sourceCassandra.execute(insertStatement)
+    sourceCassandra().execute(insertStatement)
 
     // Perform the migration
     successfullyPerformMigration(configFile)
@@ -40,7 +40,7 @@ class ValidatorTest extends MigratorSuite(sourcePort = 9043) {
         .setColumn("foo", literal("baz"))
         .whereColumn("id").isEqualTo(literal("12345"))
         .build()
-    targetScylla.execute(updateStatement)
+    targetScylla().execute(updateStatement)
 
     // Check that the validation failed because of the introduced change
     submitSparkJob(configFile, "com.scylladb.migrator.Validator").exitValue().tap { statusCode =>

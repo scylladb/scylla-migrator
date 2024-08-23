@@ -1,6 +1,6 @@
 package com.scylladb.migrator
 
-import scala.sys.process.Process
+import scala.sys.process.{ Process, ProcessBuilder }
 
 object SparkUtils {
 
@@ -21,12 +21,15 @@ object SparkUtils {
     ()
   }
 
-  /**
-    * @param migratorConfigFile Configuration file to use
-    * @param entryPoint         Java entry point of the job
-    * @return The running process
-    */
   def submitSparkJob(migratorConfigFile: String, entryPoint: String): Process =
+    submitSparkJobProcess(migratorConfigFile, entryPoint).run()
+
+  /**
+   * @param migratorConfigFile Configuration file to use
+   * @param entryPoint         Java entry point of the job
+   * @return The running process
+   */
+  def submitSparkJobProcess(migratorConfigFile: String, entryPoint: String): ProcessBuilder =
     Process(
       Seq(
         "docker",
@@ -51,6 +54,6 @@ object SparkUtils {
         // "--conf", "spark.executor.extraJavaOptions=-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=*:5006",
         "/jars/scylla-migrator-assembly.jar"
       )
-    ).run()
+    )
 
 }
