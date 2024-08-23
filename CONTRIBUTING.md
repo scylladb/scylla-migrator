@@ -16,10 +16,10 @@ Tests are implemented in the `tests` sbt submodule. They simulate the submission
    docker compose -f docker-compose-tests.yml up
    ~~~
 
-3. Run the tests
+3. Run the tests locally
 
    ~~~ sh
-   sbt test
+   sbt "testOnly -- --exclude-categories=com.scylladb.migrator.AWS"
    ~~~
 
    Or, to run a single test:
@@ -27,6 +27,15 @@ Tests are implemented in the `tests` sbt submodule. They simulate the submission
    ~~~ sh
    sbt testOnly com.scylladb.migrator.BasicMigrationTest
    ~~~
+
+  Or, to run the tests that access AWS:
+
+  ~~~ sh
+  AWS_ACCESS_KEY=... \
+  AWS_SECRET_KEY=... \
+  AWS_ROLE_NAME=... \
+  sbt "testOnly -- --include-categories=com.scylladb.migrator.AWS"
+  ~~~
 
 4. Ultimately, stop the Docker containers
 

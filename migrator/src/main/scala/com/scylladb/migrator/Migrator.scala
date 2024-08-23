@@ -10,11 +10,12 @@ object Migrator {
   val log = LogManager.getLogger("com.scylladb.migrator")
 
   def main(args: Array[String]): Unit = {
-    implicit val spark = SparkSession
+    implicit val spark: SparkSession = SparkSession
       .builder()
       .appName("scylla-migrator")
       .config("spark.task.maxFailures", "1024")
       .config("spark.stage.maxConsecutiveAttempts", "60")
+      .config("spark.streaming.stopGracefullyOnShutdown", "true")
       .getOrCreate()
 
     Logger.getRootLogger.setLevel(Level.WARN)

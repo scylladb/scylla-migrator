@@ -5,18 +5,22 @@ import software.amazon.awssdk.services.dynamodb.model.{AttributeValue, PutItemRe
 
 import scala.jdk.CollectionConverters._
 
-class BasicMigrationTest extends MigratorSuiteWithDynamoDBLocal {
+/** Basic migration that uses the real AWS DynamoDB as a source and AssumeRole for authentication */
+class AssumeRoleTest extends MigratorSuiteWithAWS {
 
-  withTable("BasicTest").test("Read from source and write to target") { tableName =>
+  withTable("AssumeRoleTest").test("Read from source and write to target") { tableName =>
+    val configFileName = "dynamodb-to-alternator-assume-role.yaml"
+
+    setupConfigurationFile(configFileName)
+
+    // Insert some items
     val keys = Map("id"   -> AttributeValue.fromS("12345"))
     val attrs = Map("foo" -> AttributeValue.fromS("bar"))
     val itemData = keys ++ attrs
-
-    // Insert some items
     sourceDDb().putItem(PutItemRequest.builder().tableName(tableName).item(itemData.asJava).build())
 
     // Perform the migration
-    successfullyPerformMigration("dynamodb-to-alternator-basic.yaml")
+    successfullyPerformMigration(configFileName)
 
     checkSchemaWasMigrated(tableName)
 

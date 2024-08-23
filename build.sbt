@@ -86,7 +86,7 @@ lazy val tests = project.in(file("tests")).settings(
     "org.apache.cassandra"     % "java-driver-query-builder" % "4.18.0",
     "com.github.mjakubowski84" %% "parquet4s-core"           % "1.9.4",
     "org.apache.hadoop"        % "hadoop-client"             % hadoopVersion,
-    "org.scalameta"            %% "munit"                    % "0.7.29"
+    "org.scalameta"            %% "munit"                    % "1.0.1"
   ),
   Test / parallelExecution := false,
   // Needed to build a Spark session on Java 17+, see https://stackoverflow.com/questions/73465937/apache-spark-3-3-0-breaks-on-java-17-with-cannot-access-class-sun-nio-ch-direct

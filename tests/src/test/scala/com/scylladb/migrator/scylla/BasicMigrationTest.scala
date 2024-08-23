@@ -22,7 +22,7 @@ class BasicMigrationTest extends MigratorSuite(sourcePort = 9043) {
         .build()
 
     // Insert some items
-    sourceCassandra.execute(insertStatement)
+    sourceCassandra().execute(insertStatement)
 
     // Perform the migration
     successfullyPerformMigration("cassandra-to-scylla-basic.yaml")
@@ -32,7 +32,7 @@ class BasicMigrationTest extends MigratorSuite(sourcePort = 9043) {
       .selectFrom(keyspace, tableName)
       .all()
       .build()
-    targetScylla.execute(selectAllStatement).tap { resultSet =>
+    targetScylla().execute(selectAllStatement).tap { resultSet =>
       val rows = resultSet.all().asScala
       assertEquals(rows.size, 1)
       val row = rows.head

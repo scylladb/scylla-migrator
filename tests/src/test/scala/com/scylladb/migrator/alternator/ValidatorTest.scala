@@ -6,7 +6,7 @@ import software.amazon.awssdk.services.dynamodb.model.{AttributeAction, Attribut
 import scala.jdk.CollectionConverters._
 import scala.util.chaining._
 
-class ValidatorTest extends MigratorSuite {
+class ValidatorTest extends MigratorSuiteWithDynamoDBLocal {
 
   withTable("BasicTest").test("Validate migration") { tableName =>
     val configFile = "dynamodb-to-alternator-basic.yaml"
@@ -16,7 +16,7 @@ class ValidatorTest extends MigratorSuite {
     val itemData = keys ++ attrs
 
     // Insert some items
-    sourceDDb.putItem(PutItemRequest.builder().tableName(tableName).item(itemData.asJava).build())
+    sourceDDb().putItem(PutItemRequest.builder().tableName(tableName).item(itemData.asJava).build())
 
     // Perform the migration
     successfullyPerformMigration(configFile)
@@ -27,7 +27,7 @@ class ValidatorTest extends MigratorSuite {
     }
 
     // Change the value of an item
-    targetAlternator.updateItem(
+    targetAlternator().updateItem(
       UpdateItemRequest
         .builder()
         .tableName(tableName)

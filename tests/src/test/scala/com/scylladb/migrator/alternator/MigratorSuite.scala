@@ -1,11 +1,16 @@
 package com.scylladb.migrator.alternator
 
-import software.amazon.awssdk.auth.credentials.{AwsBasicCredentials, StaticCredentialsProvider}
+import com.scylladb.migrator.AWS
+import org.junit.experimental.categories.Category
+import software.amazon.awssdk.auth.credentials.{AwsBasicCredentials, AwsSessionCredentials, StaticCredentialsProvider}
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
-import software.amazon.awssdk.services.dynamodb.model.{AttributeDefinition, AttributeValue, CreateTableRequest, DeleteTableRequest, DescribeTableRequest, GetItemRequest, GlobalSecondaryIndexDescription, KeySchemaElement, KeyType, LocalSecondaryIndex, LocalSecondaryIndexDescription, ProvisionedThroughput, ResourceNotFoundException, ScalarAttributeType}
+import software.amazon.awssdk.services.dynamodb.model.{AttributeDefinition, AttributeValue, CreateTableRequest, DeleteTableRequest, DescribeTableRequest, GetItemRequest, GlobalSecondaryIndexDescription, KeySchemaElement, KeyType, LocalSecondaryIndexDescription, ProvisionedThroughput, ResourceNotFoundException, ScalarAttributeType}
+import software.amazon.awssdk.services.sts.StsClient
+import software.amazon.awssdk.services.sts.model.AssumeRoleRequest
 
 import java.net.URI
+import java.nio.file.{Files, Paths}
 import scala.util.chaining._
 import scala.jdk.CollectionConverters._
 
@@ -14,24 +19,28 @@ import scala.jdk.CollectionConverters._
   *
   * It expects external services (DynamoDB, Scylla, Spark, etc.) to be running.
   * See the files `CONTRIBUTING.md` and `docker-compose-tests.yml` for more information.
+  *
   */
 trait MigratorSuite extends munit.FunSuite {
 
   /** Client of a source DynamoDB instance */
-  val sourceDDb: DynamoDbClient = DynamoDbClient
-    .builder()
-    .region(Region.of("dummy"))
-    .endpointOverride(new URI("http://localhost:8001"))
-    .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("dummy", "dummy")))
-    .build()
+  def sourceDDb: Fixture[DynamoDbClient]
 
   /** Client of a target Alternator instance */
-  val targetAlternator: DynamoDbClient = DynamoDbClient
-    .builder()
-    .region(Region.of("dummy"))
-    .endpointOverride(new URI("http://localhost:8000"))
-    .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("dummy", "dummy")))
-    .build()
+  val targetAlternator: Fixture[DynamoDbClient] = new Fixture[DynamoDbClient]("targetAlternator") {
+    private var client: DynamoDbClient = null
+    def apply(): DynamoDbClient = client
+    override def beforeAll(): Unit = {
+      client =
+        DynamoDbClient
+          .builder()
+          .region(Region.of("dummy"))
+          .endpointOverride(new URI("http://localhost:8000"))
+          .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("dummy", "dummy")))
+          .build()
+    }
+    override def afterAll(): Unit = client.close()
+  }
 
   /**
     * Fixture automating the house-keeping work when migrating a table.
@@ -47,8 +56,8 @@ trait MigratorSuite extends munit.FunSuite {
   def withTable(name: String): FunFixture[String] = FunFixture(
     setup = { _ =>
       // Make sure the target database does not contain the table already
-      deleteTableIfExists(sourceDDb, name)
-      deleteTableIfExists(targetAlternator, name)
+      deleteTableIfExists(sourceDDb(), name)
+      deleteTableIfExists(targetAlternator(), name)
       try {
         // Create the table in the source database
         val createTableRequest =
@@ -59,23 +68,23 @@ trait MigratorSuite extends munit.FunSuite {
             .attributeDefinitions(AttributeDefinition.builder().attributeName("id").attributeType(ScalarAttributeType.S).build())
             .provisionedThroughput(ProvisionedThroughput.builder().readCapacityUnits(25L).writeCapacityUnits(25L).build())
             .build()
-        sourceDDb.createTable(createTableRequest)
+        sourceDDb().createTable(createTableRequest)
         val waiterResponse =
-          sourceDDb
+          sourceDDb()
             .waiter()
             .waitUntilTableExists(describeTableRequest(name))
         assert(waiterResponse.matched().response().isPresent, s"Failed to create table ${name}: ${waiterResponse.matched().exception().get()}")
       } catch {
         case any: Throwable =>
-          fail(s"Failed to create table ${name} in database ${sourceDDb}", any)
+          fail(s"Failed to create table ${name} in database ${sourceDDb()}", any)
       }
       name
     },
     teardown = { _ =>
       // Clean-up both the source and target databases because we assume the test did replicate the table
       // to the target database
-      targetAlternator.deleteTable(DeleteTableRequest.builder().tableName(name).build())
-      sourceDDb.deleteTable(DeleteTableRequest.builder().tableName(name).build())
+      targetAlternator().deleteTable(DeleteTableRequest.builder().tableName(name).build())
+      sourceDDb().deleteTable(DeleteTableRequest.builder().tableName(name).build())
       ()
     }
   )
@@ -108,7 +117,7 @@ trait MigratorSuite extends munit.FunSuite {
 
   /** Check that the table schema in the target database is the same as in the source database */
   def checkSchemaWasMigrated(tableName: String): Unit = {
-    val sourceTableDesc = sourceDDb.describeTable(describeTableRequest(tableName)).table
+    val sourceTableDesc = sourceDDb().describeTable(describeTableRequest(tableName)).table
     checkSchemaWasMigrated(
       tableName,
       sourceTableDesc.keySchema,
@@ -125,7 +134,7 @@ trait MigratorSuite extends munit.FunSuite {
                               attributeDefinitions: java.util.List[AttributeDefinition],
                               localSecondaryIndexes: java.util.List[LocalSecondaryIndexDescription],
                               globalSecondaryIndexes: java.util.List[GlobalSecondaryIndexDescription]): Unit = {
-    targetAlternator
+    targetAlternator()
       .describeTable(describeTableRequest(tableName))
       .table
       .tap { targetTableDesc =>
@@ -155,11 +164,86 @@ trait MigratorSuite extends munit.FunSuite {
 
   /** Check that the target database contains the provided item description */
   def checkItemWasMigrated(tableName: String, itemKey: Map[String, AttributeValue], itemData: Map[String, AttributeValue]): Unit = {
-    targetAlternator
+    targetAlternator()
       .getItem(GetItemRequest.builder.tableName(tableName).key(itemKey.asJava).build())
       .tap { itemResult =>
         assertEquals(itemResult.item.asScala.toMap, itemData)
       }
+  }
+
+  override def munitFixtures: Seq[Fixture[_]] = Seq(sourceDDb, targetAlternator)
+}
+
+trait MigratorSuiteWithDynamoDBLocal extends MigratorSuite {
+
+  lazy val sourceDDb: Fixture[DynamoDbClient] = new Fixture[DynamoDbClient]("sourceDDb") {
+    private var client: DynamoDbClient = null
+    def apply(): DynamoDbClient = client
+    override def beforeAll(): Unit = {
+      client =
+        DynamoDbClient
+          .builder()
+          .region(Region.of("dummy"))
+          .endpointOverride(new URI("http://localhost:8001"))
+          .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("dummy", "dummy")))
+          .build()
+    }
+    override def afterAll(): Unit = client.close()
+  }
+
+}
+
+@Category(Array(classOf[AWS]))
+abstract class MigratorSuiteWithAWS extends MigratorSuite {
+
+  lazy val sourceDDb: Fixture[DynamoDbClient] = new Fixture[DynamoDbClient]("sourceDDb") {
+    private var client: DynamoDbClient = null
+    def apply(): DynamoDbClient = client
+    override def beforeAll(): Unit = {
+      val region = Region.US_WEST_1 // FIXME
+      val accessKey = sys.env("AWS_ACCESS_KEY")
+      val secretKey = sys.env("AWS_SECRET_KEY")
+      val roleArn = sys.env("AWS_ROLE_ARN")
+      val stsClient =
+        StsClient
+          .builder()
+          .credentialsProvider(
+            StaticCredentialsProvider.create(AwsBasicCredentials.create(accessKey, secretKey))
+          )
+          .build()
+      val credentials =
+        stsClient
+          .assumeRole(
+            AssumeRoleRequest
+              .builder()
+              .roleArn(roleArn)
+              .roleSessionName("MigratorTest")
+              .build()
+          )
+          .credentials()
+      client =
+        DynamoDbClient
+          .builder()
+          .region(region)
+          .credentialsProvider(
+            StaticCredentialsProvider.create(
+              AwsSessionCredentials.create(credentials.accessKeyId, credentials.secretAccessKey, credentials.sessionToken)
+            )
+          )
+          .build()
+    }
+    override def afterAll(): Unit = client.close()
+  }
+
+  def setupConfigurationFile(configFileName: String): Unit = {
+    val configFilePath = Paths.get("src", "test", "configurations", configFileName)
+    val configFileContent = new String(Files.readAllBytes(configFilePath))
+    val updatedConfigFileContent =
+      configFileContent
+        .replace("{AWS_ACCESS_KEY}", sys.env("AWS_ACCESS_KEY"))
+        .replace("{AWS_SECRET_KEY}", sys.env("AWS_SECRET_KEY"))
+        .replace("{AWS_ROLE_ARN}", sys.env("AWS_ROLE_ARN"))
+    Files.write(configFilePath, updatedConfigFileContent.getBytes)
   }
 
 }
