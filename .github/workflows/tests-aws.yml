@@ -1,4 +1,4 @@
-name: Tests
+name: Tests with AWS
 on:
   push:
     branches:
@@ -6,22 +6,19 @@ on:
     paths:
       - '**.scala'
       - '**.sbt'
-  pull_request:
-    paths:
-      - '**.scala'
-      - '**.sbt'
+  workflow_dispatch:
 
 jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Cache Docker images
         uses: ScribeMD/docker-cache@0.5.0
         with:
           key: docker-${{ runner.os }}-${{ hashFiles('docker-compose-tests.yml') }}
-      - uses: actions/setup-java@v3
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 8
@@ -30,16 +27,16 @@ jobs:
         run: ./build.sh
       - name: Set up services
         run: |
-          docker compose -f docker-compose-tests.yml up -d
+          docker compose -f docker-compose-tests.yml up -d scylla spark-master spark-worker
           .github/wait-for-port.sh 8000 # ScyllaDB Alternator
-          .github/wait-for-port.sh 8001 # DynamoDB
-          .github/wait-for-port.sh 4566 # S3
           .github/wait-for-cql.sh scylla
-          .github/wait-for-cql.sh cassandra
-          .github/wait-for-cql.sh scylla-source
           .github/wait-for-port.sh 8080 # Spark master
           .github/wait-for-port.sh 8081 # Spark worker
-      - name: Run tests locally
-        run: sbt "testOnly -- --exclude-categories=com.scylladb.migrator.AWS"
+      - name: Run tests accessing AWS
+        run: sbt "testOnly -- --include-categories=com.scylladb.migrator.AWS"
+        env:
+          AWS_ACCESS_KEY: ${{ secrets.AWS_ACCESS_KEY }}
+          AWS_SECRET_KEY: ${{ secrets.AWS_SECRET_KEY }}
+          AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       - name: Stop services
         run: docker compose -f docker-compose-tests.yml down

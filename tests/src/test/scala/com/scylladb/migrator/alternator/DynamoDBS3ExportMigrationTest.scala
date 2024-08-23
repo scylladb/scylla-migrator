@@ -13,7 +13,7 @@ import java.nio.file.{Files, Path, Paths}
 import java.util.function.Consumer
 import scala.jdk.CollectionConverters._
 
-class DynamoDBS3ExportMigrationTest extends MigratorSuite {
+class DynamoDBS3ExportMigrationTest extends MigratorSuiteWithDynamoDBLocal {
 
   val s3Client: S3Client =
     S3Client
@@ -90,13 +90,13 @@ class DynamoDBS3ExportMigrationTest extends MigratorSuite {
   // Make sure to properly set up and clean up the target database and the S3 instance
   def withResources(bucketName: String, tableName: String): FunFixture[(String, String)] = FunFixture(
     setup = _ => {
-      deleteTableIfExists(targetAlternator, tableName)
+      deleteTableIfExists(targetAlternator(), tableName)
       deleteBucket(bucketName)
       s3Client.createBucket(CreateBucketRequest.builder().bucket(bucketName).build())
       (bucketName, tableName)
     },
     teardown = _ => {
-      targetAlternator.deleteTable(DeleteTableRequest.builder().tableName(tableName).build())
+      targetAlternator().deleteTable(DeleteTableRequest.builder().tableName(tableName).build())
       deleteBucket(bucketName)
     }
   )

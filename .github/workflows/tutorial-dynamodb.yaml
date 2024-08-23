@@ -3,7 +3,13 @@ on:
   push:
     branches:
       - master
+    paths:
+      - '**.scala'
+      - '**.sbt'
   pull_request:
+    paths:
+      - '**.scala'
+      - '**.sbt'
 
 env:
   TUTORIAL_DIR: docs/source/tutorials/dynamodb-to-scylladb-alternator
@@ -17,7 +23,7 @@ jobs:
       - name: Cache Docker images
         uses: ScribeMD/docker-cache@0.5.0
         with:
-          key: docker-${{ runner.os }}-${{ hashFiles('docker-compose-tests.yml') }}
+          key: docker-${{ runner.os }}-${{ hashFiles('docs/source/tutorials/dynamodb-to-scylladb-alternator/docker-compose.yaml') }}
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

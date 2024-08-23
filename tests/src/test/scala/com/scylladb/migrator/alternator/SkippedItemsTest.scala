@@ -6,7 +6,7 @@ import software.amazon.awssdk.services.dynamodb.model.{AttributeValue, GetItemRe
 import scala.jdk.CollectionConverters._
 import scala.util.chaining._
 
-class SkippedItemsTest extends MigratorSuite {
+class SkippedItemsTest extends MigratorSuiteWithDynamoDBLocal {
 
   withTable("TtlTable").test("Expired items should be filtered out from the source table") { tableName =>
     // Insert two items, one of them is expired
@@ -15,18 +15,18 @@ class SkippedItemsTest extends MigratorSuite {
     val keys1 = Map("id" -> AttributeValue.fromS("12345"))
     val attrs1 = Map("foo" -> AttributeValue.fromN((now + oneDay).toString))
     val item1Data = keys1 ++ attrs1
-    sourceDDb.putItem(
+    sourceDDb().putItem(
       PutItemRequest.builder().tableName(tableName).item(item1Data.asJava).build()
     )
     val keys2 = Map("id" -> AttributeValue.fromS("67890"))
     val attrs2 = Map("foo" -> AttributeValue.fromN((now - oneDay).toString))
     val item2Data = keys2 ++ attrs2
-    sourceDDb.putItem(
+    sourceDDb().putItem(
       PutItemRequest.builder().tableName(tableName).item(item2Data.asJava).build()
     )
 
     // Enable TTL
-    sourceDDb.updateTimeToLive(
+    sourceDDb().updateTimeToLive(
         UpdateTimeToLiveRequest
           .builder()
           .tableName(tableName)
@@ -48,7 +48,7 @@ class SkippedItemsTest extends MigratorSuite {
     // Check that expired item is still present in the source before the migration
     val getItem2Request =
       GetItemRequest.builder().tableName(tableName).key(keys2.asJava).build()
-    sourceDDb
+    sourceDDb()
       .getItem(getItem2Request)
       .tap { itemResult =>
         assert(itemResult.hasItem)
@@ -60,7 +60,7 @@ class SkippedItemsTest extends MigratorSuite {
     checkItemWasMigrated(tableName, keys1, item1Data)
 
     // Expired item has been skipped
-    targetAlternator
+    targetAlternator()
       .getItem(getItem2Request)
       .tap { itemResult =>
         assert(!itemResult.hasItem)
