@@ -82,10 +82,10 @@ Follow the procedure documented [here](https://stackoverflow.com/a/15505308/5617
 Create a new [GitHub release](https://github.com/scylladb/scylla-migrator/releases), give it a tag name (please see below), a title, and a description, and then click Publish. A workflow will be automatically triggered and will build the application fat-jar and upload it as a release asset. Last, _fast-forward-merge_ the branch `master` into the current stable feature-branch:
 
 ~~~ sh
-git checkout 1.0.x
-git pull origin 1.0.x
+git checkout branch-1.0.x
+git pull origin branch-1.0.x
 git merge --ff-only master
-git push origin 1.0.x
+git push origin branch-1.0.x
 ~~~
 
 Rules for the release tag name:
