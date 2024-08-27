@@ -14,12 +14,13 @@ sys.path.insert(0, os.path.abspath(".."))
 TAGS = []
 BRANCHES = [
     "master",
+    "branch-1.0.x"
 ]
 # Sets the latest version.
-LATEST_VERSION = "master"
+LATEST_VERSION = "branch-1.0.x"
 # Set which versions are not released yet.
 # Todo: List master when there is more than one version.
-UNSTABLE_VERSIONS = []
+UNSTABLE_VERSIONS = ["master"]
 # Set which versions are deprecated
 DEPRECATED_VERSIONS = [""]
 # Sets custom build.

@@ -21,6 +21,7 @@ The following table summarizes the required version of Spark and Scala for each 
 Migrator  Spark  Scala
 ========  =====  ======
 0.9.x     3.5.x  2.13.x
+1.x       3.5.x  2.13.x
 ========  =====  ======
 
 .. toctree::
@@ -29,6 +30,7 @@ Migrator  Spark  Scala
   getting-started/index
   migrate-from-cassandra-or-parquet
   migrate-from-dynamodb
+  run-the-migration
   stream-changes
   rename-columns
   validate

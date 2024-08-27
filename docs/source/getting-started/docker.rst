@@ -43,11 +43,12 @@ This page describes how to set up a Spark cluster locally on your machine by usi
        --master spark://spark-master:7077 \
        --conf spark.driver.host=spark-master \
        --conf spark.scylla.config=/app/config.yaml \
+       <... other arguments> \
        /jars/scylla-migrator-assembly.jar
 
    The ``spark-master`` container mounts the ``./migrator/target/scala-2.13`` dir on ``/jars`` and the repository root on ``/app``.
 
-   See also our `general recommendations to tune the Spark job <./#run-the-migration>`_.
+   See a complete description of the expected arguments to ``spark-submit`` in page :doc:`Run the Migration </run-the-migration>`, and replace “<... other arguments>” above with the appropriate arguments.
 
 7. You can monitor progress by observing the Spark web console you opened in step 4. Additionally, after the job has started, you can track progress via ``http://localhost:4040``.
 

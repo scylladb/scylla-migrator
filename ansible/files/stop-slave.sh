@@ -1,2 +1,2 @@
 source spark-env
-$SPARK_HOME/sbin/stop-slave.sh
+$SPARK_HOME/sbin/stop-worker.sh

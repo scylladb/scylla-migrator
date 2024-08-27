@@ -288,10 +288,14 @@ object DynamoUtils {
   class AlternatorLoadBalancingEnabler extends DynamoDbClientBuilderTransformer with Configurable {
     private var conf: Configuration = null
 
-    override def apply(builder: DynamoDbClientBuilder): DynamoDbClientBuilder =
-      builder.endpointProvider(
-        new AlternatorEndpointProvider(URI.create(conf.get(DynamoDBConstants.ENDPOINT)))
-      )
+    override def apply(builder: DynamoDbClientBuilder): DynamoDbClientBuilder = {
+      for (customEndpoint <- Option(conf.get(DynamoDBConstants.ENDPOINT))) {
+        builder.endpointProvider(
+          new AlternatorEndpointProvider(URI.create(customEndpoint))
+        )
+      }
+      builder
+    }
 
     override def setConf(configuration: Configuration): Unit =
       conf = configuration

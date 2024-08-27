@@ -8,9 +8,9 @@ Since the Migrator is packaged as a Spark application, you first have to set up 
 Set Up a Spark Cluster
 ----------------------
 
-A Spark cluster is made of several *nodes*, which can contain several *workers* (although there is usually just one worker per node). When you start the Migrator, the Spark *driver* looks at the job content and splits it into tasks. It then spawns *executors* on the cluster workers and feed them with the tasks to compute.
+A Spark cluster is made of several *nodes*, which can contain several *workers* (although there is usually just one worker per node). When you start the Migrator, the Spark *driver* looks at the job content and splits it into tasks. It then spawns *executors* on the cluster workers and feeds them with the tasks to compute. Since the tasks are processed in parallel, you can increase the possible throughput of the migration by increasing the number of worker nodes. Note that the migration throughput is also limited by the read throughput of the source database and the write throughput of the target database.
 
-We recommend provisioning at least 2 GB of memory per CPU on each node. For instance, a cluster node with 4 CPUs should have at least 8 GB of memory.
+We suggest starting with a small cluster containing a single worker node with 5 to 10 CPUs, and increasing the number of worker nodes (or the number of CPUs per node) if necessary, as long as the source and target database are not saturated. We recommend provisioning at least 2 GB of memory per CPU on each node. For instance, a cluster node with 8 CPUs should have at least 16 GB of memory.
 
 .. caution::
 
@@ -36,21 +36,7 @@ Once you have a Spark cluster ready to run the ``scylla-migrator-assembly.jar``,
 Run the Migration
 -----------------
 
-The way to start the Migrator depends on how the Spark cluster was installed. Please refer to the page that describes your Spark cluster setup to see how to invoke the ``spark-submit`` command. The remainder of this section describes general options you can use to fine-tune the Migration job.
-
-We recommend using between 5 to 10 CPUs per Spark executor. For instance, if your Spark worker node has 16 CPUs, you could use 8 CPUs per executor (the Spark driver would then allocate two executors on the worker to fully utilize its resources). You can control the number of CPUs per executors with the argument ``--executor-cores`` passed to the ``spark-submit`` command:
-
-.. code-block:: bash
-
-  --executor-cores 8
-
-We also recommend using 2 GB of memory per CPU. So, if you provide 8 CPU per executor, you should require 16 GB of memory on the executor. You can control the amount of memory per executor with the argument ``--executor-memory`` passed to the ``spark-submit`` command:
-
-.. code-block:: bash
-
-  --executor-memory 16G
-
-As long as your source and target databases are not saturated during the migration, you can increase the migration throughput by adding more worker nodes to your Spark cluster.
+Start the migration by invoking the ``spark-submit`` command with the appropriate arguments, as explained in the page :doc:`/run-the-migration`.
 
 --------------
 Extra Features

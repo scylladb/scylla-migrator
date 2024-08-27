@@ -4,7 +4,7 @@ Set Up a Spark Cluster with Ansible
 
 An `Ansible <https://www.ansible.com/>`_ playbook is provided in the `ansible folder <https://github.com/scylladb/scylla-migrator/tree/master/ansible>`_ of our Git repository. The Ansible playbook will install the pre-requisites, Spark, on the master and workers added to the ``ansible/inventory/hosts`` file.  Scylla-migrator will be installed on the spark master node.
 
-The Ansible playbook expects to be run in an Ubuntu environment where the directory ``/home/ubuntu`` already exists.
+The Ansible playbook expects to be run in an Ubuntu environment, by a user named ``ubuntu`` (like you get in AWS EC2 Ubuntu-based images).
 
 1. Clone the Migrator Git repository:
 

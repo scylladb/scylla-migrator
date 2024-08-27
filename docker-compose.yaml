@@ -17,8 +17,8 @@ services:
     build: dockerfiles/spark
     command: worker
     environment:
-      SPARK_WORKER_CORES: 3
-      SPARK_WORKER_MEMORY: 1024m
+      SPARK_WORKER_CORES: 2
+      SPARK_WORKER_MEMORY: 4G
       SPARK_WORKER_WEBUI_PORT: 8081
       SPARK_PUBLIC_DNS: localhost
     ports:
