@@ -75,6 +75,7 @@ class DynamoDBInputFormatTest extends munit.FunSuite {
       readThroughput = configuredReadThroughput,
       throughputReadPercent = configuredThroughputReadPercent,
       description = tableDescriptionBuilder.build(),
+      maybeTtlDescription = None,
       skipSegments = None
     )
     val splits = new DynamoDBInputFormat().getSplits(jobConf, 1)
