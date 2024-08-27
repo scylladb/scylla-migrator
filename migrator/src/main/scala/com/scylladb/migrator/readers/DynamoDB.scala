@@ -7,11 +7,14 @@ import org.apache.hadoop.dynamodb.read.DynamoDBInputFormat
 import org.apache.hadoop.dynamodb.{ DynamoDBConstants, DynamoDBItemWritable }
 import org.apache.hadoop.io.Text
 import org.apache.hadoop.mapred.JobConf
+import org.apache.log4j.LogManager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import software.amazon.awssdk.services.dynamodb.model.{ DescribeTableRequest, TableDescription }
 
 object DynamoDB {
+
+  val log = LogManager.getLogger("com.scylladb.migrator.readers.DynamoDB")
 
   def readRDD(
     spark: SparkSession,
@@ -106,11 +109,18 @@ object DynamoDB {
       jobConf,
       DynamoDBConstants.TABLE_SIZE_BYTES,
       Option(description.tableSizeBytes).map(_.toString))
-    jobConf.set(
-      DynamoDBConstants.READ_THROUGHPUT,
-      readThroughput
-        .getOrElse(DynamoUtils.tableReadThroughput(description))
-        .toString)
+    val throughput = readThroughput match {
+      case Some(value) =>
+        log.info(
+          s"Setting up Hadoop job to read the table using a configured throughput of ${value} RCU(s)")
+        value
+      case None =>
+        val value = DynamoUtils.tableReadThroughput(description)
+        log.info(
+          s"Setting up Hadoop job to read the table using a computed throughput of ${value} RCU(s)")
+        value
+    }
+    jobConf.set(DynamoDBConstants.READ_THROUGHPUT, throughput.toString)
     setOptionalConf(
       jobConf,
       DynamoDBConstants.THROUGHPUT_READ_PERCENT,

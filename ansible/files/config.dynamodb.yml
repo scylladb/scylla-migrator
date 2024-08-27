@@ -1,4 +1,3 @@
----
 source:
   type: dynamodb
   table: "YOUR_TABLE_NAME"
@@ -25,8 +24,7 @@ source:
   # Can set it equal to scanSegments.  Or to allow multiple concurrent scans by
   # a single task, set scanSegments to some multiple of maxMapTasks.
   maxMapTasks: 700
-  streamChanges: false
-  # For scyllaDB - Alternator target, you need to specify endpoint URL.
+
 target:
   type: dynamodb
   table: "YOUR_TABLE_NAME"
@@ -43,16 +41,17 @@ target:
   credentials:
     accessKey: empty
     secretKey: empty
-    #scanSegments: 10000
-  maxMapTasks: 1
   streamChanges: false
+
 savepoints:
   # Where should savepoint configurations be stored? This is a path on the host running
   # the Spark driver - usually the Spark master.
   path: /app/savepoints
   # Interval in which savepoints will be created
   intervalSeconds: 300
+
 renames: []
+
 validation:
   # Should WRITETIMEs and TTLs be compared?
   compareTimestamps: false
