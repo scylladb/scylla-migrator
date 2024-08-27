@@ -10,7 +10,13 @@ import org.apache.hadoop.mapred.JobConf
 import org.apache.log4j.LogManager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
-import software.amazon.awssdk.services.dynamodb.model.{ DescribeTableRequest, TableDescription }
+import software.amazon.awssdk.services.dynamodb.model.{
+  DescribeTableRequest,
+  DescribeTimeToLiveRequest,
+  TableDescription,
+  TimeToLiveDescription,
+  TimeToLiveStatus
+}
 
 object DynamoDB {
 
@@ -48,10 +54,20 @@ object DynamoDB {
     throughputReadPercent: Option[Float],
     skipSegments: Option[Set[Int]]): (RDD[(Text, DynamoDBItemWritable)], TableDescription) = {
 
-    val tableDescription = DynamoUtils
-      .buildDynamoClient(endpoint, credentials.map(_.toProvider), region)
-      .describeTable(DescribeTableRequest.builder().tableName(table).build())
-      .table
+    val dynamoDbClient =
+      DynamoUtils.buildDynamoClient(endpoint, credentials.map(_.toProvider), region)
+
+    val tableDescription =
+      dynamoDbClient
+        .describeTable(DescribeTableRequest.builder().tableName(table).build())
+        .table
+
+    val maybeTtlDescription =
+      Option(
+        dynamoDbClient
+          .describeTimeToLive(DescribeTimeToLiveRequest.builder().tableName(table).build())
+          .timeToLiveDescription
+      )
 
     val jobConf =
       makeJobConf(
@@ -65,6 +81,7 @@ object DynamoDB {
         readThroughput,
         throughputReadPercent,
         tableDescription,
+        maybeTtlDescription,
         skipSegments)
 
     val rdd =
@@ -87,6 +104,7 @@ object DynamoDB {
     readThroughput: Option[Int],
     throughputReadPercent: Option[Float],
     description: TableDescription,
+    maybeTtlDescription: Option[TimeToLiveDescription],
     skipSegments: Option[Set[Int]]
   ): JobConf = {
     val maybeItemCount = Option(description.itemCount).map(_.toLong)
@@ -135,6 +153,11 @@ object DynamoDB {
       DynamoDBConstants.EXCLUDED_SCAN_SEGMENTS,
       skipSegments.map(_.mkString(","))
     )
+    val maybeTtlAttributeName =
+      maybeTtlDescription
+        .filter(_.timeToLiveStatus == TimeToLiveStatus.ENABLED)
+        .map(_.attributeName())
+    setOptionalConf(jobConf, DynamoDBConstants.TTL_ATTRIBUTE_NAME, maybeTtlAttributeName)
 
     jobConf
   }
