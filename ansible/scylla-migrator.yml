@@ -43,7 +43,7 @@
 
     - name: Unarchive the installer.
       unarchive: 
-        src: awscliv2.zip
+        src: "{{ home_dir }}/awscliv2.zip"
         dest: "{{ home_dir }}"
         remote_src: yes
         
@@ -71,7 +71,7 @@
 
     - name: Extract spark
       ansible.builtin.unarchive:
-        src: "spark-3.5.1-bin-hadoop3-scala2.13.tgz"
+        src: "{{ home_dir }}/spark-3.5.1-bin-hadoop3-scala2.13.tgz"
         dest: "{{ home_dir }}"
         remote_src: yes
 
@@ -83,7 +83,7 @@
 
     - name: Move spark to opt/spark
       become: true
-      command: "sudo mv spark-3.5.1-bin-hadoop3-scala2.13 {{ spark_home }}"
+      command: "sudo mv {{ home_dir }}/spark-3.5.1-bin-hadoop3-scala2.13 {{ spark_home }}"
 
     - name: Set JAVA_HOME
       ansible.builtin.lineinfile:
