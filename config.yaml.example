@@ -263,6 +263,10 @@ savepoints:
 # create a savepoint file with this filled.
 # skipTokenRanges: []
 
+# Optional - Which scan segments to skip. You shouldn’t need to fill this in normally; the migrator will
+# create a savepoint file with this filled.
+# skipSegments: []
+
 # Configuration section for running the validator. The validator is run manually (see documentation).
 # Mandatory if the application is executed in validation mode.
 # validation:

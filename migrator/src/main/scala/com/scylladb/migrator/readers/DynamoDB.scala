@@ -18,7 +18,8 @@ object DynamoDB {
 
   def readRDD(
     spark: SparkSession,
-    source: SourceSettings.DynamoDB): (RDD[(Text, DynamoDBItemWritable)], TableDescription) =
+    source: SourceSettings.DynamoDB,
+    skipSegments: Option[Set[Int]]): (RDD[(Text, DynamoDBItemWritable)], TableDescription) =
     readRDD(
       spark,
       source.endpoint,
@@ -28,7 +29,8 @@ object DynamoDB {
       source.scanSegments,
       source.maxMapTasks,
       source.readThroughput,
-      source.throughputReadPercent
+      source.throughputReadPercent,
+      skipSegments
     )
 
   /**
@@ -43,7 +45,8 @@ object DynamoDB {
     scanSegments: Option[Int],
     maxMapTasks: Option[Int],
     readThroughput: Option[Int],
-    throughputReadPercent: Option[Float]): (RDD[(Text, DynamoDBItemWritable)], TableDescription) = {
+    throughputReadPercent: Option[Float],
+    skipSegments: Option[Set[Int]]): (RDD[(Text, DynamoDBItemWritable)], TableDescription) = {
 
     val tableDescription = DynamoUtils
       .buildDynamoClient(endpoint, credentials.map(_.toProvider), region)
@@ -61,7 +64,8 @@ object DynamoDB {
         maxMapTasks,
         readThroughput,
         throughputReadPercent,
-        tableDescription)
+        tableDescription,
+        skipSegments)
 
     val rdd =
       spark.sparkContext.hadoopRDD(
@@ -82,7 +86,8 @@ object DynamoDB {
     maxMapTasks: Option[Int],
     readThroughput: Option[Int],
     throughputReadPercent: Option[Float],
-    description: TableDescription
+    description: TableDescription,
+    skipSegments: Option[Set[Int]]
   ): JobConf = {
     val maybeItemCount = Option(description.itemCount).map(_.toLong)
     val maybeAvgItemSize =
@@ -125,6 +130,11 @@ object DynamoDB {
       jobConf,
       DynamoDBConstants.THROUGHPUT_READ_PERCENT,
       throughputReadPercent.map(_.toString))
+    setOptionalConf(
+      jobConf,
+      DynamoDBConstants.EXCLUDED_SCAN_SEGMENTS,
+      skipSegments.map(_.mkString(","))
+    )
 
     jobConf
   }

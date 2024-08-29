@@ -42,10 +42,7 @@ object Migrator {
           val sourceDF = readers.Parquet.readDataFrame(spark, parquetSource)
           ScyllaMigrator.migrate(migratorConfig, scyllaTarget, sourceDF)
         case (dynamoSource: SourceSettings.DynamoDB, alternatorTarget: TargetSettings.DynamoDB) =>
-          AlternatorMigrator.migrateFromDynamoDB(
-            dynamoSource,
-            alternatorTarget,
-            migratorConfig.renamesMap)
+          AlternatorMigrator.migrateFromDynamoDB(dynamoSource, alternatorTarget, migratorConfig)
         case (
             s3Source: SourceSettings.DynamoDBS3Export,
             alternatorTarget: TargetSettings.DynamoDB) =>

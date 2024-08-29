@@ -46,6 +46,7 @@ You might also be interested in the following extra features:
 
 * :doc:`rename columns along the migration </rename-columns>`,
 * :doc:`replicate changes applied to the source table after the initial snapshot transfer has completed </stream-changes>`,
+* :doc:`resume an interrupted migration where it left off </resume-interrupted-migration>`,
 * :doc:`validate that the migration was complete and correct </validate>`.
 
 .. toctree::

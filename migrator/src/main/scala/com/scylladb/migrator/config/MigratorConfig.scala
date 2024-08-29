@@ -13,6 +13,7 @@ case class MigratorConfig(source: SourceSettings,
                           renames: Option[List[Rename]],
                           savepoints: Savepoints,
                           skipTokenRanges: Option[Set[(Token[_], Token[_])]],
+                          skipSegments: Option[Set[Int]],
                           validation: Option[Validation]) {
   def render: String = this.asJson.asYaml.spaces2
 
