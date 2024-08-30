@@ -8,11 +8,7 @@ import org.apache.hadoop.dynamodb.write.DynamoDBOutputFormat
 import org.apache.hadoop.dynamodb.{ DynamoDBConstants, DynamoDbClientBuilderTransformer }
 import org.apache.hadoop.mapred.JobConf
 import org.apache.log4j.LogManager
-import software.amazon.awssdk.auth.credentials.{
-  AwsCredentials,
-  AwsCredentialsProvider,
-  ProfileCredentialsProvider
-}
+import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider
 import software.amazon.awssdk.services.dynamodb.{ DynamoDbClient, DynamoDbClientBuilder }
 import software.amazon.awssdk.services.dynamodb.model.{
   BillingMode,
@@ -243,9 +239,6 @@ object DynamoUtils {
       DynamoDBConstants.CUSTOM_CLIENT_BUILDER_TRANSFORMER,
       classOf[AlternatorLoadBalancingEnabler].getName)
 
-    jobConf.set(
-      DynamoDBConstants.CUSTOM_CREDENTIALS_PROVIDER_CONF,
-      classOf[ProfileCredentialsProvider].getName)
     jobConf.set("mapred.output.format.class", classOf[DynamoDBOutputFormat].getName)
     jobConf.set("mapred.input.format.class", classOf[DynamoDBInputFormat].getName)
   }
@@ -277,13 +270,6 @@ object DynamoUtils {
     } else {
       DynamoDBConstants.DEFAULT_CAPACITY_FOR_ON_DEMAND
     }
-
-  /** Reflection-friendly credentials provider used by the EMR DynamoDB connector */
-  class ProfileCredentialsProvider
-      extends software.amazon.awssdk.auth.credentials.AwsCredentialsProvider {
-    private lazy val delegate = ProfileCredentialsProvider.create()
-    def resolveCredentials(): AwsCredentials = delegate.resolveCredentials()
-  }
 
   class AlternatorLoadBalancingEnabler extends DynamoDbClientBuilderTransformer with Configurable {
     private var conf: Configuration = null
