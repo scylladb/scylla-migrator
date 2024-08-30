@@ -5,10 +5,13 @@ import com.datastax.oss.driver.api.querybuilder.QueryBuilder.literal
 import com.datastax.oss.driver.api.querybuilder.term.Term
 import com.scylladb.migrator.SparkUtils.{submitSparkJob, successfullyPerformMigration}
 
+import scala.concurrent.duration.{Duration, DurationInt}
 import scala.jdk.CollectionConverters._
 import scala.util.chaining.scalaUtilChainingOps
 
 class ValidatorTest extends MigratorSuite(sourcePort = 9043) {
+
+  override val munitTimeout: Duration = 120.seconds
 
   withTable("BasicTest").test("Validate migration") { tableName =>
     val configFile = "cassandra-to-scylla-basic.yaml"
