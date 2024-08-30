@@ -23,17 +23,13 @@ object AlternatorMigrator {
                           migratorConfig: MigratorConfig)(implicit spark: SparkSession): Unit = {
     val (sourceRDD, sourceTableDesc) =
       readers.DynamoDB.readRDD(spark, source, migratorConfig.skipSegments)
-    val savepointsManager =
-      DynamoDbSavepointsManager.setup(migratorConfig, sourceRDD, spark.sparkContext)
-    Using.resource(savepointsManager) { _ =>
-      val maybeStreamedSource = if (target.streamChanges) Some(source) else None
-      migrate(sourceRDD, sourceTableDesc, maybeStreamedSource, target, migratorConfig.renamesMap)
-    }
+    val maybeStreamedSource = if (target.streamChanges) Some(source) else None
+    migrate(sourceRDD, sourceTableDesc, maybeStreamedSource, target, migratorConfig)
   }
 
   def migrateFromS3Export(source: SourceSettings.DynamoDBS3Export,
                           target: TargetSettings.DynamoDB,
-                          renamesMap: Map[String, String])(implicit spark: SparkSession): Unit = {
+                          migratorConfig: MigratorConfig)(implicit spark: SparkSession): Unit = {
     val (sourceRDD, sourceTableDesc) = readers.DynamoDBS3Export.readRDD(source)(spark.sparkContext)
     // Adapt the decoded items to the format expected by the EMR Hadoop connector
     val normalizedRDD =
@@ -43,7 +39,7 @@ object AlternatorMigrator {
     if (target.streamChanges) {
       log.warn("'streamChanges: true' is not supported when the source is a DynamoDB S3 export.")
     }
-    migrate(normalizedRDD, sourceTableDesc, None, target, renamesMap)
+    migrate(normalizedRDD, sourceTableDesc, None, target, migratorConfig)
   }
 
   /**
@@ -51,18 +47,16 @@ object AlternatorMigrator {
     * @param sourceTableDesc     Description of the table to replicate on the target database
     * @param maybeStreamedSource Settings of the source table in case `streamChanges` was `true`
     * @param target              Target table settings
-    * @param renamesMap          Renames
+    * @param migratorConfig      The complete original configuration
     * @param spark               Spark session
     */
   def migrate(sourceRDD: RDD[(Text, DynamoDBItemWritable)],
               sourceTableDesc: TableDescription,
               maybeStreamedSource: Option[SourceSettings.DynamoDB],
               target: TargetSettings.DynamoDB,
-              renamesMap: Map[String, String])(implicit spark: SparkSession): Unit = {
+              migratorConfig: MigratorConfig)(implicit spark: SparkSession): Unit = {
 
     log.info("We need to transfer: " + sourceRDD.getNumPartitions + " partitions in total")
-
-    log.info("Starting write...")
 
     try {
       val targetTableDesc = {
@@ -81,7 +75,11 @@ object AlternatorMigrator {
       if (target.streamChanges && target.skipInitialSnapshotTransfer.contains(true)) {
         log.info("Skip transferring table snapshot")
       } else {
-        writers.DynamoDB.writeRDD(target, renamesMap, sourceRDD, targetTableDesc)
+        Using.resource(DynamoDbSavepointsManager(migratorConfig, sourceRDD, spark.sparkContext)) {
+          _ =>
+            log.info("Starting write...")
+            writers.DynamoDB.writeRDD(target, migratorConfig.renamesMap, sourceRDD, targetTableDesc)
+        }
         log.info("Done transferring table snapshot")
       }
 
@@ -95,7 +93,7 @@ object AlternatorMigrator {
           streamedSource,
           target,
           targetTableDesc,
-          renamesMap)
+          migratorConfig.renamesMap)
 
         streamingContext.start()
         streamingContext.awaitTermination()

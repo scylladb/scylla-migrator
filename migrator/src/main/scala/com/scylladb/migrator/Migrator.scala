@@ -47,10 +47,7 @@ object Migrator {
         case (
             s3Source: SourceSettings.DynamoDBS3Export,
             alternatorTarget: TargetSettings.DynamoDB) =>
-          AlternatorMigrator.migrateFromS3Export(
-            s3Source,
-            alternatorTarget,
-            migratorConfig.renamesMap)
+          AlternatorMigrator.migrateFromS3Export(s3Source, alternatorTarget, migratorConfig)
         case _ =>
           sys.error("Unsupported combination of source and target.")
       }

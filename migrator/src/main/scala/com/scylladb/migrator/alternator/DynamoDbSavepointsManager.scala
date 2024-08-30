@@ -17,7 +17,9 @@ import scala.util.{ Failure, Success, Try }
   * Manage DynamoDB-based migrations by tracking the migrated scan segments.
   */
 class DynamoDbSavepointsManager(migratorConfig: MigratorConfig,
-                                segmentsAccumulator: IntSetAccumulator)
+                                segmentsAccumulator: IntSetAccumulator,
+                                sparkTaskEndListener: SparkListener,
+                                spark: SparkContext)
     extends SavepointsManager(migratorConfig) {
 
   def describeMigrationState(): String =
@@ -26,25 +28,26 @@ class DynamoDbSavepointsManager(migratorConfig: MigratorConfig,
   def updateConfigWithMigrationState(): MigratorConfig =
     migratorConfig.copy(skipSegments = Some(segmentsAccumulator.value))
 
+  override def close(): Unit = {
+    spark.removeSparkListener(sparkTaskEndListener)
+    super.close()
+  }
+
 }
 
 object DynamoDbSavepointsManager {
 
   private val log = LogManager.getLogger(classOf[DynamoDbSavepointsManager])
 
-  def apply(migratorConfig: MigratorConfig,
-            segmentsAccumulator: IntSetAccumulator): DynamoDbSavepointsManager =
-    new DynamoDbSavepointsManager(migratorConfig, segmentsAccumulator)
-
   /**
     * Set up a savepoints manager that tracks the scan segments migrated from the source RDD.
     */
-  def setup(migratorConfig: MigratorConfig,
+  def apply(migratorConfig: MigratorConfig,
             sourceRDD: RDD[(Text, DynamoDBItemWritable)],
             spark: SparkContext): DynamoDbSavepointsManager = {
     val segmentsAccumulator =
       IntSetAccumulator(migratorConfig.skipSegments.getOrElse(Set.empty))
-    spark.addSparkListener(new SparkListener {
+    val sparkTaskEndListener = new SparkListener {
       override def onTaskEnd(taskEnd: SparkListenerTaskEnd): Unit = {
         val partitionId = taskEnd.taskInfo.partitionId
         log.debug(s"Migration of partition ${partitionId} ended: ${taskEnd.reason}.")
@@ -60,8 +63,9 @@ object DynamoDbSavepointsManager {
           }
         }
       }
-    })
-    DynamoDbSavepointsManager(migratorConfig, segmentsAccumulator)
+    }
+    spark.addSparkListener(sparkTaskEndListener)
+    new DynamoDbSavepointsManager(migratorConfig, segmentsAccumulator, sparkTaskEndListener, spark)
   }
 
   /**
