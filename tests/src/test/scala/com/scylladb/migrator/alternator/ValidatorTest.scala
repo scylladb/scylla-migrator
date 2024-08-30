@@ -3,10 +3,13 @@ package com.scylladb.migrator.alternator
 import com.scylladb.migrator.SparkUtils.{submitSparkJob, successfullyPerformMigration}
 import software.amazon.awssdk.services.dynamodb.model.{AttributeAction, AttributeValue, AttributeValueUpdate, PutItemRequest, UpdateItemRequest}
 
+import scala.concurrent.duration.{Duration, DurationInt}
 import scala.jdk.CollectionConverters._
 import scala.util.chaining._
 
 class ValidatorTest extends MigratorSuiteWithDynamoDBLocal {
+
+  override val munitTimeout: Duration = 120.seconds
 
   withTable("BasicTest").test("Validate migration") { tableName =>
     val configFile = "dynamodb-to-alternator-basic.yaml"

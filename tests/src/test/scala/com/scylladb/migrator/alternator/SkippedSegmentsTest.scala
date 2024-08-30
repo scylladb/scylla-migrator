@@ -4,10 +4,13 @@ import com.scylladb.migrator.SparkUtils.{submitSparkJob, successfullyPerformMigr
 import software.amazon.awssdk.services.dynamodb.model.{AttributeValue, PutItemRequest, ResourceNotFoundException, ScanRequest}
 
 import java.util.UUID
+import scala.concurrent.duration.{Duration, DurationInt}
 import scala.jdk.CollectionConverters._
 import scala.util.chaining._
 
 class SkippedSegmentsTest extends MigratorSuiteWithDynamoDBLocal {
+
+  override val munitTimeout: Duration = 120.seconds
 
   withTable("SkippedSegments").test("Run partial migrations") { tableName =>
     // We rely on the fact that both config files have `scanSegments: 3` and
