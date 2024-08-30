@@ -14,7 +14,6 @@ class StreamedItemsTest extends MigratorSuiteWithAWS {
 
   withTable("StreamedItemsTest").test("Stream changes") { tableName =>
     val configFileName = "dynamodb-to-alternator-streaming.yaml"
-    setupConfigurationFile(configFileName)
 
     // Populate the source table
     val keys1 = Map("id"   -> AttributeValue.fromS("12345"))
@@ -74,7 +73,6 @@ class StreamedItemsTest extends MigratorSuiteWithAWS {
 
   withTable("StreamedItemsSkipSnapshotTest").test("Stream changes but skip initial snapshot") { tableName =>
     val configFileName = "dynamodb-to-alternator-streaming-skip-snapshot.yaml"
-    setupConfigurationFile(configFileName)
 
     // Populate the source table
     val keys1 = Map("id"   -> AttributeValue.fromS("12345"))

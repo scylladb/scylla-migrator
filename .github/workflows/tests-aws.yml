@@ -8,6 +8,13 @@ on:
       - '**.sbt'
   workflow_dispatch:
 
+env:
+  AWS_REGION: us-east-1
+
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   test:
     name: Test
@@ -23,6 +30,12 @@ jobs:
           distribution: temurin
           java-version: 8
           cache: sbt
+      - name: configure aws credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: GitHub_to_AWS_via_FederatedOIDC
       - name: Build migrator
         run: ./build.sh
       - name: Set up services
@@ -34,9 +47,5 @@ jobs:
           .github/wait-for-port.sh 8081 # Spark worker
       - name: Run tests accessing AWS
         run: sbt "testOnly -- --include-categories=com.scylladb.migrator.AWS"
-        env:
-          AWS_ACCESS_KEY: ${{ secrets.AWS_ACCESS_KEY }}
-          AWS_SECRET_KEY: ${{ secrets.AWS_SECRET_KEY }}
-          AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       - name: Stop services
         run: docker compose -f docker-compose-tests.yml down

@@ -2,17 +2,16 @@ package com.scylladb.migrator.alternator
 
 import com.scylladb.migrator.AWS
 import org.junit.experimental.categories.Category
-import software.amazon.awssdk.auth.credentials.{AwsBasicCredentials, AwsSessionCredentials, StaticCredentialsProvider}
+import software.amazon.awssdk.auth.credentials.{AwsBasicCredentials, StaticCredentialsProvider}
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
 import software.amazon.awssdk.services.dynamodb.model.{AttributeDefinition, AttributeValue, CreateTableRequest, DeleteTableRequest, DescribeTableRequest, GetItemRequest, GlobalSecondaryIndexDescription, KeySchemaElement, KeyType, LocalSecondaryIndexDescription, ProvisionedThroughput, ResourceNotFoundException, ScalarAttributeType}
-import software.amazon.awssdk.services.sts.StsClient
-import software.amazon.awssdk.services.sts.model.AssumeRoleRequest
 
 import java.net.URI
-import java.nio.file.{Files, Paths}
+import java.nio.file.Paths
 import scala.util.chaining._
 import scala.jdk.CollectionConverters._
+import scala.sys.process.stringToProcess
 
 /**
   * Base class for implementing end-to-end tests.
@@ -200,50 +199,20 @@ abstract class MigratorSuiteWithAWS extends MigratorSuite {
     private var client: DynamoDbClient = null
     def apply(): DynamoDbClient = client
     override def beforeAll(): Unit = {
-      val region = Region.US_WEST_1 // FIXME
-      val accessKey = sys.env("AWS_ACCESS_KEY")
-      val secretKey = sys.env("AWS_SECRET_KEY")
-      val roleArn = sys.env("AWS_ROLE_ARN")
-      val stsClient =
-        StsClient
-          .builder()
-          .credentialsProvider(
-            StaticCredentialsProvider.create(AwsBasicCredentials.create(accessKey, secretKey))
-          )
-          .build()
-      val credentials =
-        stsClient
-          .assumeRole(
-            AssumeRoleRequest
-              .builder()
-              .roleArn(roleArn)
-              .roleSessionName("MigratorTest")
-              .build()
-          )
-          .credentials()
+      // Provision the AWS credentials on the Spark nodes via a Docker volume
+      val localAwsCredentials =
+        Paths.get(sys.props("user.home"), ".aws", "credentials")
+          .toAbsolutePath
+      (s"cp ${localAwsCredentials} docker/aws-profile/credentials").!!
+
+      val region = Region.of(sys.env("AWS_REGION"))
       client =
         DynamoDbClient
           .builder()
           .region(region)
-          .credentialsProvider(
-            StaticCredentialsProvider.create(
-              AwsSessionCredentials.create(credentials.accessKeyId, credentials.secretAccessKey, credentials.sessionToken)
-            )
-          )
           .build()
     }
     override def afterAll(): Unit = client.close()
-  }
-
-  def setupConfigurationFile(configFileName: String): Unit = {
-    val configFilePath = Paths.get("src", "test", "configurations", configFileName)
-    val configFileContent = new String(Files.readAllBytes(configFilePath))
-    val updatedConfigFileContent =
-      configFileContent
-        .replace("{AWS_ACCESS_KEY}", sys.env("AWS_ACCESS_KEY"))
-        .replace("{AWS_SECRET_KEY}", sys.env("AWS_SECRET_KEY"))
-        .replace("{AWS_ROLE_ARN}", sys.env("AWS_ROLE_ARN"))
-    Files.write(configFilePath, updatedConfigFileContent.getBytes)
   }
 
 }

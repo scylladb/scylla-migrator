@@ -28,12 +28,10 @@ Tests are implemented in the `tests` sbt submodule. They simulate the submission
    sbt testOnly com.scylladb.migrator.BasicMigrationTest
    ~~~
 
-  Or, to run the tests that access AWS:
+  Or, to run the tests that access AWS, first configure your AWS credentials with `aws configure`, and then:
 
   ~~~ sh
-  AWS_ACCESS_KEY=... \
-  AWS_SECRET_KEY=... \
-  AWS_ROLE_NAME=... \
+  AWS_REGION=us-east-1 \
   sbt "testOnly -- --include-categories=com.scylladb.migrator.AWS"
   ~~~
 
