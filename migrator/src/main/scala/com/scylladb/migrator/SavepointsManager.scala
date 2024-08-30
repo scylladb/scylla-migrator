@@ -28,6 +28,9 @@ abstract class SavepointsManager(migratorConfig: MigratorConfig) extends AutoClo
 
   val log = LogManager.getLogger(this.getClass.getName)
   private val scheduler = new ScheduledThreadPoolExecutor(1)
+  private var oldUsr2Handler: SignalHandler = _
+  private var oldTermHandler: SignalHandler = _
+  private var oldIntHandler: SignalHandler = _
 
   createSavepointsDirectory()
   addUSR2Handler()
@@ -50,13 +53,15 @@ abstract class SavepointsManager(migratorConfig: MigratorConfig) extends AutoClo
       "Installing SIGINT/TERM/USR2 handler. Send this to dump the current progress to a savepoint.")
 
     val handler = new SignalHandler {
-      override def handle(signal: Signal): Unit =
+      override def handle(signal: Signal): Unit = {
         dumpMigrationState(signal.toString)
+        sys.exit(0)
+      }
     }
 
-    Signal.handle(new Signal("USR2"), handler)
-    Signal.handle(new Signal("TERM"), handler)
-    Signal.handle(new Signal("INT"), handler)
+    oldUsr2Handler = Signal.handle(new Signal("USR2"), handler)
+    oldTermHandler = Signal.handle(new Signal("TERM"), handler)
+    oldIntHandler  = Signal.handle(new Signal("INT"), handler)
   }
 
   private def startSavepointSchedule(): Unit = {
@@ -99,8 +104,12 @@ abstract class SavepointsManager(migratorConfig: MigratorConfig) extends AutoClo
   /**
     * Stop the periodic creation of savepoints and release the associated resources.
     */
-  final def close(): Unit =
+  final def close(): Unit = {
     scheduler.shutdown()
+    Signal.handle(new Signal("USR2"), oldUsr2Handler)
+    Signal.handle(new Signal("TERM"), oldTermHandler)
+    Signal.handle(new Signal("INT"), oldIntHandler)
+  }
 
   /**
     * Provide readable logs by describing which parts of the migration have been completed already.
