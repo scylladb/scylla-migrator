@@ -63,16 +63,18 @@ object DynamoStreamReplication {
 
         case _ => None
       },
-      kinesisCreds = src.credentials.map {
-        case AWSCredentials(accessKey, secretKey, maybeAssumeRole) =>
-          val builder =
-            SparkAWSCredentials.builder
-              .basicCredentials(accessKey, secretKey)
-          for (assumeRole <- maybeAssumeRole) {
-            builder.stsCredentials(assumeRole.arn, assumeRole.getSessionName)
-          }
-          builder.build()
-      }.orNull
+      kinesisCreds = src.credentials
+        .map {
+          case AWSCredentials(accessKey, secretKey, maybeAssumeRole) =>
+            val builder =
+              SparkAWSCredentials.builder
+                .basicCredentials(accessKey, secretKey)
+            for (assumeRole <- maybeAssumeRole) {
+              builder.stsCredentials(assumeRole.arn, assumeRole.getSessionName)
+            }
+            builder.build()
+        }
+        .getOrElse(SparkAWSCredentials.builder.build())
     ).foreachRDD { msgs =>
       val rdd = msgs
         .collect { case Some(item) => item: util.Map[String, AttributeValueV1] }
