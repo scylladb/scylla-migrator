@@ -61,7 +61,7 @@ abstract class SavepointsManager(migratorConfig: MigratorConfig) extends AutoClo
 
     oldUsr2Handler = Signal.handle(new Signal("USR2"), handler)
     oldTermHandler = Signal.handle(new Signal("TERM"), handler)
-    oldIntHandler  = Signal.handle(new Signal("INT"), handler)
+    oldIntHandler = Signal.handle(new Signal("INT"), handler)
   }
 
   private def startSavepointSchedule(): Unit = {
@@ -104,7 +104,7 @@ abstract class SavepointsManager(migratorConfig: MigratorConfig) extends AutoClo
   /**
     * Stop the periodic creation of savepoints and release the associated resources.
     */
-  final def close(): Unit = {
+  def close(): Unit = {
     scheduler.shutdown()
     Signal.handle(new Signal("USR2"), oldUsr2Handler)
     Signal.handle(new Signal("TERM"), oldTermHandler)
