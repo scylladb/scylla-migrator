@@ -63,6 +63,7 @@ services:
       - ./migrator/target/scala-2.13:/jars
       - ./tests/src/test/configurations:/app/configurations
       - ./tests/docker/spark-master:/app/savepoints
+      - ./tests/docker/aws-profile:/root/.aws
       - ./tests/docker/parquet:/app/parquet
 
   spark-worker:
@@ -80,5 +81,6 @@ services:
       - 8081:8081
     volumes:
       - ./tests/docker/parquet:/app/parquet
+      - ./tests/docker/aws-profile:/root/.aws
     depends_on:
       - spark-master
