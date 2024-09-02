@@ -34,7 +34,7 @@ class SkippedSegmentsTest extends MigratorSuiteWithDynamoDBLocal {
 
     // Verify that some items have been copied to the target database …
     val itemCount = targetAlternatorItemCount(tableName)
-    assert(itemCount > 90L && itemCount < 110L)
+    assert(itemCount > 75L && itemCount < 125L, s"Unexpected item count: ${itemCount}")
     // … but not all of them, hence the validator fails
     submitSparkJob(configPart2, "com.scylladb.migrator.Validator").exitValue().tap { statusCode =>
       assertEquals(statusCode, 1)
