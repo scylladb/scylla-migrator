@@ -28,12 +28,18 @@ Tests are implemented in the `tests` sbt submodule. They simulate the submission
    sbt testOnly com.scylladb.migrator.BasicMigrationTest
    ~~~
 
-  Or, to run the tests that access AWS, first configure your AWS credentials with `aws configure`, and then:
+  Or, to run the tests that access AWS:
 
   ~~~ sh
-  AWS_REGION=us-east-1 \
+  export AWS_REGION=us-east-1
+  export AWS_ACCESS_KEY_ID=xxx
+  export AWS_SECRET_ACCESS_KEY=yyy
+  export AWS_SESSION_TOKEN=zzz
+  docker compose -f docker-compose-tests.yml up -d
   sbt "testOnly -- --include-categories=com.scylladb.migrator.AWS"
   ~~~
+
+  Replace `xxx`, `yyy`, and `zzz` with your actual credentials.
 
 4. Ultimately, stop the Docker containers
 

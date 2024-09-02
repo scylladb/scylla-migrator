@@ -10,9 +10,9 @@ import scala.util.chaining.scalaUtilChainingOps
 
 class StreamedItemsTest extends MigratorSuiteWithAWS {
 
-  override val munitTimeout: Duration = 120.seconds
+  override val munitTimeout: Duration = 600.seconds
 
-  withTable("StreamedItemsTest").test("Stream changes") { tableName =>
+  withTable("migrator-StreamedItemsTest").test("Stream changes") { tableName =>
     val configFileName = "dynamodb-to-alternator-streaming.yaml"
 
     // Populate the source table
@@ -27,7 +27,7 @@ class StreamedItemsTest extends MigratorSuiteWithAWS {
       submitSparkJobProcess(configFileName, "com.scylladb.migrator.Migrator")
         .run(ProcessLogger { log =>
           sparkLogs ++= log
-//          println(log) // Uncomment to see the logs
+          println(log)
         })
 
     awaitAtMost(60.seconds) {
@@ -53,7 +53,7 @@ class StreamedItemsTest extends MigratorSuiteWithAWS {
     sourceDDb().putItem(PutItemRequest.builder().tableName(tableName).item(item2Data.asJava).build())
 
     // Check that the added item has also been migrated
-    awaitAtMost(60.seconds) {
+    awaitAtMost(300.seconds) {
       targetAlternator()
         .getItem(GetItemRequest.builder().tableName(tableName).key(keys2.asJava).build())
         .tap { itemResult =>
@@ -71,7 +71,7 @@ class StreamedItemsTest extends MigratorSuiteWithAWS {
     deleteStreamTable(tableName)
   }
 
-  withTable("StreamedItemsSkipSnapshotTest").test("Stream changes but skip initial snapshot") { tableName =>
+  withTable("migrator-StreamedItemsSkipSnapshotTest").test("Stream changes but skip initial snapshot") { tableName =>
     val configFileName = "dynamodb-to-alternator-streaming-skip-snapshot.yaml"
 
     // Populate the source table
@@ -86,7 +86,7 @@ class StreamedItemsTest extends MigratorSuiteWithAWS {
       submitSparkJobProcess(configFileName, "com.scylladb.migrator.Migrator")
         .run(ProcessLogger { (log: String) =>
           sparkLogs ++= log
-//          println(log) // Uncomment to see the logs
+          println(log)
         })
 
     // Wait for the changes to start being streamed
@@ -104,7 +104,7 @@ class StreamedItemsTest extends MigratorSuiteWithAWS {
     sourceDDb().putItem(PutItemRequest.builder().tableName(tableName).item(item2Data.asJava).build())
 
     // Check that only the second item has been migrated
-    awaitAtMost(60.seconds) {
+    awaitAtMost(300.seconds) {
       targetAlternator()
         .getItem(GetItemRequest.builder().tableName(tableName).key(keys2.asJava).build())
         .tap { itemResult =>
