@@ -84,19 +84,79 @@ Follow the procedure documented [here](https://stackoverflow.com/a/15505308/5617
 5. Start the remote debugger from your IDE.
 6. The test execution resumes, and you can interact with it from your debugger.
 
-## Publishing
+## Release Procedure
 
-Create a new [GitHub release](https://github.com/scylladb/scylla-migrator/releases), give it a tag name (please see below), a title, and a description, and then click Publish. A workflow will be automatically triggered and will build the application fat-jar and upload it as a release asset. Last, _fast-forward-merge_ the branch `master` into the current stable feature-branch:
+Publishing a new release includes building and uploading the release artifacts, and making sure the documentation lists the latest release.
 
-~~~ sh
-git checkout branch-1.0.x
-git pull origin branch-1.0.x
-git merge --ff-only master
-git push origin branch-1.0.x
-~~~
+### Building and Uploading the Release Artifacts
+
+Create a new [GitHub release](https://github.com/scylladb/scylla-migrator/releases) off the branch `master`, give it a tag name (please see below), a title, and a description, and then click Publish. A workflow will be automatically triggered and will build the application fat-jar and upload it as a release asset.
 
 Rules for the release tag name:
 - Make sure to use tag names like `v1.2.3`, starting with `v` and followed by a [semantic version number](https://semver.org/).
-- Bump the major version number if the new release breaks the backward compatibility (e.g., an existing configuration or setup will not work anymore with the new release).
+- Bump the major version number if the new release breaks the backward compatibility (e.g., an existing configuration or setup will not work anymore with the new release). In such a case, make sure to also update the compatibility matrix in the documentation.
 - Bump the minor version number if the new release introduces new features in a backward compatible manner.
 - Bump the patch version number if the new release only introduces bugfixes in a backward compatible manner.
+
+### Updating the Documentation
+
+All the releases (major, minor, and patch releases) are cut off the branch `master`. Since the documentation is versioned by minor release series, we also have a branch corresponding to each minor release series (e.g. `branch-1.0.x`, `branch-1.1.x`, etc.). They are not really branches in the usual sense because they don’t diverge from the branch `master`. You can think of them as labels through the history that point to the latest patch release of each minor series:
+
+~~~ text
+* master
+|
+|                <- unpublished commits
+|
+* branch-1.1.x   <- latest release in the 1.1.x series
+|
+|
+* branch-1.0.x   <- latest release in the 1.0.x series
+|
+~~~
+
+#### Updating the Documentation After a Patch Release
+
+_Fast-forward-merge_ the branch `master` into the current stable feature-branch. For instance, let’s assume you released version `1.2.5`. The latest feature release was `1.2.0`, and its corresponding branch is `branch-1.2.x`:
+
+~~~ sh
+git checkout master
+git pull --ff-only origin master
+git checkout branch-1.2.x
+git pull origin branch-1.2.x
+git merge --ff-only master
+git push origin branch-1.2.x
+~~~
+
+#### Updating the Documentation After a Minor or Major Release
+
+Create a new branch for the minor version and include it in the documentation configuration. For instance, let’s assume you released version `1.2.0`:
+
+1. Create the minor release series branch `branch-1.2.x`:
+
+   ~~~ sh
+   git checkout master
+   git pull --ff-only origin master
+   git branch branch-1.2.x
+   git push --set-upstream origin branch-1.2.x
+   ~~~
+
+2. Add it to [conf.py](docs/source/conf.py):
+
+   ~~~ diff
+     BRANCHES = [
+       "master",
+       "branch-1.0.x",
+       "branch-1.1.x",
+   +   "branch-1.2.x",
+     ]
+   - LATEST_VERSION = "branch-1.1.x"
+   + LATEST_VERSION = "branch-1.2.x"
+   ~~~
+
+   Commit and push the change (make sure to be on branch `master`):
+
+   ~~~ sh
+   git add docs/source/conf.py
+   git commit --message="Publish documentation for release 1.2.0"
+   git push origin master
+   ~~~
