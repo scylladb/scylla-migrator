@@ -23,7 +23,10 @@ setupenv:
 
 .PHONY: setup
 setup:
-	$(POETRY) install
+	$(POETRY) update
+
+.PHONY: update
+update:
 	$(POETRY) update
 
 # Clean commands
