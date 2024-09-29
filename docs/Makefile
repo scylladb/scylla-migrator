@@ -23,7 +23,10 @@ setupenv:
 
 .PHONY: setup
 setup:
-	$(POETRY) install
+	$(POETRY) update
+
+.PHONY: update
+update:
 	$(POETRY) update
 
 # Clean commands
@@ -34,7 +37,6 @@ pristine: clean
 .PHONY: clean
 clean:
 	rm -rf $(BUILDDIR)/*
-	rm -f poetry.lock
 
 # Generate output commands
 .PHONY: dirhtml
