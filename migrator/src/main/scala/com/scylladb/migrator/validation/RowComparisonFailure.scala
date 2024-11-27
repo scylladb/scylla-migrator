@@ -2,7 +2,6 @@ package com.scylladb.migrator.validation
 
 import com.datastax.spark.connector.CassandraRow
 import com.google.common.math.DoubleMath
-import com.scylladb.migrator.alternator.DdbValue
 
 import java.time.temporal.ChronoUnit
 
@@ -132,49 +131,6 @@ object RowComparisonFailure {
           )
     }
 
-  def dynamoDBRowComparisonFailure(left: collection.Map[String, DdbValue],
-                                   maybeRight: Option[collection.Map[String, DdbValue]],
-                                   items: List[Item]): RowComparisonFailure =
-    RowComparisonFailure(left.toString, maybeRight.map(_.toString), items)
-
-  /**
-    * @param left                   The first item to compare
-    * @param maybeRight             The possible second item to compare
-    * @param renamedColumn          A function describing how the columns of the first items should be expected to be
-    *                               renamed in the second item
-    * @param floatingPointTolerance The tolerance to apply when comparing floating point values
-    * @return Some comparison failure if the compared items were different, otherwise `None`.
-    */
-  def compareDynamoDBRows(left: collection.Map[String, DdbValue],
-                          maybeRight: Option[collection.Map[String, DdbValue]],
-                          renamedColumn: String => String,
-                          floatingPointTolerance: Double): Option[RowComparisonFailure] =
-    maybeRight match {
-      case None => Some(dynamoDBRowComparisonFailure(left, maybeRight, List(Item.MissingTargetRow)))
-      case Some(right) if left.keySet.size != right.keySet.size =>
-        Some(dynamoDBRowComparisonFailure(left, maybeRight, List(Item.MismatchedColumnCount)))
-      case Some(right) if left.keySet.map(renamedColumn) != right.keySet =>
-        Some(dynamoDBRowComparisonFailure(left, maybeRight, List(Item.MismatchedColumnNames)))
-      case Some(right) =>
-        val differingFieldValues =
-          for {
-            (columnName, leftValue) <- left
-            rightValue = right.get(renamedColumn(columnName))
-            if areDifferent(
-              Some(leftValue),
-              rightValue,
-              0L, // There is no Timestamp type in DynamoDB
-              floatingPointTolerance)
-          } yield columnName
-        if (differingFieldValues.isEmpty) None
-        else
-          Some(
-            dynamoDBRowComparisonFailure(
-              left,
-              maybeRight,
-              List(Item.DifferingFieldValues(differingFieldValues.toList))))
-    }
-
   /**
     * @param leftValue              First value to compare
     * @param rightValue             Second value to compare
@@ -204,16 +160,6 @@ object RowComparisonFailure {
       // with `sameElements`.
       case (Some(l: Array[_]), Some(r: Array[_])) =>
         !l.sameElements(r)
-
-      // Special cases for DynamoDB item values
-      case (Some(DdbValue.N(l)), Some(DdbValue.N(r))) =>
-        areNumericalValuesDifferent(BigDecimal(l), BigDecimal(r), floatingPointTolerance)
-      case (Some(DdbValue.Ns(l)), Some(DdbValue.Ns(r))) =>
-        val xs = l.map(BigDecimal(_))
-        val ys = r.map(BigDecimal(_))
-        xs.size != ys.size || xs.zip(ys).exists {
-          case (x, y) => areNumericalValuesDifferent(x, y, floatingPointTolerance)
-        }
 
       // All remaining types get compared with standard equality
       case (Some(l), Some(r)) => l != r

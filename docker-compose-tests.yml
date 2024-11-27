@@ -1,34 +1,4 @@
 services:
-
-  dynamodb:
-    command: "-jar DynamoDBLocal.jar -sharedDb -inMemory"
-    image: "amazon/dynamodb-local:latest"
-    expose:
-      - 8001
-    ports:
-      - "8001:8000"
-    working_dir: /home/dynamodblocal
-
-  cassandra:
-    image: cassandra:latest
-    volumes:
-      - ./tests/docker/cassandra:/var/lib/cassandra
-    ports:
-      - "9043:9042"
-    expose:
-      - 9043
-
-  scylla-source:
-    image: scylladb/scylla:latest
-    volumes:
-      - "./tests/docker/scylla-source:/var/lib/scylla"
-    ports:
-      - "8002:8000"
-      - "9044:9042"
-    expose:
-      - 9044
-    command: "--smp 1 --memory 2048M --alternator-port 8000 --alternator-write-isolation only_rmw_uses_lwt"
-
   scylla:
     image: scylladb/scylla:latest
     volumes:
@@ -36,7 +6,7 @@ services:
     ports:
       - "8000:8000"
       - "9042:9042"
-    command: "--smp 1 --memory 2048M --alternator-port 8000 --alternator-write-isolation only_rmw_uses_lwt"
+    command: "--smp 1 --alternator-port 8000 --alternator-write-isolation only_rmw_uses_lwt"
 
   s3:
     image: localstack/localstack:s3-latest
@@ -60,7 +30,7 @@ services:
       - 5005:5005
       - 8080:8080
     volumes:
-      - ./migrator/target/scala-2.13:/jars
+      - ./migrator/target/scala-2.12:/jars
       - ./tests/src/test/configurations:/app/configurations
       - ./tests/docker/spark-master:/app/savepoints
       - ./tests/docker/aws-profile:/root/.aws
@@ -70,8 +40,8 @@ services:
     build: dockerfiles/spark
     command: worker
     environment:
-      SPARK_WORKER_CORES: 2
-      SPARK_WORKER_MEMORY: 4G
+      SPARK_WORKER_CORES: 1
+      SPARK_WORKER_MEMORY: 2G
       SPARK_WORKER_WEBUI_PORT: 8081
       SPARK_PUBLIC_DNS: localhost
     expose:

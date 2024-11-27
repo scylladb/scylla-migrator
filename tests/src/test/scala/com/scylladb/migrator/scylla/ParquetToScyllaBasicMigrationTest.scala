@@ -1,7 +1,7 @@
 package com.scylladb.migrator.scylla
 
 import com.datastax.oss.driver.api.core.CqlSession
-import com.datastax.oss.driver.api.querybuilder.{ QueryBuilder, SchemaBuilder }
+import com.datastax.oss.driver.api.querybuilder.{QueryBuilder, SchemaBuilder}
 import com.github.mjakubowski84.parquet4s.ParquetWriter
 import com.scylladb.migrator.CassandraUtils.dropAndRecreateTable
 import com.scylladb.migrator.SparkUtils.successfullyPerformMigration
@@ -22,7 +22,7 @@ class ParquetToScyllaBasicMigrationTest extends munit.FunSuite {
       .builder()
       .addContactPoint(new InetSocketAddress("localhost", 9042))
       .withLocalDatacenter("datacenter1")
-      .withAuthCredentials("dummy", "dummy")
+      .withAuthCredentials("cassandra", "cassandra")
       .build()
 
     val keyspaceStatement =

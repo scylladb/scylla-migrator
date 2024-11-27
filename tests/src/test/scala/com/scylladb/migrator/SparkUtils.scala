@@ -1,6 +1,6 @@
 package com.scylladb.migrator
 
-import scala.sys.process.{ Process, ProcessBuilder }
+import scala.sys.process.{Process, ProcessBuilder}
 
 object SparkUtils {
 
@@ -32,7 +32,7 @@ object SparkUtils {
   def submitSparkJobProcess(migratorConfigFile: String, entryPoint: String): ProcessBuilder =
     Process(
       Seq(
-        "docker",
+        "podman",
         "compose",
         "-f",
         "../docker-compose-tests.yml",
@@ -52,7 +52,7 @@ object SparkUtils {
         // Uncomment one of the following lines to plug a remote debugger on the Spark master or worker.
         // "--conf", "spark.driver.extraJavaOptions=-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=*:5005",
         // "--conf", "spark.executor.extraJavaOptions=-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=*:5006",
-        "/jars/scylla-migrator-assembly.jar"
+        "/jars/scylla-migrator-27112024-102959-assembly.jar"
       )
     )
 

@@ -8,8 +8,8 @@ target:
   port: 9042
   localDC: datacenter1
   credentials:
-    username: dummy
-    password: dummy
+    username: cassandra
+    password: cassandra
   keyspace: test
   table: basictest
   consistencyLevel: LOCAL_QUORUM

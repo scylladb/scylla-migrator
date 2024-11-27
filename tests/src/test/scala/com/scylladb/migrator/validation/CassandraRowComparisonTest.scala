@@ -1,7 +1,7 @@
 package com.scylladb.migrator.validation
 
 import com.datastax.spark.connector.CassandraRow
-import com.scylladb.migrator.validation.RowComparisonFailure.{ cassandraRowComparisonFailure, Item }
+import com.scylladb.migrator.validation.RowComparisonFailure.{Item, cassandraRowComparisonFailure}
 
 class CassandraRowComparisonTest extends munit.FunSuite {
 
