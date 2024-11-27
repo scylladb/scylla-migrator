@@ -52,7 +52,7 @@ object SparkUtils {
         // Uncomment one of the following lines to plug a remote debugger on the Spark master or worker.
         // "--conf", "spark.driver.extraJavaOptions=-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=*:5005",
         // "--conf", "spark.executor.extraJavaOptions=-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=*:5006",
-        "/jars/scylla-migrator-27112024-102959-assembly.jar"
+        "/jars/scylla-migrator-27112024-152404-assembly.jar"
       )
     )
 

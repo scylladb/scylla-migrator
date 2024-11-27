@@ -19,7 +19,7 @@ services:
       - "/var/run/docker.sock:/var/run/docker.sock"
 
   spark-master:
-    build: dockerfiles/spark
+    image: localhost/spark-350-scala-212:latest
     command: master
     environment:
       SPARK_PUBLIC_DNS: localhost

@@ -151,3 +151,6 @@ docs/_build/
 .env
 *~
 
+
+.DS_Store
+*/.DS_Store

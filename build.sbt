@@ -3,7 +3,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 // The AWS SDK version, the Spark version, and the Hadoop version must be compatible together
 val awsSdkVersion = "2.23.19"
-val sparkVersion = "3.5.1"
+val sparkVersion = "3.5.0"
 val hadoopVersion = "3.3.4"
 
 inThisBuild(
@@ -40,9 +40,9 @@ lazy val migrator = (project in file("migrator")).enablePlugins(BuildInfoPlugin)
     "com.scylladb" %% "spark-scylladb-connector" % "4.0.0",
     "com.github.jnr" % "jnr-posix" % "3.1.19", // Needed by the Spark ScyllaDB connector
     "com.scylladb.alternator" % "load-balancing" % "1.0.0",
-    "io.circe"       %% "circe-generic"      % "0.14.7",
-    "io.circe"       %% "circe-parser"       % "0.14.7",
-    "io.circe"       %% "circe-yaml"         % "0.15.1",
+    "io.circe"       %% "circe-generic"      % "0.13.0",
+    "io.circe"       %% "circe-parser"       % "0.13.0",
+    "io.circe"       %% "circe-yaml"         % "0.13.0",
   ),
   assembly / assemblyShadeRules := Seq(
     ShadeRule.rename("org.yaml.snakeyaml.**" -> "com.scylladb.shaded.@1").inAll
