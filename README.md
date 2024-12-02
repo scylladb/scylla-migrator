@@ -1,3 +1,5 @@
+# Pre Read 
+This is a forked version of the original Migrator jar. We have forked it to make it light weight for our specific use case which was to transfer data from Parquet files in S3 to Scylla in bulk. Additionally, Databricks currently doesn't support instances with Scala version 2.12 so this jar has been downgraded to 2.12 and can be used on Databricks.
 # ScyllaDB Migrator
 
 The ScyllaDB Migrator is a Spark application that migrates data to ScyllaDB from CQL-compatible or DynamoDB-compatible databases.

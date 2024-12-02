@@ -9,6 +9,8 @@ import com.scylladb.migrator.readers.TimestampColumns
 import org.apache.log4j.{ LogManager, Logger }
 import org.apache.spark.sql.{ DataFrame, Row, SparkSession }
 
+import scala.collection.compat.immutable.ArraySeq
+
 object Scylla {
   val log: Logger = LogManager.getLogger("com.scylladb.migrator.writer.Scylla")
 
@@ -76,7 +78,8 @@ object Scylla {
     log.info("Schema after renames:")
     log.info(renamedSchema.treeString)
 
-    val columnSelector = SomeColumns(renamedSchema.fields.map(_.name: ColumnRef): _*)
+    val columnSelector = SomeColumns(
+      ArraySeq.unsafeWrapArray(renamedSchema.fields.map(_.name: ColumnRef)): _*)
 
     // Spark's conversion from its internal Decimal type to java.math.BigDecimal
     // pads the resulting value with trailing zeros corresponding to the scale of the
