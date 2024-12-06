@@ -43,7 +43,7 @@ object Migrator {
           sys.error("Unsupported combination of source and target.")
       }
     } finally {
-      spark.stop()
+      log.info("Successfully migrated data from Spark to Scylla")
     }
   }
 
