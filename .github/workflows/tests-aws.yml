@@ -30,6 +30,7 @@ jobs:
           distribution: temurin
           java-version: 8
           cache: sbt
+      - uses: sbt/setup-sbt@v1            
       - name: configure aws credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
