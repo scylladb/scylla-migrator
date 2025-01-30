@@ -20,7 +20,6 @@ The following pages describe various alternative ways to set up a Spark cluster:
 
 * :doc:`on your infrastructure, using Ansible </getting-started/ansible>`,
 * :doc:`on your infrastructure, manually </getting-started/spark-standalone>`,
-* :doc:`using AWS EMR </getting-started/aws-emr>`,
 * or, :doc:`on a single machine, using Docker </getting-started/docker>`.
 
 -----------------------
@@ -54,5 +53,4 @@ You might also be interested in the following extra features:
 
     ansible
     spark-standalone
-    aws-emr
     docker
