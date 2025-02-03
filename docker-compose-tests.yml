@@ -53,6 +53,10 @@ services:
     command: master
     environment:
       SPARK_PUBLIC_DNS: localhost
+      AWS_REGION: ${AWS_REGION}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN}
     expose:
       - 5005
     ports:
@@ -63,7 +67,6 @@ services:
       - ./migrator/target/scala-2.13:/jars
       - ./tests/src/test/configurations:/app/configurations
       - ./tests/docker/spark-master:/app/savepoints
-      - ./tests/docker/aws-profile:/root/.aws
       - ./tests/docker/parquet:/app/parquet
 
   spark-worker:
@@ -74,6 +77,10 @@ services:
       SPARK_WORKER_MEMORY: 4G
       SPARK_WORKER_WEBUI_PORT: 8081
       SPARK_PUBLIC_DNS: localhost
+      AWS_REGION: ${AWS_REGION}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN}
     expose:
       - 5006
     ports:
