@@ -198,20 +198,7 @@ abstract class MigratorSuiteWithAWS extends MigratorSuite {
   lazy val sourceDDb: Fixture[DynamoDbClient] = new Fixture[DynamoDbClient]("sourceDDb") {
     private var client: DynamoDbClient = null
     def apply(): DynamoDbClient = client
-    override def beforeAll(): Unit = {
-      // Provision the AWS credentials on the Spark nodes via a Docker volume
-      val localAwsCredentials =
-        Paths.get(sys.props("user.home"), ".aws", "credentials")
-          .toAbsolutePath
-      (s"cp ${localAwsCredentials} docker/aws-profile/credentials").!!
-
-      val region = Region.of(sys.env("AWS_REGION"))
-      client =
-        DynamoDbClient
-          .builder()
-          .region(region)
-          .build()
-    }
+    override def beforeAll(): Unit = client = DynamoDbClient.create()
     override def afterAll(): Unit = client.close()
   }
 
