@@ -8,7 +8,7 @@ package-mode = false
 [tool.poetry.dependencies]
 python = "^3.10"
 pygments = "^2.18.0"
-sphinx-scylladb-theme = "^1.8.6"
+sphinx-scylladb-theme = "^1.8.7"
 myst-parser = "^3.0.1"
 sphinx-autobuild = "^2024.4.19"
 Sphinx = "^7.3.7"
