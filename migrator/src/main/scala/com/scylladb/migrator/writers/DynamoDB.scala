@@ -9,13 +9,68 @@ import org.apache.hadoop.mapred.JobConf
 import org.apache.log4j.LogManager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
-import software.amazon.awssdk.services.dynamodb.model.{ AttributeValue, TableDescription }
+import software.amazon.awssdk.services.dynamodb.model.{
+  AttributeValue,
+  DeleteItemRequest,
+  TableDescription
+}
 
 import java.util
+import java.util.stream.Collectors
 
 object DynamoDB {
 
   val log = LogManager.getLogger("com.scylladb.migrator.writers.DynamoDB")
+
+  def deleteRDD(target: TargetSettings.DynamoDB,
+                targetTableDesc: TableDescription,
+                rdd: RDD[util.Map[String, AttributeValue]])(implicit spark: SparkSession): Unit = {
+
+    val keySchema = targetTableDesc.keySchema()
+
+    rdd.foreachPartition { partition =>
+      if (partition.nonEmpty) {
+        val dynamoDB = DynamoUtils.buildDynamoClient(
+          target.endpoint,
+          target.finalCredentials.map(_.toProvider),
+          target.region
+        )
+
+        try {
+          partition.foreach { item =>
+            val keyToDelete =
+              new util.HashMap[String, AttributeValue]()
+
+            keySchema.forEach { keyElement =>
+              val keyName = keyElement.attributeName()
+              if (item.containsKey(keyName)) {
+                keyToDelete.put(keyName, item.get(keyName))
+              }
+            }
+
+            if (!keyToDelete.isEmpty) {
+              try {
+                dynamoDB.deleteItem(
+                  DeleteItemRequest
+                    .builder()
+                    .tableName(target.table)
+                    .key(keyToDelete)
+                    .build()
+                )
+              } catch {
+                case e: Exception =>
+                  log.error(
+                    s"Failed to delete item with key ${keyToDelete} from table ${target.table}",
+                    e)
+              }
+            }
+          }
+        } finally {
+          dynamoDB.close()
+        }
+      }
+    }
+  }
 
   def writeRDD(target: TargetSettings.DynamoDB,
                renamesMap: Map[String, String],
