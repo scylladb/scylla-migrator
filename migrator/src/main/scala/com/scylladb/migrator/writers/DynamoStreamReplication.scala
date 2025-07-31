@@ -7,6 +7,7 @@ import com.scylladb.migrator.config.{ AWSCredentials, SourceSettings, TargetSett
 import org.apache.hadoop.dynamodb.DynamoDBItemWritable
 import org.apache.hadoop.io.Text
 import org.apache.log4j.LogManager
+import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.streaming.StreamingContext
 import org.apache.spark.streaming.kinesis.{
@@ -29,6 +30,75 @@ object DynamoStreamReplication {
   private val operationTypeColumn = "_dynamo_op_type"
   private val putOperation = new AttributeValueV1().withBOOL(true)
   private val deleteOperation = new AttributeValueV1().withBOOL(false)
+
+  private[writers] def run(msgs: RDD[Option[util.Map[String, AttributeValueV1]]],
+                           target: TargetSettings.DynamoDB,
+                           renamesMap: Map[String, String],
+                           targetTableDesc: TableDescription,
+                           dynamoDB: DynamoDB.type)(implicit spark: SparkSession): Unit =
+    if (!msgs.isEmpty()) {
+      val rdd = msgs
+        .collect { case Some(item) => item: util.Map[String, AttributeValueV1] }
+        .repartition(Runtime.getRuntime.availableProcessors() * 2)
+
+      val puts = rdd.filter(item => item.get(operationTypeColumn) == putOperation)
+      val deletes =
+        rdd.filter(item => item.get(operationTypeColumn) == deleteOperation)
+
+      val putCount = puts.count()
+      val deleteCount = deletes.count()
+
+      if (putCount > 0 || deleteCount > 0) {
+        log.info(s"""
+                    |Changes to be applied:
+                    |  - ${putCount} items to UPSERT
+                    |  - ${deleteCount} items to DELETE
+                    |""".stripMargin)
+      } else {
+        log.info("No changes to apply")
+      }
+
+      if (deleteCount > 0) {
+        val deletableItems =
+          deletes.map { item =>
+            item
+              .entrySet()
+              .stream()
+              .filter(e => e.getKey != operationTypeColumn)
+              .collect(
+                Collectors.toMap(
+                  (e: util.Map.Entry[String, AttributeValueV1]) => e.getKey,
+                  (e: util.Map.Entry[String, AttributeValueV1]) =>
+                    AttributeValueUtils.fromV1(e.getValue)
+                )
+              )
+          }
+        dynamoDB.deleteRDD(target, targetTableDesc, deletableItems)(spark)
+      }
+
+      if (putCount > 0) {
+        val writablePuts =
+          puts.map { item =>
+            (
+              new Text,
+              new DynamoDBItemWritable(
+                item
+                  .entrySet()
+                  .stream()
+                  .filter(e => e.getKey != operationTypeColumn)
+                  .collect(
+                    Collectors.toMap(
+                      (e: util.Map.Entry[String, AttributeValueV1]) => e.getKey,
+                      (e: util.Map.Entry[String, AttributeValueV1]) =>
+                        AttributeValueUtils.fromV1(e.getValue)
+                    )
+                  )
+              )
+            )
+          }
+        dynamoDB.writeRDD(target, renamesMap, writablePuts, targetTableDesc)(spark)
+      }
+    }
 
   def createDStream(spark: SparkSession,
                     streamingContext: StreamingContext,
@@ -76,50 +146,12 @@ object DynamoStreamReplication {
         }
         .getOrElse(SparkAWSCredentials.builder.build())
     ).foreachRDD { msgs =>
-      val rdd = msgs
-        .collect { case Some(item) => item: util.Map[String, AttributeValueV1] }
-        .repartition(Runtime.getRuntime.availableProcessors() * 2)
-
-      val changes =
-        rdd
-          .groupBy { item =>
-            item.get(operationTypeColumn) match {
-              case `putOperation`    => "UPSERT"
-              case `deleteOperation` => "DELETE"
-              case _                 => "UNKNOWN"
-            }
-          }
-          .mapValues(_.size)
-          .collect()
-      if (changes.nonEmpty) {
-        log.info("Changes to be applied:")
-        for ((operation, count) <- changes) {
-          log.info(s"${operation}: ${count}")
-        }
-      } else {
-        log.info("No changes to apply")
-      }
-
-      val writableRdd =
-        rdd.map { item =>
-          (
-            new Text,
-            new DynamoDBItemWritable(
-              item
-                .entrySet()
-                .stream()
-                .collect(
-                  Collectors.toMap(
-                    (e: util.Map.Entry[String, AttributeValueV1]) => e.getKey,
-                    (e: util.Map.Entry[String, AttributeValueV1]) =>
-                      AttributeValueUtils.fromV1(e.getValue)
-                  )
-                )
-            )
-          )
-        }
-
-      DynamoDB.writeRDD(target, renamesMap, writableRdd, targetTableDesc)(spark)
+      run(
+        msgs.asInstanceOf[RDD[Option[util.Map[String, AttributeValueV1]]]],
+        target,
+        renamesMap,
+        targetTableDesc,
+        DynamoDB)(spark)
     }
 
 }
