@@ -31,6 +31,7 @@ jobs:
         run: ./build.sh
       - name: Set up services
         run: |
+          sudo chmod -R 777 ./tests/docker/scylla ./tests/docker/scylla-source
           docker compose -f docker-compose-tests.yml up -d
           .github/wait-for-port.sh 8000 # ScyllaDB Alternator
           .github/wait-for-port.sh 8001 # DynamoDB
