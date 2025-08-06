@@ -27,16 +27,19 @@ trait MigratorSuite extends munit.FunSuite {
 
   /** Client of a target Alternator instance */
   val targetAlternator: Fixture[DynamoDbClient] = new Fixture[DynamoDbClient]("targetAlternator") {
+    import org.apache.hadoop.conf.Configuration
+    import org.apache.hadoop.dynamodb.{DynamoDBClient, DynamoDBConstants}
+
+
     private var client: DynamoDbClient = null
     def apply(): DynamoDbClient = client
     override def beforeAll(): Unit = {
-      client =
-        DynamoDbClient
-          .builder()
-          .region(Region.of("dummy"))
-          .endpointOverride(new URI("http://localhost:8000"))
-          .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("dummy", "dummy")))
-          .build()
+      val conf = new Configuration(false)
+      conf.set(DynamoDBConstants.ENDPOINT, "http://localhost:8000")
+      conf.set(DynamoDBConstants.DYNAMODB_ACCESS_KEY_CONF, "dummy")
+      conf.set(DynamoDBConstants.DYNAMODB_SECRET_KEY_CONF, "dummy")
+      conf.set(DynamoDBConstants.REGION, "dummy")
+      client = new com.scylladb.migrator.alternator.TestDynamoDBClient(conf)
     }
     override def afterAll(): Unit = client.close()
   }
