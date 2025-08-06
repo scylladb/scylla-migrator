@@ -1,5 +1,3 @@
 cassandra/
 s3/
-scylla/
-scylla-source/
 spark-master/

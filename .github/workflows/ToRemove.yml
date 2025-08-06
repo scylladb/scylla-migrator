@@ -10,6 +10,7 @@ on:
     paths:
       - '**.scala'
       - '**.sbt'
+  workflow_dispatch: # Temporary, to remove
 
 jobs:
   test:
