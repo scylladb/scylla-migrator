@@ -183,7 +183,7 @@ trait MigratorSuiteWithDynamoDBLocal extends MigratorSuite {
         DynamoDbClient
           .builder()
           .region(Region.of("dummy"))
-          .endpointOverride(new URI("http://localhost:8000"))
+          .endpointOverride(new URI("http://localhost:8001"))
           .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("dummy", "dummy")))
           .build()
     }
