@@ -291,7 +291,7 @@ public class TestDynamoDBClient {
   private BatchWriteItemResponse writeBatch(Reporter reporter, final int roomNeeded) {
     final BatchWriteItemRequest batchWriteItemRequest = BatchWriteItemRequest.builder()
         .requestItems(writeBatchMap)
-        .returnConsumedCapacity(ReturnConsumedCapacity.INDEXES)
+        .returnConsumedCapacity(ReturnConsumedCapacity.TOTAL)
         .build();
 
     RetryResult<BatchWriteItemResponse> retryResult = getRetryDriver().runWithRetry(
