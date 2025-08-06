@@ -22,6 +22,26 @@ import scala.sys.process.stringToProcess
   */
 trait MigratorSuite extends munit.FunSuite {
 
+  import java.net.URI
+  import software.amazon.awssdk.auth.credentials.{AwsBasicCredentials, StaticCredentialsProvider}
+  import software.amazon.awssdk.core.SdkRequest
+  import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
+  import software.amazon.awssdk.core.interceptor.{Context, ExecutionAttributes, ExecutionInterceptor}
+  import software.amazon.awssdk.regions.Region
+  import software.amazon.awssdk.services.dynamodb.{DynamoDbClient, DynamoDbClientBuilder}
+  import software.amazon.awssdk.services.dynamodb.model.{BatchWriteItemRequest, ReturnConsumedCapacity}
+
+  class ForceTotalConsumedCapacity extends ExecutionInterceptor {
+    override def modifyRequest(ctx: Context.ModifyRequest,
+                               attrs: ExecutionAttributes): SdkRequest = {
+      ctx.request() match {
+        case r: BatchWriteItemRequest =>
+          r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
+        case other => other
+      }
+    }
+  }
+
   /** Client of a source DynamoDB instance */
   def sourceDDb: Fixture[DynamoDbClient]
 
@@ -34,12 +54,13 @@ trait MigratorSuite extends munit.FunSuite {
     private var client: DynamoDbClient = null
     def apply(): DynamoDbClient = client
     override def beforeAll(): Unit = {
-      val conf = new Configuration(false)
-      conf.set(DynamoDBConstants.ENDPOINT, "http://localhost:8000")
-      conf.set(DynamoDBConstants.DYNAMODB_ACCESS_KEY_CONF, "dummy")
-      conf.set(DynamoDBConstants.DYNAMODB_SECRET_KEY_CONF, "dummy")
-      conf.set(DynamoDBConstants.REGION, "dummy")
-      client = new com.scylladb.migrator.alternator.TestDynamoDBClient(conf)
+      client =
+        DynamoDbClient
+          .builder()
+          .region(Region.of("dummy"))
+          .endpointOverride(new URI("http://localhost:8000"))
+          .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("dummy", "dummy")))
+          .build()
     }
     override def afterAll(): Unit = client.close()
   }
