@@ -60,6 +60,11 @@ trait MigratorSuite extends munit.FunSuite {
           .region(Region.of("dummy"))
           .endpointOverride(new URI("http://localhost:8000"))
           .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("dummy", "dummy")))
+          .overrideConfiguration(
+            ClientOverrideConfiguration.builder()
+              .addExecutionInterceptor(new ForceTotalConsumedCapacity)
+              .build()
+          )
           .build()
     }
     override def afterAll(): Unit = client.close()
