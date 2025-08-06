@@ -20,6 +20,8 @@ target:
     accessKey: dummy
     secretKey: dummy
   streamChanges: false
+  removeConsumedCapacity: true
+  billingMode: PAY_PER_REQUEST
 
 # Below are unused but mandatory settings
 savepoints:

@@ -5,6 +5,8 @@ import com.scylladb.migrator.AwsUtils
 import io.circe.{ Decoder, DecodingFailure, Encoder, Json }
 import io.circe.generic.semiauto.{ deriveDecoder, deriveEncoder }
 import io.circe.syntax._
+import software.amazon.awssdk.services.dynamodb.model.BillingMode
+import com.scylladb.migrator.config.BillingModeCodec._
 
 sealed trait TargetSettings
 object TargetSettings {
@@ -29,7 +31,9 @@ object TargetSettings {
                       writeThroughput: Option[Int],
                       throughputWritePercent: Option[Float],
                       streamChanges: Boolean,
-                      skipInitialSnapshotTransfer: Option[Boolean])
+                      skipInitialSnapshotTransfer: Option[Boolean],
+                      removeConsumedCapacity: Option[Boolean] = None,
+                      billingMode: Option[BillingMode] = None)
       extends TargetSettings {
     lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
       AwsUtils.computeFinalCredentials(credentials, endpoint, region)

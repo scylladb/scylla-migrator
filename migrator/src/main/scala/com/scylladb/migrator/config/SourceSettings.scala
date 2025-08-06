@@ -5,6 +5,7 @@ import com.scylladb.migrator.AwsUtils
 import io.circe.syntax._
 import io.circe.{ Decoder, DecodingFailure, Encoder, Json }
 import io.circe.generic.semiauto.{ deriveDecoder, deriveEncoder }
+import software.amazon.awssdk.services.dynamodb.model.BillingMode
 
 case class DynamoDBEndpoint(host: String, port: Int) {
   def renderEndpoint = s"${host}:${port}"
@@ -38,7 +39,8 @@ object SourceSettings {
                       scanSegments: Option[Int],
                       readThroughput: Option[Int],
                       throughputReadPercent: Option[Float],
-                      maxMapTasks: Option[Int])
+                      maxMapTasks: Option[Int],
+                      removeConsumedCapacity: Option[Boolean] = None)
       extends SourceSettings {
     lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
       AwsUtils.computeFinalCredentials(credentials, endpoint, region)
@@ -71,10 +73,12 @@ object SourceSettings {
       */
     case class TableDescription(
       attributeDefinitions: Seq[AttributeDefinition],
-      keySchema: Seq[KeySchema]
+      keySchema: Seq[KeySchema],
+      billingMode: Option[BillingMode] = None
     )
 
     object TableDescription {
+      import com.scylladb.migrator.config.BillingModeCodec._
       implicit val decoder: Decoder[TableDescription] = deriveDecoder[TableDescription]
       implicit val encoder: Encoder[TableDescription] = deriveEncoder[TableDescription]
     }
