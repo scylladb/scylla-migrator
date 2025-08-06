@@ -80,6 +80,16 @@ docs/_build/
 # PyCharm files
 *.idea
 
+# Vscode
+.vscode
+
+# Metals
+.metals
+metals.sbt
+
+# Bloop
+.bloop
+
 # emacs stuff
 
 # Autoenv

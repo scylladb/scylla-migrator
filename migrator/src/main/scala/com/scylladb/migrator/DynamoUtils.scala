@@ -10,37 +10,78 @@ import org.apache.hadoop.mapred.JobConf
 import org.apache.log4j.LogManager
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider
 import software.amazon.awssdk.services.dynamodb.{ DynamoDbClient, DynamoDbClientBuilder }
+import software.amazon.awssdk.core.SdkRequest
+import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
+import software.amazon.awssdk.core.interceptor.{
+  Context,
+  ExecutionAttributes,
+  ExecutionInterceptor
+}
 import software.amazon.awssdk.services.dynamodb.model.{
+  BatchWriteItemRequest,
   BillingMode,
   CreateTableRequest,
+  DeleteItemRequest,
   DescribeStreamRequest,
   DescribeTableRequest,
   GlobalSecondaryIndex,
   LocalSecondaryIndex,
   ProvisionedThroughput,
   ProvisionedThroughputDescription,
+  PutItemRequest,
+  QueryRequest,
   ResourceNotFoundException,
+  ReturnConsumedCapacity,
+  ScanRequest,
   StreamSpecification,
   StreamStatus,
   StreamViewType,
   TableDescription,
+  UpdateItemRequest,
   UpdateTableRequest
 }
 import software.amazon.awssdk.services.dynamodb.streams.DynamoDbStreamsClient
 
-import java.util.stream.Collectors
 import java.net.URI
+import java.util.stream.Collectors
 import scala.util.{ Failure, Success, Try }
 import scala.jdk.OptionConverters._
 
 object DynamoUtils {
   val log = LogManager.getLogger("com.scylladb.migrator.DynamoUtils")
+  private val RemoveConsumedCapacityConfig = "scylla.migrator.remove_consumed_capacity"
+
+  class RemoveConsumedCapacityInterceptor extends ExecutionInterceptor {
+    override def modifyRequest(ctx: Context.ModifyRequest, attrs: ExecutionAttributes): SdkRequest =
+      ctx.request() match {
+        case r: BatchWriteItemRequest =>
+          r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
+        case r: PutItemRequest =>
+          r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
+        case r: DeleteItemRequest =>
+          r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
+        case r: UpdateItemRequest =>
+          r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
+        case r: ScanRequest =>
+          r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
+        case r: QueryRequest =>
+          r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
+        case other => other
+      }
+  }
 
   def replicateTableDefinition(sourceDescription: TableDescription,
                                target: TargetSettings.DynamoDB): TableDescription = {
     // If non-existent, replicate
     val targetClient =
-      buildDynamoClient(target.endpoint, target.finalCredentials.map(_.toProvider), target.region)
+      buildDynamoClient(
+        target.endpoint,
+        target.finalCredentials.map(_.toProvider),
+        target.region,
+        if (target.removeConsumedCapacity.getOrElse(false))
+          Seq(new RemoveConsumedCapacityInterceptor)
+        else Nil
+      )
 
     log.info("Checking for table existence at destination")
     val describeTargetTableRequest =
@@ -52,25 +93,38 @@ object DynamoUtils {
         desc.table()
 
       case Failure(e: ResourceNotFoundException) =>
-        val request = CreateTableRequest
+        val requestBuilder = CreateTableRequest
           .builder()
           .tableName(target.table)
           .keySchema(sourceDescription.keySchema)
           .attributeDefinitions(sourceDescription.attributeDefinitions)
-        if (sourceDescription.provisionedThroughput.readCapacityUnits != 0L && sourceDescription.provisionedThroughput.writeCapacityUnits != 0) {
-          request
-            .provisionedThroughput(
+
+        target.billingMode match {
+          case Some(BillingMode.PROVISIONED)
+              if (sourceDescription.provisionedThroughput.readCapacityUnits == 0L ||
+                sourceDescription.provisionedThroughput.writeCapacityUnits == 0) =>
+            throw new RuntimeException(
+              "readCapacityUnits and writeCapacityUnits must be set for PROVISIONED billing mode")
+
+          case Some(BillingMode.PROVISIONED) | None
+              if (sourceDescription.provisionedThroughput.readCapacityUnits != 0L &&
+                sourceDescription.provisionedThroughput.writeCapacityUnits != 0) =>
+            log.info(
+              "BillingMode PROVISIONED will be used since writeCapacityUnits and readCapacityUnits are set")
+            requestBuilder.billingMode(BillingMode.PROVISIONED)
+            requestBuilder.provisionedThroughput(
               ProvisionedThroughput
                 .builder()
                 .readCapacityUnits(sourceDescription.provisionedThroughput.readCapacityUnits)
                 .writeCapacityUnits(sourceDescription.provisionedThroughput.writeCapacityUnits)
                 .build()
             )
-        } else {
-          request.billingMode(BillingMode.PAY_PER_REQUEST)
+
+          // billing mode = PAY_PER_REQUEST or empty ( for backward compatibility )
+          case _ => requestBuilder.billingMode(BillingMode.PAY_PER_REQUEST)
         }
         if (sourceDescription.hasLocalSecondaryIndexes) {
-          request.localSecondaryIndexes(
+          requestBuilder.localSecondaryIndexes(
             sourceDescription.localSecondaryIndexes.stream
               .map(
                 index =>
@@ -84,23 +138,25 @@ object DynamoUtils {
           )
         }
         if (sourceDescription.hasGlobalSecondaryIndexes) {
-          request.globalSecondaryIndexes(
+          requestBuilder.globalSecondaryIndexes(
             sourceDescription.globalSecondaryIndexes.stream
-              .map(
-                index =>
+              .map { index =>
+                val builder =
                   GlobalSecondaryIndex
                     .builder()
                     .indexName(index.indexName())
                     .keySchema(index.keySchema())
                     .projection(index.projection())
-                    .provisionedThroughput(
-                      ProvisionedThroughput
-                        .builder()
-                        .readCapacityUnits(index.provisionedThroughput.readCapacityUnits)
-                        .writeCapacityUnits(index.provisionedThroughput.writeCapacityUnits)
-                        .build()
-                    )
-                    .build())
+                if (target.billingMode.forall(_ == BillingMode.PROVISIONED))
+                  builder.provisionedThroughput(
+                    ProvisionedThroughput
+                      .builder()
+                      .readCapacityUnits(index.provisionedThroughput.readCapacityUnits)
+                      .writeCapacityUnits(index.provisionedThroughput.writeCapacityUnits)
+                      .build()
+                  )
+                builder.build()
+              }
               .collect(Collectors.toList[GlobalSecondaryIndex])
           )
         }
@@ -108,7 +164,7 @@ object DynamoUtils {
         log.info(
           s"Table ${target.table} does not exist at destination - creating it according to definition:")
         log.info(sourceDescription.toString)
-        targetClient.createTable(request.build())
+        targetClient.createTable(requestBuilder.build())
         log.info(s"Table ${target.table} created.")
 
         val waiterResponse =
@@ -128,7 +184,14 @@ object DynamoUtils {
 
   def enableDynamoStream(source: SourceSettings.DynamoDB): Unit = {
     val sourceClient =
-      buildDynamoClient(source.endpoint, source.finalCredentials.map(_.toProvider), source.region)
+      buildDynamoClient(
+        source.endpoint,
+        source.finalCredentials.map(_.toProvider),
+        source.region,
+        if (source.removeConsumedCapacity.getOrElse(false))
+          Seq(new RemoveConsumedCapacityInterceptor)
+        else Nil
+      )
     val sourceStreamsClient =
       buildDynamoStreamsClient(
         source.endpoint,
@@ -173,10 +236,14 @@ object DynamoUtils {
 
   def buildDynamoClient(endpoint: Option[DynamoDBEndpoint],
                         creds: Option[AwsCredentialsProvider],
-                        region: Option[String]): DynamoDbClient =
-    AwsUtils
-      .configureClientBuilder(DynamoDbClient.builder(), endpoint, region, creds)
-      .build()
+                        region: Option[String],
+                        interceptors: Seq[ExecutionInterceptor]): DynamoDbClient = {
+    val builder =
+      AwsUtils.configureClientBuilder(DynamoDbClient.builder(), endpoint, region, creds)
+    val conf = ClientOverrideConfiguration.builder()
+    interceptors.foreach(conf.addExecutionInterceptor)
+    builder.overrideConfiguration(conf.build()).build()
+  }
 
   def buildDynamoStreamsClient(endpoint: Option[DynamoDBEndpoint],
                                creds: Option[AwsCredentialsProvider],
@@ -212,7 +279,8 @@ object DynamoUtils {
                          maybeEndpoint: Option[DynamoDBEndpoint],
                          maybeScanSegments: Option[Int],
                          maybeMaxMapTasks: Option[Int],
-                         maybeAwsCredentials: Option[AWSCredentials]): Unit = {
+                         maybeAwsCredentials: Option[AWSCredentials],
+                         removeConsumedCapacity: Boolean = false): Unit = {
     for (region <- maybeRegion) {
       log.info(s"Using AWS region: ${region}")
       jobConf.set(DynamoDBConstants.REGION, region)
@@ -238,6 +306,8 @@ object DynamoUtils {
     jobConf.set(
       DynamoDBConstants.CUSTOM_CLIENT_BUILDER_TRANSFORMER,
       classOf[AlternatorLoadBalancingEnabler].getName)
+
+    jobConf.set(RemoveConsumedCapacityConfig, removeConsumedCapacity.toString)
 
     jobConf.set("mapred.output.format.class", classOf[DynamoDBOutputFormat].getName)
     jobConf.set("mapred.input.format.class", classOf[DynamoDBInputFormat].getName)
@@ -280,7 +350,10 @@ object DynamoUtils {
           new AlternatorEndpointProvider(URI.create(customEndpoint))
         )
       }
-      builder
+      val overrideConf = ClientOverrideConfiguration.builder()
+      if (conf.get(RemoveConsumedCapacityConfig, "false").toBoolean)
+        overrideConf.addExecutionInterceptor(new RemoveConsumedCapacityInterceptor)
+      builder.overrideConfiguration(overrideConf.build())
     }
 
     override def setConf(configuration: Configuration): Unit =
