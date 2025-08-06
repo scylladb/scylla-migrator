@@ -36,26 +36,35 @@ object DynamoDB {
       source.maxMapTasks,
       source.readThroughput,
       source.throughputReadPercent,
-      skipSegments
+      skipSegments,
+      source.removeConsumedCapacity.getOrElse(false)
     )
 
   /**
     * Overload of `readRDD` that does not depend on `SourceSettings.DynamoDB`
     */
-  def readRDD(
-    spark: SparkSession,
-    endpoint: Option[DynamoDBEndpoint],
-    credentials: Option[AWSCredentials],
-    region: Option[String],
-    table: String,
-    scanSegments: Option[Int],
-    maxMapTasks: Option[Int],
-    readThroughput: Option[Int],
-    throughputReadPercent: Option[Float],
-    skipSegments: Option[Set[Int]]): (RDD[(Text, DynamoDBItemWritable)], TableDescription) = {
+  def readRDD(spark: SparkSession,
+              endpoint: Option[DynamoDBEndpoint],
+              credentials: Option[AWSCredentials],
+              region: Option[String],
+              table: String,
+              scanSegments: Option[Int],
+              maxMapTasks: Option[Int],
+              readThroughput: Option[Int],
+              throughputReadPercent: Option[Float],
+              skipSegments: Option[Set[Int]],
+              removeConsumedCapacity: Boolean = false)
+    : (RDD[(Text, DynamoDBItemWritable)], TableDescription) = {
 
     val dynamoDbClient =
-      DynamoUtils.buildDynamoClient(endpoint, credentials.map(_.toProvider), region)
+      DynamoUtils.buildDynamoClient(
+        endpoint,
+        credentials.map(_.toProvider),
+        region,
+        if (removeConsumedCapacity)
+          Seq(new DynamoUtils.RemoveConsumedCapacityInterceptor)
+        else Nil
+      )
 
     val tableDescription =
       dynamoDbClient
@@ -82,7 +91,8 @@ object DynamoDB {
         throughputReadPercent,
         tableDescription,
         maybeTtlDescription,
-        skipSegments
+        skipSegments,
+        removeConsumedCapacity
       )
 
     val rdd =
@@ -106,7 +116,8 @@ object DynamoDB {
     throughputReadPercent: Option[Float],
     description: TableDescription,
     maybeTtlDescription: Option[TimeToLiveDescription],
-    skipSegments: Option[Set[Int]]
+    skipSegments: Option[Set[Int]],
+    removeConsumedCapacity: Boolean
   ): JobConf = {
     val maybeItemCount = Option(description.itemCount).map(_.toLong)
     val maybeAvgItemSize =
@@ -124,7 +135,8 @@ object DynamoDB {
       endpoint,
       scanSegments,
       maxMapTasks,
-      credentials
+      credentials,
+      removeConsumedCapacity
     )
     jobConf.set(DynamoDBConstants.INPUT_TABLE_NAME, table)
     setOptionalConf(jobConf, DynamoDBConstants.ITEM_COUNT, maybeItemCount.map(_.toString))

@@ -45,7 +45,8 @@ object AlternatorValidator {
       sourceSettings.maxMapTasks,
       sourceSettings.readThroughput,
       sourceSettings.throughputReadPercent,
-      skipSegments = None
+      skipSegments           = None,
+      removeConsumedCapacity = targetSettings.removeConsumedCapacity.getOrElse(false)
     )
 
     // Define some aliases to prevent the Spark engine to try to serialize the whole object graph
