@@ -50,7 +50,7 @@ import scala.jdk.OptionConverters._
 object DynamoUtils {
   val log = LogManager.getLogger("com.scylladb.migrator.DynamoUtils")
 
-  class ForceTotalConsumedCapacity extends ExecutionInterceptor {
+/*   class ForceTotalConsumedCapacity extends ExecutionInterceptor {
     override def modifyRequest(context: Context.ModifyRequest,
                                executionAttributes: ExecutionAttributes): SdkRequest =
       context.request() match {
@@ -68,7 +68,29 @@ object DynamoUtils {
           r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
         case other => other
       }
-  }
+  } */
+
+
+ class RemoveConsumedCapacityInterceptor extends ExecutionInterceptor {
+   override def modifyRequest(ctx: Context.ModifyRequest,
+                              attrs: ExecutionAttributes): SdkRequest = {
+     ctx.request() match {
+       case r: BatchWriteItemRequest =>
+         r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
+       case r: PutItemRequest =>
+         r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
+       case r: DeleteItemRequest =>
+         r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
+       case r: UpdateItemRequest =>
+         r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
+       case r: ScanRequest =>
+         r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
+       case r: QueryRequest =>
+         r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
+       case other => other
+     }
+   }
+ }
 
   def replicateTableDefinition(sourceDescription: TableDescription,
                                target: TargetSettings.DynamoDB): TableDescription = {
@@ -213,7 +235,7 @@ object DynamoUtils {
       .overrideConfiguration(
         ClientOverrideConfiguration
           .builder()
-          .addExecutionInterceptor(new ForceTotalConsumedCapacity)
+          .addExecutionInterceptor(new RemoveConsumedCapacityInterceptor)
           .build()
       )
       .build()
@@ -323,7 +345,7 @@ object DynamoUtils {
       builder.overrideConfiguration(
         ClientOverrideConfiguration
           .builder()
-          .addExecutionInterceptor(new ForceTotalConsumedCapacity)
+          .addExecutionInterceptor(new RemoveConsumedCapacityInterceptor)
           .build()
       )
     }

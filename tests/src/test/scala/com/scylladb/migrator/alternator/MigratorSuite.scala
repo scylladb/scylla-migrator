@@ -39,22 +39,22 @@ trait MigratorSuite extends munit.FunSuite {
     UpdateItemRequest
   }
 
-  class ForceTotalConsumedCapacity extends ExecutionInterceptor {
+  class RemoveConsumedCapacityInterceptor extends ExecutionInterceptor {
     override def modifyRequest(ctx: Context.ModifyRequest,
                                attrs: ExecutionAttributes): SdkRequest = {
       ctx.request() match {
         case r: BatchWriteItemRequest =>
-          r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
+          r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
         case r: PutItemRequest =>
-          r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
+          r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
         case r: DeleteItemRequest =>
-          r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
+          r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
         case r: UpdateItemRequest =>
-          r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
+          r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
         case r: ScanRequest =>
-          r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
+          r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
         case r: QueryRequest =>
-          r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
+          r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
         case other => other
       }
     }
@@ -80,7 +80,7 @@ trait MigratorSuite extends munit.FunSuite {
           .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("dummy", "dummy")))
           .overrideConfiguration(
             ClientOverrideConfiguration.builder()
-              .addExecutionInterceptor(new ForceTotalConsumedCapacity)
+              .addExecutionInterceptor(new RemoveConsumedCapacityInterceptor)
               .build()
           )
           .build()
