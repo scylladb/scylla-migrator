@@ -12,7 +12,11 @@ import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider
 import software.amazon.awssdk.services.dynamodb.{ DynamoDbClient, DynamoDbClientBuilder }
 import software.amazon.awssdk.core.SdkRequest
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
-import software.amazon.awssdk.core.interceptor.{Context, ExecutionAttributes, ExecutionInterceptor}
+import software.amazon.awssdk.core.interceptor.{
+  Context,
+  ExecutionAttributes,
+  ExecutionInterceptor
+}
 import software.amazon.awssdk.services.dynamodb.model.{
   BatchWriteItemRequest,
   BillingMode,
@@ -40,16 +44,15 @@ import software.amazon.awssdk.services.dynamodb.streams.DynamoDbStreamsClient
 
 import java.net.URI
 import java.util.stream.Collectors
-import scala.util.{Failure, Success, Try}
+import scala.util.{ Failure, Success, Try }
 import scala.jdk.OptionConverters._
 
 object DynamoUtils {
   val log = LogManager.getLogger("com.scylladb.migrator.DynamoUtils")
 
   class ForceTotalConsumedCapacity extends ExecutionInterceptor {
-    override def modifyRequest(
-      context: Context.ModifyRequest,
-      executionAttributes: ExecutionAttributes): SdkRequest = {
+    override def modifyRequest(context: Context.ModifyRequest,
+                               executionAttributes: ExecutionAttributes): SdkRequest =
       context.request() match {
         case r: BatchWriteItemRequest =>
           r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
@@ -65,7 +68,6 @@ object DynamoUtils {
           r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
         case other => other
       }
-    }
   }
 
   def replicateTableDefinition(sourceDescription: TableDescription,
@@ -209,7 +211,10 @@ object DynamoUtils {
     AwsUtils
       .configureClientBuilder(DynamoDbClient.builder(), endpoint, region, creds)
       .overrideConfiguration(
-        ClientOverrideConfiguration.builder().addExecutionInterceptor(new ForceTotalConsumedCapacity).build()
+        ClientOverrideConfiguration
+          .builder()
+          .addExecutionInterceptor(new ForceTotalConsumedCapacity)
+          .build()
       )
       .build()
 
@@ -315,7 +320,12 @@ object DynamoUtils {
           new AlternatorEndpointProvider(URI.create(customEndpoint))
         )
       }
-      builder
+      builder.overrideConfiguration(
+        ClientOverrideConfiguration
+          .builder()
+          .addExecutionInterceptor(new ForceTotalConsumedCapacity)
+          .build()
+      )
     }
 
     override def setConf(configuration: Configuration): Unit =
