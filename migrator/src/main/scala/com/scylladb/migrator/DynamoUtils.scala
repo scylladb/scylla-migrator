@@ -10,31 +10,63 @@ import org.apache.hadoop.mapred.JobConf
 import org.apache.log4j.LogManager
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider
 import software.amazon.awssdk.services.dynamodb.{ DynamoDbClient, DynamoDbClientBuilder }
+import software.amazon.awssdk.core.SdkRequest
+import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
+import software.amazon.awssdk.core.interceptor.{Context, ExecutionAttributes, ExecutionInterceptor}
 import software.amazon.awssdk.services.dynamodb.model.{
+  BatchWriteItemRequest,
   BillingMode,
   CreateTableRequest,
+  DeleteItemRequest,
   DescribeStreamRequest,
   DescribeTableRequest,
   GlobalSecondaryIndex,
   LocalSecondaryIndex,
   ProvisionedThroughput,
   ProvisionedThroughputDescription,
+  PutItemRequest,
+  QueryRequest,
   ResourceNotFoundException,
+  ReturnConsumedCapacity,
+  ScanRequest,
   StreamSpecification,
   StreamStatus,
   StreamViewType,
   TableDescription,
+  UpdateItemRequest,
   UpdateTableRequest
 }
 import software.amazon.awssdk.services.dynamodb.streams.DynamoDbStreamsClient
 
-import java.util.stream.Collectors
 import java.net.URI
-import scala.util.{ Failure, Success, Try }
+import java.util.stream.Collectors
+import scala.util.{Failure, Success, Try}
 import scala.jdk.OptionConverters._
 
 object DynamoUtils {
   val log = LogManager.getLogger("com.scylladb.migrator.DynamoUtils")
+
+  class ForceTotalConsumedCapacity extends ExecutionInterceptor {
+    override def modifyRequest(
+      context: Context.ModifyRequest,
+      executionAttributes: ExecutionAttributes): SdkRequest = {
+      context.request() match {
+        case r: BatchWriteItemRequest =>
+          r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
+        case r: PutItemRequest =>
+          r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
+        case r: DeleteItemRequest =>
+          r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
+        case r: UpdateItemRequest =>
+          r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
+        case r: ScanRequest =>
+          r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
+        case r: QueryRequest =>
+          r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
+        case other => other
+      }
+    }
+  }
 
   def replicateTableDefinition(sourceDescription: TableDescription,
                                target: TargetSettings.DynamoDB): TableDescription = {
@@ -176,6 +208,9 @@ object DynamoUtils {
                         region: Option[String]): DynamoDbClient =
     AwsUtils
       .configureClientBuilder(DynamoDbClient.builder(), endpoint, region, creds)
+      .overrideConfiguration(
+        ClientOverrideConfiguration.builder().addExecutionInterceptor(new ForceTotalConsumedCapacity).build()
+      )
       .build()
 
   def buildDynamoStreamsClient(endpoint: Option[DynamoDBEndpoint],

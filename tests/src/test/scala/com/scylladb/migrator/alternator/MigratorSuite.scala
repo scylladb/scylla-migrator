@@ -29,13 +29,31 @@ trait MigratorSuite extends munit.FunSuite {
   import software.amazon.awssdk.core.interceptor.{Context, ExecutionAttributes, ExecutionInterceptor}
   import software.amazon.awssdk.regions.Region
   import software.amazon.awssdk.services.dynamodb.{DynamoDbClient, DynamoDbClientBuilder}
-  import software.amazon.awssdk.services.dynamodb.model.{BatchWriteItemRequest, ReturnConsumedCapacity}
+  import software.amazon.awssdk.services.dynamodb.model.{
+    BatchWriteItemRequest,
+    DeleteItemRequest,
+    PutItemRequest,
+    QueryRequest,
+    ReturnConsumedCapacity,
+    ScanRequest,
+    UpdateItemRequest
+  }
 
   class ForceTotalConsumedCapacity extends ExecutionInterceptor {
     override def modifyRequest(ctx: Context.ModifyRequest,
                                attrs: ExecutionAttributes): SdkRequest = {
       ctx.request() match {
         case r: BatchWriteItemRequest =>
+          r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
+        case r: PutItemRequest =>
+          r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
+        case r: DeleteItemRequest =>
+          r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
+        case r: UpdateItemRequest =>
+          r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
+        case r: ScanRequest =>
+          r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
+        case r: QueryRequest =>
           r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
         case other => other
       }
