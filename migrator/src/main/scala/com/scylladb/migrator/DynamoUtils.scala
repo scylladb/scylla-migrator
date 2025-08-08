@@ -235,7 +235,7 @@ object DynamoUtils {
       .overrideConfiguration(
         ClientOverrideConfiguration
           .builder()
-          .addExecutionInterceptor(new RemoveConsumedCapacityInterceptor)
+          //.addExecutionInterceptor(new RemoveConsumedCapacityInterceptor)
           .build()
       )
       .build()
