@@ -15,6 +15,7 @@ target:
     secretKey: dummy
   streamChanges: true
   skipInitialSnapshotTransfer: true
+  removeConsumedCapacity: true
 
 savepoints:
   path: /app/savepoints

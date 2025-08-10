@@ -29,7 +29,8 @@ object TargetSettings {
                       writeThroughput: Option[Int],
                       throughputWritePercent: Option[Float],
                       streamChanges: Boolean,
-                      skipInitialSnapshotTransfer: Option[Boolean])
+                      skipInitialSnapshotTransfer: Option[Boolean],
+                      removeConsumedCapacity: Boolean = false)
       extends TargetSettings {
     lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
       AwsUtils.computeFinalCredentials(credentials, endpoint, region)

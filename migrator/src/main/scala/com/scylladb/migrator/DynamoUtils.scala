@@ -49,6 +49,7 @@ import scala.jdk.OptionConverters._
 
 object DynamoUtils {
   val log = LogManager.getLogger("com.scylladb.migrator.DynamoUtils")
+  private val RemoveConsumedCapacityConfig = "scylla.migrator.remove_consumed_capacity"
 
 /*   class ForceTotalConsumedCapacity extends ExecutionInterceptor {
     override def modifyRequest(context: Context.ModifyRequest,
@@ -96,7 +97,14 @@ object DynamoUtils {
                                target: TargetSettings.DynamoDB): TableDescription = {
     // If non-existent, replicate
     val targetClient =
-      buildDynamoClient(target.endpoint, target.finalCredentials.map(_.toProvider), target.region)
+      buildDynamoClient(
+        target.endpoint,
+        target.finalCredentials.map(_.toProvider),
+        target.region,
+        if (target.removeConsumedCapacity)
+          Seq(new RemoveConsumedCapacityInterceptor)
+        else Nil
+      )
 
     log.info("Checking for table existence at destination")
     val describeTargetTableRequest =
@@ -184,7 +192,14 @@ object DynamoUtils {
 
   def enableDynamoStream(source: SourceSettings.DynamoDB): Unit = {
     val sourceClient =
-      buildDynamoClient(source.endpoint, source.finalCredentials.map(_.toProvider), source.region)
+      buildDynamoClient(
+        source.endpoint,
+        source.finalCredentials.map(_.toProvider),
+        source.region,
+        if (source.removeConsumedCapacity)
+          Seq(new RemoveConsumedCapacityInterceptor)
+        else Nil
+      )
     val sourceStreamsClient =
       buildDynamoStreamsClient(
         source.endpoint,
@@ -229,16 +244,14 @@ object DynamoUtils {
 
   def buildDynamoClient(endpoint: Option[DynamoDBEndpoint],
                         creds: Option[AwsCredentialsProvider],
-                        region: Option[String]): DynamoDbClient =
-    AwsUtils
-      .configureClientBuilder(DynamoDbClient.builder(), endpoint, region, creds)
-      .overrideConfiguration(
-        ClientOverrideConfiguration
-          .builder()
-          //.addExecutionInterceptor(new RemoveConsumedCapacityInterceptor)
-          .build()
-      )
-      .build()
+                        region: Option[String],
+                        interceptors: Seq[ExecutionInterceptor] = Nil): DynamoDbClient = {
+    val builder =
+      AwsUtils.configureClientBuilder(DynamoDbClient.builder(), endpoint, region, creds)
+    val conf = ClientOverrideConfiguration.builder()
+    interceptors.foreach(conf.addExecutionInterceptor)
+    builder.overrideConfiguration(conf.build()).build()
+  }
 
   def buildDynamoStreamsClient(endpoint: Option[DynamoDBEndpoint],
                                creds: Option[AwsCredentialsProvider],
@@ -274,7 +287,8 @@ object DynamoUtils {
                          maybeEndpoint: Option[DynamoDBEndpoint],
                          maybeScanSegments: Option[Int],
                          maybeMaxMapTasks: Option[Int],
-                         maybeAwsCredentials: Option[AWSCredentials]): Unit = {
+                         maybeAwsCredentials: Option[AWSCredentials],
+                         removeConsumedCapacity: Boolean = false): Unit = {
     for (region <- maybeRegion) {
       log.info(s"Using AWS region: ${region}")
       jobConf.set(DynamoDBConstants.REGION, region)
@@ -300,6 +314,8 @@ object DynamoUtils {
     jobConf.set(
       DynamoDBConstants.CUSTOM_CLIENT_BUILDER_TRANSFORMER,
       classOf[AlternatorLoadBalancingEnabler].getName)
+
+    jobConf.set(RemoveConsumedCapacityConfig, removeConsumedCapacity.toString)
 
     jobConf.set("mapred.output.format.class", classOf[DynamoDBOutputFormat].getName)
     jobConf.set("mapred.input.format.class", classOf[DynamoDBInputFormat].getName)
@@ -342,12 +358,10 @@ object DynamoUtils {
           new AlternatorEndpointProvider(URI.create(customEndpoint))
         )
       }
-      builder.overrideConfiguration(
-        ClientOverrideConfiguration
-          .builder()
-          //.addExecutionInterceptor(new RemoveConsumedCapacityInterceptor) //
-          .build()
-      )
+      val overrideConf = ClientOverrideConfiguration.builder()
+      if (conf.get(RemoveConsumedCapacityConfig, "false").toBoolean)
+        overrideConf.addExecutionInterceptor(new RemoveConsumedCapacityInterceptor)
+      builder.overrideConfiguration(overrideConf.build())
     }
 
     override def setConf(configuration: Configuration): Unit =

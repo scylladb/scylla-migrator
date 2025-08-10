@@ -21,69 +21,24 @@ import scala.sys.process.stringToProcess
   *
   */
 trait MigratorSuite extends munit.FunSuite {
-
-  import java.net.URI
-  import software.amazon.awssdk.auth.credentials.{AwsBasicCredentials, StaticCredentialsProvider}
-  import software.amazon.awssdk.core.SdkRequest
-  import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
-  import software.amazon.awssdk.core.interceptor.{Context, ExecutionAttributes, ExecutionInterceptor}
-  import software.amazon.awssdk.regions.Region
-  import software.amazon.awssdk.services.dynamodb.{DynamoDbClient, DynamoDbClientBuilder}
-  import software.amazon.awssdk.services.dynamodb.model.{
-    BatchWriteItemRequest,
-    DeleteItemRequest,
-    PutItemRequest,
-    QueryRequest,
-    ReturnConsumedCapacity,
-    ScanRequest,
-    UpdateItemRequest
-  }
-
-  class RemoveConsumedCapacityInterceptor extends ExecutionInterceptor {
-    override def modifyRequest(ctx: Context.ModifyRequest,
-                               attrs: ExecutionAttributes): SdkRequest = {
-      ctx.request() match {
-        case r: BatchWriteItemRequest =>
-          r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
-        case r: PutItemRequest =>
-          r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
-        case r: DeleteItemRequest =>
-          r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
-        case r: UpdateItemRequest =>
-          r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
-        case r: ScanRequest =>
-          r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
-        case r: QueryRequest =>
-          r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
-        case other => other
-      }
-    }
-  }
+  import com.scylladb.migrator.DynamoUtils
+  import com.scylladb.migrator.config.DynamoDBEndpoint
 
   /** Client of a source DynamoDB instance */
   def sourceDDb: Fixture[DynamoDbClient]
 
   /** Client of a target Alternator instance */
   val targetAlternator: Fixture[DynamoDbClient] = new Fixture[DynamoDbClient]("targetAlternator") {
-    import org.apache.hadoop.conf.Configuration
-    import org.apache.hadoop.dynamodb.{DynamoDBClient, DynamoDBConstants}
-
-
     private var client: DynamoDbClient = null
     def apply(): DynamoDbClient = client
     override def beforeAll(): Unit = {
       client =
-        DynamoDbClient
-          .builder()
-          .region(Region.of("dummy"))
-          .endpointOverride(new URI("http://localhost:8000"))
-          .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("dummy", "dummy")))
-          .overrideConfiguration(
-            ClientOverrideConfiguration.builder()
-              .addExecutionInterceptor(new RemoveConsumedCapacityInterceptor)
-              .build()
-          )
-          .build()
+        DynamoUtils.buildDynamoClient(
+          endpoint = Some(DynamoDBEndpoint("http://localhost", 8000)),
+          creds = Some(StaticCredentialsProvider.create(AwsBasicCredentials.create("dummy", "dummy"))),
+          region = Some("dummy"),
+          interceptors = Seq(new DynamoUtils.RemoveConsumedCapacityInterceptor)
+        )
     }
     override def afterAll(): Unit = client.close()
   }

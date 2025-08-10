@@ -20,6 +20,7 @@ target:
     accessKey: dummy
     secretKey: dummy
   streamChanges: false
+  removeConsumedCapacity: true
 
 savepoints:
   path: /app/savepoints

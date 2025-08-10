@@ -33,7 +33,10 @@ object DynamoDB {
         val dynamoDB = DynamoUtils.buildDynamoClient(
           target.endpoint,
           target.finalCredentials.map(_.toProvider),
-          target.region
+          target.region,
+          if (target.removeConsumedCapacity)
+            Seq(new DynamoUtils.RemoveConsumedCapacityInterceptor)
+          else Nil
         )
 
         try {
@@ -85,7 +88,8 @@ object DynamoDB {
       target.endpoint,
       maybeScanSegments = None,
       maybeMaxMapTasks  = None,
-      target.finalCredentials)
+      target.finalCredentials,
+      target.removeConsumedCapacity)
     jobConf.set(DynamoDBConstants.OUTPUT_TABLE_NAME, target.table)
     val writeThroughput =
       target.writeThroughput match {
