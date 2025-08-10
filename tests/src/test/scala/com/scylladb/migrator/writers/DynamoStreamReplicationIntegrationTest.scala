@@ -33,12 +33,18 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
   withTable(tableName).test("should correctly apply UPSERT and DELETE operations from a stream") { _ =>
     sourceDDb().putItem(
       PutItemRequest
-      .builder()
-      .tableName(tableName)
-      .item(Map("key" -> AttributeValue.builder.s("toDelete").build, "value" -> AttributeValue.builder.s("value1").build).asJava)
-      .item(Map("key" -> AttributeValue.builder.s("toUpdate").build, "value" -> AttributeValue.builder.s("value2").build).asJava)
-      .build()
-      )
+        .builder()
+        .tableName(tableName)
+        .item(Map("key" -> AttributeValue.builder.s("toDelete").build, "value" -> AttributeValue.builder.s("value1").build).asJava)
+        .build()
+    )
+    sourceDDb().putItem(
+      PutItemRequest
+        .builder()
+        .tableName(tableName)
+        .item(Map("key" -> AttributeValue.builder.s("toUpdate").build, "value" -> AttributeValue.builder.s("value2").build).asJava)
+        .build()
+    )
 
     val streamEvents = Seq(
       Some(Map(
