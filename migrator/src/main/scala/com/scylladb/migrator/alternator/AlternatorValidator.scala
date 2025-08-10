@@ -46,7 +46,7 @@ object AlternatorValidator {
       sourceSettings.readThroughput,
       sourceSettings.throughputReadPercent,
       skipSegments = None,
-      removeConsumedCapacity = targetSettings.removeConsumedCapacity
+      removeConsumedCapacity = targetSettings.removeConsumedCapacity.getOrElse(false)
     )
 
     // Define some aliases to prevent the Spark engine to try to serialize the whole object graph

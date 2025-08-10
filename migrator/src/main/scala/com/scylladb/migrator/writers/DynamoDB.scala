@@ -34,7 +34,7 @@ object DynamoDB {
           target.endpoint,
           target.finalCredentials.map(_.toProvider),
           target.region,
-          if (target.removeConsumedCapacity)
+          if (target.removeConsumedCapacity.getOrElse(false))
             Seq(new DynamoUtils.RemoveConsumedCapacityInterceptor)
           else Nil
         )
@@ -89,7 +89,7 @@ object DynamoDB {
       maybeScanSegments = None,
       maybeMaxMapTasks  = None,
       target.finalCredentials,
-      target.removeConsumedCapacity)
+      target.removeConsumedCapacity.getOrElse(false))
     jobConf.set(DynamoDBConstants.OUTPUT_TABLE_NAME, target.table)
     val writeThroughput =
       target.writeThroughput match {

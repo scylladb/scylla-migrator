@@ -37,7 +37,7 @@ object DynamoDB {
       source.readThroughput,
       source.throughputReadPercent,
       skipSegments,
-      source.removeConsumedCapacity
+      source.removeConsumedCapacity.getOrElse(false)
     )
 
   /**
