@@ -39,7 +39,7 @@ object SourceSettings {
                       readThroughput: Option[Int],
                       throughputReadPercent: Option[Float],
                       maxMapTasks: Option[Int],
-                      removeConsumedCapacity: Option[Boolean])
+                      removeConsumedCapacity: Option[Boolean] = None)
       extends SourceSettings {
     lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
       AwsUtils.computeFinalCredentials(credentials, endpoint, region)
