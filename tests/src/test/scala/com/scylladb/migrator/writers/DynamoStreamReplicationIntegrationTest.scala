@@ -35,29 +35,29 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
       PutItemRequest
         .builder()
         .tableName(tableName)
-        .item(Map("key" -> AttributeValue.builder.s("toDelete").build, "value" -> AttributeValue.builder.s("value1").build).asJava)
+        .item(Map("id" -> AttributeValue.builder.s("toDelete").build, "value" -> AttributeValue.builder.s("value1").build).asJava)
         .build()
     )
     sourceDDb().putItem(
       PutItemRequest
         .builder()
         .tableName(tableName)
-        .item(Map("key" -> AttributeValue.builder.s("toUpdate").build, "value" -> AttributeValue.builder.s("value2").build).asJava)
+        .item(Map("id" -> AttributeValue.builder.s("toUpdate").build, "value" -> AttributeValue.builder.s("value2").build).asJava)
         .build()
     )
 
     val streamEvents = Seq(
       Some(Map(
-        "key" -> new AttributeValueV1().withS("toDelete"),
+        "id" -> new AttributeValueV1().withS("toDelete"),
         operationTypeColumn -> deleteOperation
       ).asJava),
       Some(Map(
-        "key" -> new AttributeValueV1().withS("toUpdate"),
+        "id" -> new AttributeValueV1().withS("toUpdate"),
         "value" -> new AttributeValueV1().withS("value2-updated"),
         operationTypeColumn -> putOperation
       ).asJava),
       Some(Map(
-        "key" -> new AttributeValueV1().withS("toInsert"),
+        "id" -> new AttributeValueV1().withS("toInsert"),
         "value" -> new AttributeValueV1().withS("value3"),
         operationTypeColumn -> putOperation
       ).asJava)
@@ -92,18 +92,18 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
       DynamoDB
     )
 
-    val finalItems = scanAll(sourceDDb(), tableName).sortBy(m => m("key").s)
+    val finalItems = scanAll(sourceDDb(), tableName).sortBy(m => m("id").s)
 
     assertEquals(finalItems.size, 2)
 
-    assert(!finalItems.exists(_("key").s == "toDelete"))
+    assert(!finalItems.exists(_("id").s == "toDelete"))
 
 
-    val key2Item = finalItems.find(_("key").s == "toUpdate").get
+    val key2Item = finalItems.find(_("id").s == "toUpdate").get
     assertEquals(key2Item("value").s, "value2-updated")
 
 
-    val key3Item = finalItems.find(_("key").s == "toInsert").get
+    val key3Item = finalItems.find(_("id").s == "toInsert").get
     assertEquals(key3Item("value").s, "value3")
 
 
