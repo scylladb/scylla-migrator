@@ -2,7 +2,7 @@ package com.scylladb.migrator.writers
 
 import com.amazonaws.services.dynamodbv2.model.{AttributeValue => AttributeValueV1}
 import com.scylladb.migrator.AttributeValueUtils
-import com.scylladb.migrator.config.{DynamoDBEndpoint, TargetSettings}
+import com.scylladb.migrator.config.{AWSCredentials, DynamoDBEndpoint, TargetSettings}
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
@@ -70,7 +70,7 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
       table = tableName,
       region = Some("eu-central-1"),
       endpoint = Some(DynamoDBEndpoint("http://localhost", 8001)),
-      credentials = None,
+      credentials = Some(AWSCredentials.Basic("dummy", "dummy")),
       streamChanges = false,
       skipInitialSnapshotTransfer = Some(true),
       writeThroughput = None,
