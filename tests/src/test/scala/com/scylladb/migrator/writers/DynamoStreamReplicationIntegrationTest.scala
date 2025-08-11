@@ -69,7 +69,7 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
     val targetSettings = TargetSettings.DynamoDB(
       table = tableName,
       region = Some("eu-central-1"),
-      endpoint = Some(DynamoDBEndpoint("localhost", 8001)),
+      endpoint = Some(DynamoDBEndpoint("http://localhost", 8001)),
       credentials = None,
       streamChanges = false,
       skipInitialSnapshotTransfer = Some(true),
