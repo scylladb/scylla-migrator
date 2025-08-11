@@ -70,7 +70,7 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
       table = tableName,
       region = Some("eu-central-1"),
       endpoint = Some(DynamoDBEndpoint("http://localhost", 8001)),
-      credentials = Some(AWSCredentials.Basic("dummy", "dummy")),
+      credentials = Some(AWSCredentials("dummy", "dummy", None)),
       streamChanges = false,
       skipInitialSnapshotTransfer = Some(true),
       writeThroughput = None,
