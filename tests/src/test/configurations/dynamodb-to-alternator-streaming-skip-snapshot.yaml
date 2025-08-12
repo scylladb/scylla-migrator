@@ -16,6 +16,7 @@ target:
   streamChanges: true
   skipInitialSnapshotTransfer: true
   removeConsumedCapacity: true
+  billingMode: PAY_PER_REQUEST
 
 savepoints:
   path: /app/savepoints

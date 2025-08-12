@@ -51,7 +51,7 @@ object DynamoUtils {
   val log = LogManager.getLogger("com.scylladb.migrator.DynamoUtils")
   private val RemoveConsumedCapacityConfig = "scylla.migrator.remove_consumed_capacity"
 
-/*   class ForceTotalConsumedCapacity extends ExecutionInterceptor {
+  /*   class ForceTotalConsumedCapacity extends ExecutionInterceptor {
     override def modifyRequest(context: Context.ModifyRequest,
                                executionAttributes: ExecutionAttributes): SdkRequest =
       context.request() match {
@@ -71,27 +71,24 @@ object DynamoUtils {
       }
   } */
 
-
- class RemoveConsumedCapacityInterceptor extends ExecutionInterceptor {
-   override def modifyRequest(ctx: Context.ModifyRequest,
-                              attrs: ExecutionAttributes): SdkRequest = {
-     ctx.request() match {
-       case r: BatchWriteItemRequest =>
-         r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
-       case r: PutItemRequest =>
-         r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
-       case r: DeleteItemRequest =>
-         r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
-       case r: UpdateItemRequest =>
-         r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
-       case r: ScanRequest =>
-         r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
-       case r: QueryRequest =>
-         r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
-       case other => other
-     }
-   }
- }
+  class RemoveConsumedCapacityInterceptor extends ExecutionInterceptor {
+    override def modifyRequest(ctx: Context.ModifyRequest, attrs: ExecutionAttributes): SdkRequest =
+      ctx.request() match {
+        case r: BatchWriteItemRequest =>
+          r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
+        case r: PutItemRequest =>
+          r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
+        case r: DeleteItemRequest =>
+          r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
+        case r: UpdateItemRequest =>
+          r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
+        case r: ScanRequest =>
+          r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
+        case r: QueryRequest =>
+          r.toBuilder.returnConsumedCapacity(null: ReturnConsumedCapacity).build()
+        case other => other
+      }
+  }
 
   def replicateTableDefinition(sourceDescription: TableDescription,
                                target: TargetSettings.DynamoDB): TableDescription = {
@@ -116,25 +113,42 @@ object DynamoUtils {
         desc.table()
 
       case Failure(e: ResourceNotFoundException) =>
-        val request = CreateTableRequest
+        val requestBuilder = CreateTableRequest
           .builder()
           .tableName(target.table)
           .keySchema(sourceDescription.keySchema)
           .attributeDefinitions(sourceDescription.attributeDefinitions)
-        if (sourceDescription.provisionedThroughput.readCapacityUnits != 0L && sourceDescription.provisionedThroughput.writeCapacityUnits != 0) {
-          request
-            .provisionedThroughput(
+
+        target.billingMode match {
+          case Some(BillingMode.PAY_PER_REQUEST) =>
+            requestBuilder.billingMode(BillingMode.PAY_PER_REQUEST)
+
+          case Some(BillingMode.PROVISIONED) =>
+            requestBuilder.billingMode(BillingMode.PROVISIONED)
+            requestBuilder.provisionedThroughput(
               ProvisionedThroughput
                 .builder()
                 .readCapacityUnits(sourceDescription.provisionedThroughput.readCapacityUnits)
                 .writeCapacityUnits(sourceDescription.provisionedThroughput.writeCapacityUnits)
                 .build()
             )
-        } else {
-          request.billingMode(BillingMode.PAY_PER_REQUEST)
+
+          case None =>
+            if (sourceDescription.provisionedThroughput.readCapacityUnits != 0L &&
+                sourceDescription.provisionedThroughput.writeCapacityUnits != 0) {
+              requestBuilder.provisionedThroughput(
+                ProvisionedThroughput
+                  .builder()
+                  .readCapacityUnits(sourceDescription.provisionedThroughput.readCapacityUnits)
+                  .writeCapacityUnits(sourceDescription.provisionedThroughput.writeCapacityUnits)
+                  .build()
+              )
+            } else {
+              requestBuilder.billingMode(BillingMode.PAY_PER_REQUEST)
+            }
         }
         if (sourceDescription.hasLocalSecondaryIndexes) {
-          request.localSecondaryIndexes(
+          requestBuilder.localSecondaryIndexes(
             sourceDescription.localSecondaryIndexes.stream
               .map(
                 index =>
@@ -148,23 +162,25 @@ object DynamoUtils {
           )
         }
         if (sourceDescription.hasGlobalSecondaryIndexes) {
-          request.globalSecondaryIndexes(
+          requestBuilder.globalSecondaryIndexes(
             sourceDescription.globalSecondaryIndexes.stream
-              .map(
-                index =>
+              .map { index =>
+                val builder =
                   GlobalSecondaryIndex
                     .builder()
                     .indexName(index.indexName())
                     .keySchema(index.keySchema())
                     .projection(index.projection())
-                    .provisionedThroughput(
-                      ProvisionedThroughput
-                        .builder()
-                        .readCapacityUnits(index.provisionedThroughput.readCapacityUnits)
-                        .writeCapacityUnits(index.provisionedThroughput.writeCapacityUnits)
-                        .build()
-                    )
-                    .build())
+                if (target.billingMode.forall(_ == BillingMode.PROVISIONED))
+                  builder.provisionedThroughput(
+                    ProvisionedThroughput
+                      .builder()
+                      .readCapacityUnits(index.provisionedThroughput.readCapacityUnits)
+                      .writeCapacityUnits(index.provisionedThroughput.writeCapacityUnits)
+                      .build()
+                  )
+                builder.build()
+              }
               .collect(Collectors.toList[GlobalSecondaryIndex])
           )
         }
@@ -172,7 +188,7 @@ object DynamoUtils {
         log.info(
           s"Table ${target.table} does not exist at destination - creating it according to definition:")
         log.info(sourceDescription.toString)
-        targetClient.createTable(request.build())
+        targetClient.createTable(requestBuilder.build())
         log.info(s"Table ${target.table} created.")
 
         val waiterResponse =

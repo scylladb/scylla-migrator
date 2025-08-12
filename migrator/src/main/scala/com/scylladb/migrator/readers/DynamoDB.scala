@@ -43,18 +43,18 @@ object DynamoDB {
   /**
     * Overload of `readRDD` that does not depend on `SourceSettings.DynamoDB`
     */
-  def readRDD(
-    spark: SparkSession,
-    endpoint: Option[DynamoDBEndpoint],
-    credentials: Option[AWSCredentials],
-    region: Option[String],
-    table: String,
-    scanSegments: Option[Int],
-    maxMapTasks: Option[Int],
-    readThroughput: Option[Int],
-    throughputReadPercent: Option[Float],
-    skipSegments: Option[Set[Int]],
-    removeConsumedCapacity: Boolean = false): (RDD[(Text, DynamoDBItemWritable)], TableDescription) = {
+  def readRDD(spark: SparkSession,
+              endpoint: Option[DynamoDBEndpoint],
+              credentials: Option[AWSCredentials],
+              region: Option[String],
+              table: String,
+              scanSegments: Option[Int],
+              maxMapTasks: Option[Int],
+              readThroughput: Option[Int],
+              throughputReadPercent: Option[Float],
+              skipSegments: Option[Set[Int]],
+              removeConsumedCapacity: Boolean = false)
+    : (RDD[(Text, DynamoDBItemWritable)], TableDescription) = {
 
     val dynamoDbClient =
       DynamoUtils.buildDynamoClient(

@@ -17,6 +17,7 @@ source:
     keySchema:
       - name: id
         type: HASH
+    billingMode: PAY_PER_REQUEST
 
 target:
   type: dynamodb
@@ -30,6 +31,7 @@ target:
     secretKey: dummy
   streamChanges: false
   removeConsumedCapacity: true
+  billingMode: PAY_PER_REQUEST
 
 # Below are unused but mandatory settings
 savepoints:

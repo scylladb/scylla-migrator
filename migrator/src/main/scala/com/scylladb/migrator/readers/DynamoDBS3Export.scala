@@ -13,6 +13,8 @@ import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.services.dynamodb.model.{
   AttributeDefinition,
   AttributeValue,
+  BillingMode,
+  BillingModeSummary,
   KeySchemaElement,
   ProvisionedThroughputDescription,
   ScalarAttributeType,
@@ -165,6 +167,11 @@ object DynamoDBS3Export {
           ): _*
         )
         .provisionedThroughput(ProvisionedThroughputDescription.builder().build())
+        .billingModeSummary(
+          BillingModeSummary
+            .builder()
+            .billingMode(source.tableDescription.billingMode.getOrElse(BillingMode.PAY_PER_REQUEST))
+            .build())
         .build()
 
     (rdd, tableDescription)

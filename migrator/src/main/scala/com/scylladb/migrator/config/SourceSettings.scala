@@ -5,6 +5,7 @@ import com.scylladb.migrator.AwsUtils
 import io.circe.syntax._
 import io.circe.{ Decoder, DecodingFailure, Encoder, Json }
 import io.circe.generic.semiauto.{ deriveDecoder, deriveEncoder }
+import software.amazon.awssdk.services.dynamodb.model.BillingMode
 
 case class DynamoDBEndpoint(host: String, port: Int) {
   def renderEndpoint = s"${host}:${port}"
@@ -67,12 +68,22 @@ object SourceSettings {
 
   object DynamoDBS3Export {
 
+    implicit val billingModeDecoder: Decoder[BillingMode] =
+      Decoder.decodeString.emap {
+        case "PROVISIONED"     => Right(BillingMode.PROVISIONED)
+        case "PAY_PER_REQUEST" => Right(BillingMode.PAY_PER_REQUEST)
+        case other              => Left(s"Invalid billing mode: ${other}")
+      }
+    implicit val billingModeEncoder: Encoder[BillingMode] =
+      Encoder.encodeString.contramap(_.toString)
+
     /** Model the required fields of the “TableCreationParameters” object from the AWS API.
       * @see https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_TableCreationParameters.html
       */
     case class TableDescription(
       attributeDefinitions: Seq[AttributeDefinition],
-      keySchema: Seq[KeySchema]
+      keySchema: Seq[KeySchema],
+      billingMode: Option[BillingMode] = None
     )
 
     object TableDescription {

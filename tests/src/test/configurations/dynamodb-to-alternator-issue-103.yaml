@@ -24,6 +24,7 @@ target:
   maxMapTasks: 1
   streamChanges: false
   removeConsumedCapacity: true
+  billingMode: PAY_PER_REQUEST
 
 # Below are unused but mandatory settings
 savepoints:

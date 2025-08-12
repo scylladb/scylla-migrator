@@ -15,6 +15,7 @@ target:
     secretKey: dummy
   streamChanges: true
   removeConsumedCapacity: true
+  billingMode: PAY_PER_REQUEST
 
 savepoints:
   path: /app/savepoints
