@@ -68,15 +68,6 @@ object SourceSettings {
 
   object DynamoDBS3Export {
 
-    implicit val billingModeDecoder: Decoder[BillingMode] =
-      Decoder.decodeString.emap {
-        case "PROVISIONED"     => Right(BillingMode.PROVISIONED)
-        case "PAY_PER_REQUEST" => Right(BillingMode.PAY_PER_REQUEST)
-        case other              => Left(s"Invalid billing mode: ${other}")
-      }
-    implicit val billingModeEncoder: Encoder[BillingMode] =
-      Encoder.encodeString.contramap(_.toString)
-
     /** Model the required fields of the “TableCreationParameters” object from the AWS API.
       * @see https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_TableCreationParameters.html
       */
@@ -87,6 +78,7 @@ object SourceSettings {
     )
 
     object TableDescription {
+      import com.scylladb.migrator.config.BillingModeCodec._
       implicit val decoder: Decoder[TableDescription] = deriveDecoder[TableDescription]
       implicit val encoder: Encoder[TableDescription] = deriveEncoder[TableDescription]
     }

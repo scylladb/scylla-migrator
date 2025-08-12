@@ -6,6 +6,7 @@ import io.circe.{ Decoder, DecodingFailure, Encoder, Json }
 import io.circe.generic.semiauto.{ deriveDecoder, deriveEncoder }
 import io.circe.syntax._
 import software.amazon.awssdk.services.dynamodb.model.BillingMode
+import com.scylladb.migrator.config.BillingModeCodec._
 
 sealed trait TargetSettings
 object TargetSettings {
@@ -22,15 +23,6 @@ object TargetSettings {
                     writeWritetimestampInuS: Option[Long],
                     consistencyLevel: String)
       extends TargetSettings
-
-  implicit val billingModeDecoder: Decoder[BillingMode] =
-    Decoder.decodeString.emap {
-      case "PROVISIONED"     => Right(BillingMode.PROVISIONED)
-      case "PAY_PER_REQUEST" => Right(BillingMode.PAY_PER_REQUEST)
-      case other              => Left(s"Invalid billing mode: ${other}")
-    }
-  implicit val billingModeEncoder: Encoder[BillingMode] =
-    Encoder.encodeString.contramap(_.toString)
 
   case class DynamoDB(endpoint: Option[DynamoDBEndpoint],
                       region: Option[String],

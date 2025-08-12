@@ -51,26 +51,6 @@ object DynamoUtils {
   val log = LogManager.getLogger("com.scylladb.migrator.DynamoUtils")
   private val RemoveConsumedCapacityConfig = "scylla.migrator.remove_consumed_capacity"
 
-  /*   class ForceTotalConsumedCapacity extends ExecutionInterceptor {
-    override def modifyRequest(context: Context.ModifyRequest,
-                               executionAttributes: ExecutionAttributes): SdkRequest =
-      context.request() match {
-        case r: BatchWriteItemRequest =>
-          r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
-        case r: PutItemRequest =>
-          r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
-        case r: DeleteItemRequest =>
-          r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
-        case r: UpdateItemRequest =>
-          r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
-        case r: ScanRequest =>
-          r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
-        case r: QueryRequest =>
-          r.toBuilder.returnConsumedCapacity(ReturnConsumedCapacity.TOTAL).build()
-        case other => other
-      }
-  } */
-
   class RemoveConsumedCapacityInterceptor extends ExecutionInterceptor {
     override def modifyRequest(ctx: Context.ModifyRequest, attrs: ExecutionAttributes): SdkRequest =
       ctx.request() match {
@@ -120,10 +100,17 @@ object DynamoUtils {
           .attributeDefinitions(sourceDescription.attributeDefinitions)
 
         target.billingMode match {
-          case Some(BillingMode.PAY_PER_REQUEST) =>
-            requestBuilder.billingMode(BillingMode.PAY_PER_REQUEST)
+          case Some(BillingMode.PROVISIONED)
+              if (sourceDescription.provisionedThroughput.readCapacityUnits == 0L ||
+                sourceDescription.provisionedThroughput.writeCapacityUnits == 0) =>
+            throw new RuntimeException(
+              "readCapacityUnits and writeCapacityUnits must be set for PROVISIONED billing mode")
 
-          case Some(BillingMode.PROVISIONED) =>
+          case Some(BillingMode.PROVISIONED) | None
+              if (sourceDescription.provisionedThroughput.readCapacityUnits != 0L &&
+                sourceDescription.provisionedThroughput.writeCapacityUnits != 0) =>
+            log.info(
+              "BillingMode PROVISIONED will be used since writeCapacityUnits and readCapacityUnits are set")
             requestBuilder.billingMode(BillingMode.PROVISIONED)
             requestBuilder.provisionedThroughput(
               ProvisionedThroughput
@@ -133,19 +120,8 @@ object DynamoUtils {
                 .build()
             )
 
-          case None =>
-            if (sourceDescription.provisionedThroughput.readCapacityUnits != 0L &&
-                sourceDescription.provisionedThroughput.writeCapacityUnits != 0) {
-              requestBuilder.provisionedThroughput(
-                ProvisionedThroughput
-                  .builder()
-                  .readCapacityUnits(sourceDescription.provisionedThroughput.readCapacityUnits)
-                  .writeCapacityUnits(sourceDescription.provisionedThroughput.writeCapacityUnits)
-                  .build()
-              )
-            } else {
-              requestBuilder.billingMode(BillingMode.PAY_PER_REQUEST)
-            }
+          // billing mode = PAY_PER_REQUEST or empty ( for backward compatibility )
+          case _ => requestBuilder.billingMode(BillingMode.PAY_PER_REQUEST)
         }
         if (sourceDescription.hasLocalSecondaryIndexes) {
           requestBuilder.localSecondaryIndexes(
@@ -261,7 +237,7 @@ object DynamoUtils {
   def buildDynamoClient(endpoint: Option[DynamoDBEndpoint],
                         creds: Option[AwsCredentialsProvider],
                         region: Option[String],
-                        interceptors: Seq[ExecutionInterceptor] = Nil): DynamoDbClient = {
+                        interceptors: Seq[ExecutionInterceptor]): DynamoDbClient = {
     val builder =
       AwsUtils.configureClientBuilder(DynamoDbClient.builder(), endpoint, region, creds)
     val conf = ClientOverrideConfiguration.builder()
