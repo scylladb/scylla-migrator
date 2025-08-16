@@ -33,7 +33,8 @@ object DynamoDB {
         val dynamoDB = DynamoUtils.buildDynamoClient(
           target.endpoint,
           target.finalCredentials.map(_.toProvider),
-          target.region
+          target.region,
+          Seq.empty
         )
 
         try {
