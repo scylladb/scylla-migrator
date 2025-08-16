@@ -240,6 +240,11 @@ target:
 #   # migrator run.
 #   streamChanges: false
 #
+#   # Optional - explicitly set the billing mode when creating the target table.
+#   # Set to PROVISIONED or PAY_PER_REQUEST. If omitted, the mode is derived
+#   # from the source table or defaults to PAY_PER_REQUEST.
+#   billingMode: PAY_PER_REQUEST
+#
 #   # Optional - when streamChanges is true, skip the initial snapshot transfer and only stream changes.
 #   # This setting is ignored if streamChanges is false.
 #   #skipInitialSnapshotTransfer: false

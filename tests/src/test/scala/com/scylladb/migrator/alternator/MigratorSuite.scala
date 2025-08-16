@@ -21,6 +21,8 @@ import scala.sys.process.stringToProcess
   *
   */
 trait MigratorSuite extends munit.FunSuite {
+  import com.scylladb.migrator.DynamoUtils
+  import com.scylladb.migrator.config.DynamoDBEndpoint
 
   /** Client of a source DynamoDB instance */
   def sourceDDb: Fixture[DynamoDbClient]
@@ -31,12 +33,12 @@ trait MigratorSuite extends munit.FunSuite {
     def apply(): DynamoDbClient = client
     override def beforeAll(): Unit = {
       client =
-        DynamoDbClient
-          .builder()
-          .region(Region.of("dummy"))
-          .endpointOverride(new URI("http://localhost:8000"))
-          .credentialsProvider(StaticCredentialsProvider.create(AwsBasicCredentials.create("dummy", "dummy")))
-          .build()
+        DynamoUtils.buildDynamoClient(
+          endpoint = Some(DynamoDBEndpoint("http://localhost", 8000)),
+          creds = Some(StaticCredentialsProvider.create(AwsBasicCredentials.create("dummy", "dummy"))),
+          region = Some("dummy"),
+          interceptors = Seq(new DynamoUtils.RemoveConsumedCapacityInterceptor)
+        )
     }
     override def afterAll(): Unit = client.close()
   }
