@@ -87,6 +87,24 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
         "id" -> new AttributeValueV1().withS("toInsert"),
         "value" -> new AttributeValueV1().withS("value3"),
         operationTypeColumn -> putOperation
+      ).asJava),
+      Some(Map(
+        "id" -> new AttributeValueV1().withS("keyPutDelete"),
+        "value" -> new AttributeValueV1().withS("value4"),
+        operationTypeColumn -> putOperation
+      ).asJava),
+      Some(Map(
+        "id" -> new AttributeValueV1().withS("keyPutDelete"),
+        operationTypeColumn -> deleteOperation
+      ).asJava),
+      Some(Map(
+        "id" -> new AttributeValueV1().withS("keyDeletePut"),
+        operationTypeColumn -> deleteOperation
+      ).asJava),
+      Some(Map(
+        "id" -> new AttributeValueV1().withS("keyDeletePut"),
+        "value" -> new AttributeValueV1().withS("value5"),
+        operationTypeColumn -> putOperation
       ).asJava)
     )
 
@@ -115,24 +133,25 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
       rdd,
       targetSettings,
       Map.empty[String, String],
-      tableDesc,
-      DynamoDB
+      tableDesc
     )
 
     val finalItems = scanAll(sourceDDb(), tableName).sortBy(m => m("id").s)
 
-    assertEquals(finalItems.size, 2)
+    assertEquals(finalItems.size, 3)
 
     assert(!finalItems.exists(_("id").s == "toDelete"))
 
+    val updatedItem = finalItems.find(_("id").s == "toUpdate").get
+    assertEquals(updatedItem("value").s, "value2-updated")
 
-    val key2Item = finalItems.find(_("id").s == "toUpdate").get
-    assertEquals(key2Item("value").s, "value2-updated")
+    val insertedItem = finalItems.find(_("id").s == "toInsert").get
+    assertEquals(insertedItem("value").s, "value3")
 
+    assert(!finalItems.exists(_("id").s == "keyPutDelete"))
 
-    val key3Item = finalItems.find(_("id").s == "toInsert").get
-    assertEquals(key3Item("value").s, "value3")
-
+    val deletePutItem = finalItems.find(_("id").s == "keyDeletePut").get
+    assertEquals(deletePutItem("value").s, "value5")
 
     finalItems.foreach { item =>
       assert(!item.contains(operationTypeColumn))
