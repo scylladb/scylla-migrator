@@ -78,7 +78,9 @@ object DynamoStreamReplication {
         .collect { case Some(item) => item: util.Map[String, AttributeValueV1] }
         .repartition(Runtime.getRuntime.availableProcessors() * 2)
 
-      val allOperationsSorted = rdd.collect().sortBy(_.get(sequenceNumberColumn).getS)
+      val allOperationsSorted = rdd.collect().sortBy { item =>
+        Option(item.get(sequenceNumberColumn)).map(_.getS).getOrElse("0")
+      }
 
       if (allOperationsSorted.nonEmpty) {
         val grouped = groupConsecutiveOperations(allOperationsSorted.toIndexedSeq)
@@ -164,9 +166,13 @@ object DynamoStreamReplication {
               case "REMOVE"            => deleteOperation
             }
           newMap.put(operationTypeColumn, operationType)
-          newMap.put(
-            sequenceNumberColumn,
-            new AttributeValueV1().withS(rec.getDynamodb.getSequenceNumber))
+          val seqNum = rec.getDynamodb.getSequenceNumber
+          if (seqNum != null) {
+            newMap.put(sequenceNumberColumn, new AttributeValueV1().withS(seqNum))
+          } else {
+            log.error("DynamoDB stream record has null sequence number, using timestamp as fallback")
+            newMap.put(sequenceNumberColumn, new AttributeValueV1().withS(System.currentTimeMillis().toString))
+          }
           Some(newMap)
 
         case _ => None
