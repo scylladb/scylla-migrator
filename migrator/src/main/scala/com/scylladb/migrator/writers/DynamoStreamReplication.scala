@@ -88,7 +88,7 @@ object DynamoStreamReplication {
         val (totalPuts, totalDeletes) = grouped.foldLeft((0L, 0L)) {
           case ((putAcc, deleteAcc), (operationType, batch)) =>
             if (operationType == DELETE_OPERATION_TYPE) {
-              val deletableItems = spark.sparkContext.parallelize(batch).map { item =>
+              val deletableItems = batch.map { item =>
                 item
                   .entrySet()
                   .stream()
@@ -100,10 +100,11 @@ object DynamoStreamReplication {
                         AttributeValueUtils.fromV1(e.getValue)
                     ))
               }
-              dynamoDB.deleteRDD(target, targetTableDesc, deletableItems)(spark)
+              val deletableItemsRDD = spark.sparkContext.parallelize(deletableItems)
+              dynamoDB.deleteRDD(target, targetTableDesc, deletableItemsRDD)(spark)
               (putAcc, deleteAcc + batch.length)
             } else {
-              val writablePuts = spark.sparkContext.parallelize(batch).map { item =>
+              val writablePuts = batch.map { item =>
                 (
                   new Text,
                   new DynamoDBItemWritable(
@@ -120,7 +121,8 @@ object DynamoStreamReplication {
                         ))
                   ))
               }
-              dynamoDB.writeRDD(target, renamesMap, writablePuts, targetTableDesc)(spark)
+              val writablePutsRDD = spark.sparkContext.parallelize(writablePuts)
+              dynamoDB.writeRDD(target, renamesMap, writablePutsRDD, targetTableDesc)(spark)
               (putAcc + batch.length, deleteAcc)
             }
         }
