@@ -76,41 +76,34 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
     val streamEvents = Seq(
       Some(Map(
         "id" -> new AttributeValueV1().withS("toDelete"),
-        "__seq_num" -> new AttributeValueV1().withS("1"),
         operationTypeColumn -> deleteOperation
       ).asJava),
       Some(Map(
         "id" -> new AttributeValueV1().withS("toUpdate"),
         "value" -> new AttributeValueV1().withS("value2-updated"),
-        "__seq_num" -> new AttributeValueV1().withS("2"),
         operationTypeColumn -> putOperation
       ).asJava),
       Some(Map(
         "id" -> new AttributeValueV1().withS("toInsert"),
         "value" -> new AttributeValueV1().withS("value3"),
-        "__seq_num" -> new AttributeValueV1().withS("3"),
         operationTypeColumn -> putOperation
       ).asJava),
       Some(Map(
         "id" -> new AttributeValueV1().withS("keyPutDelete"),
         "value" -> new AttributeValueV1().withS("value4"),
-        "__seq_num" -> new AttributeValueV1().withS("4"),
         operationTypeColumn -> putOperation
       ).asJava),
       Some(Map(
         "id" -> new AttributeValueV1().withS("keyPutDelete"),
-        "__seq_num" -> new AttributeValueV1().withS("5"),
         operationTypeColumn -> deleteOperation
       ).asJava),
       Some(Map(
         "id" -> new AttributeValueV1().withS("keyDeletePut"),
-        "__seq_num" -> new AttributeValueV1().withS("6"),
         operationTypeColumn -> deleteOperation
       ).asJava),
       Some(Map(
         "id" -> new AttributeValueV1().withS("keyDeletePut"),
         "value" -> new AttributeValueV1().withS("value5"),
-        "__seq_num" -> new AttributeValueV1().withS("7"),
         operationTypeColumn -> putOperation
       ).asJava)
     )
@@ -140,8 +133,7 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
       rdd,
       targetSettings,
       Map.empty[String, String],
-      tableDesc,
-      DynamoDB
+      tableDesc
     )
 
     val finalItems = scanAll(sourceDDb(), tableName).sortBy(m => m("id").s)
