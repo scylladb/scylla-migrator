@@ -109,7 +109,7 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
     )
 
     val rdd = spark.sparkContext.parallelize(streamEvents)
-      .asInstanceOf[RDD[Option[util.HashMap[String, AttributeValueV1]]]]
+      .asInstanceOf[RDD[Option[DynamoStreamReplication.DynamoItem]]]
 
     val targetSettings = TargetSettings.DynamoDB(
       table = tableName,
