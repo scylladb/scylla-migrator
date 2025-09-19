@@ -37,7 +37,7 @@ object DynamoStreamReplication {
   private val deleteOperation = new AttributeValueV1().withBOOL(false)
 
   private[writers] def run(
-    msgs: RDD[Option[util.Map[String, AttributeValueV1]]],
+    msgs: RDD[Option[util.HashMap[String, AttributeValueV1]]],
     target: TargetSettings.DynamoDB,
     renamesMap: Map[String, String],
     targetTableDesc: TableDescription)(implicit spark: SparkSession): Unit = {
@@ -60,17 +60,9 @@ object DynamoStreamReplication {
           partition.foreach { item =>
             val isPut = item.get(operationTypeColumn) == putOperation
 
-            val itemWithoutOp = item
-              .entrySet()
-              .stream()
-              .filter(e => e.getKey != operationTypeColumn)
-              .collect(
-                Collectors.toMap(
-                  (e: util.Map.Entry[String, AttributeValueV1]) => e.getKey,
-                  (e: util.Map.Entry[String, AttributeValueV1]) =>
-                    AttributeValueUtils.fromV1(e.getValue)
-                )
-              )
+            val itemWithoutOp = item.asScala.collect {
+              case (k, v) if k != operationTypeColumn => k -> AttributeValueUtils.fromV1(v)
+            }.asJava
 
             if (isPut) {
               putCount.add(1)
@@ -163,7 +155,7 @@ object DynamoStreamReplication {
         .getOrElse(SparkAWSCredentials.builder.build())
     ).foreachRDD { msgs =>
       run(
-        msgs.asInstanceOf[RDD[Option[util.Map[String, AttributeValueV1]]]],
+        msgs, //.asInstanceOf[RDD[Option[util.Map[String, AttributeValueV1]]]],
         target,
         renamesMap,
         targetTableDesc)(spark)
