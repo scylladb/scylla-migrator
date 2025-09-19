@@ -28,6 +28,8 @@ import scala.jdk.CollectionConverters._
 object DynamoStreamReplication {
   val log = LogManager.getLogger("com.scylladb.migrator.writers.DynamoStreamReplication")
 
+  type DynamoItem = util.Map[String, AttributeValueV1]
+
   // We enrich the table items with a column `operationTypeColumn` describing the type of change
   // applied to the item.
   // We have to deal with multiple representation of the data because `spark-kinesis-dynamodb`
@@ -37,7 +39,7 @@ object DynamoStreamReplication {
   private val deleteOperation = new AttributeValueV1().withBOOL(false)
 
   private[writers] def run(
-    msgs: RDD[Option[util.HashMap[String, AttributeValueV1]]],
+    msgs: RDD[Option[DynamoItem]],
     target: TargetSettings.DynamoDB,
     renamesMap: Map[String, String],
     targetTableDesc: TableDescription)(implicit spark: SparkSession): Unit = {
@@ -123,7 +125,7 @@ object DynamoStreamReplication {
       messageHandler = {
         case recAdapter: RecordAdapter =>
           val rec = recAdapter.getInternalObject
-          val newMap = new util.HashMap[String, AttributeValueV1]()
+          val newMap: DynamoItem = new util.HashMap[String, AttributeValueV1]()
 
           if (rec.getDynamodb.getNewImage ne null) {
             newMap.putAll(rec.getDynamodb.getNewImage)
@@ -154,11 +156,7 @@ object DynamoStreamReplication {
         }
         .getOrElse(SparkAWSCredentials.builder.build())
     ).foreachRDD { msgs =>
-      run(
-        msgs,
-        target,
-        renamesMap,
-        targetTableDesc)(spark)
+      run(msgs, target, renamesMap, targetTableDesc)(spark)
     }
 
 }
