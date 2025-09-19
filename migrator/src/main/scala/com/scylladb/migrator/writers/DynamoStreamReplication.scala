@@ -155,7 +155,7 @@ object DynamoStreamReplication {
         .getOrElse(SparkAWSCredentials.builder.build())
     ).foreachRDD { msgs =>
       run(
-        msgs, //.asInstanceOf[RDD[Option[util.Map[String, AttributeValueV1]]]],
+        msgs,
         target,
         renamesMap,
         targetTableDesc)(spark)
