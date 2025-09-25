@@ -48,7 +48,7 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
       .waiter()
       .waitUntilTableExists(DescribeTableRequest.builder().tableName(tableName).build())
 
-    sourceDDb().putItem(
+    targetAlternator().putItem(
       PutItemRequest
         .builder()
         .tableName(tableName)
@@ -60,7 +60,7 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
         )
         .build()
     )
-    sourceDDb().putItem(
+    targetAlternator().putItem(
       PutItemRequest
         .builder()
         .tableName(tableName)
@@ -108,13 +108,13 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
       ).asJava)
     )
 
-    val rdd = spark.sparkContext.parallelize(streamEvents)
+    val rdd = spark.sparkContext.parallelize(streamEvents, 1)
       .asInstanceOf[RDD[Option[DynamoStreamReplication.DynamoItem]]]
 
     val targetSettings = TargetSettings.DynamoDB(
       table = tableName,
       region = Some("eu-central-1"),
-      endpoint = Some(DynamoDBEndpoint("http://localhost", 8001)),
+      endpoint = Some(DynamoDBEndpoint("http://localhost", 8000)),
       credentials = Some(AWSCredentials("dummy", "dummy", None)),
       streamChanges = false,
       skipInitialSnapshotTransfer = Some(true),
@@ -122,7 +122,7 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
       throughputWritePercent = None
     )
 
-    val tableDesc = sourceDDb().describeTable(
+    val tableDesc = targetAlternator().describeTable(
       software.amazon.awssdk.services.dynamodb.model.DescribeTableRequest
         .builder()
         .tableName(tableName)
@@ -136,7 +136,7 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
       tableDesc
     )
 
-    val finalItems = scanAll(sourceDDb(), tableName).sortBy(m => m("id").s)
+    val finalItems = scanAll(targetAlternator(), tableName).sortBy(m => m("id").s)
 
     assertEquals(finalItems.size, 3)
 
