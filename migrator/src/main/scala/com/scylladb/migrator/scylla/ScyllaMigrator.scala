@@ -3,6 +3,7 @@ package com.scylladb.migrator.scylla
 import com.datastax.spark.connector.rdd.partitioner.{ CassandraPartition, CqlTokenRange }
 import com.datastax.spark.connector.rdd.partitioner.dht.Token
 import com.datastax.spark.connector.writer.TokenRangeAccumulator
+import com.scylladb.migrator.{ SavepointsManager }
 import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
 import com.scylladb.migrator.readers.TimestampColumns
 import com.scylladb.migrator.writers
@@ -20,12 +21,27 @@ object ScyllaMigrator {
 
   def migrate(migratorConfig: MigratorConfig,
               target: TargetSettings.Scylla,
-              sourceDF: SourceDataFrame)(implicit spark: SparkSession): Unit = {
+              sourceDF: SourceDataFrame)(implicit spark: SparkSession): Unit =
+    migrate(migratorConfig, target, sourceDF, None)
+
+  def migrate(
+    migratorConfig: MigratorConfig,
+    target: TargetSettings.Scylla,
+    sourceDF: SourceDataFrame,
+    externalSavepointsManager: Option[SavepointsManager])(implicit spark: SparkSession): Unit = {
 
     log.info("Created source dataframe; resulting schema:")
     sourceDF.dataFrame.printSchema()
 
-    val maybeSavepointsManager =
+    externalSavepointsManager.foreach {
+      case _: com.scylladb.migrator.readers.ParquetSavepointsManager =>
+        log.info("Using external Parquet savepoints manager")
+      case other =>
+        throw new IllegalArgumentException(
+          s"Unexpected external savepoints manager type: ${other.getClass.getName}")
+    }
+
+    val maybeSavepointsManager = externalSavepointsManager.orElse {
       if (!sourceDF.savepointsSupported) None
       else {
         val tokenRangeAccumulator = TokenRangeAccumulator.empty
@@ -33,6 +49,7 @@ object ScyllaMigrator {
 
         Some(CqlSavepointsManager(migratorConfig, tokenRangeAccumulator))
       }
+    }
 
     log.info(
       "We need to transfer: " + sourceDF.dataFrame.rdd.getNumPartitions + " partitions in total")
@@ -71,12 +88,16 @@ object ScyllaMigrator {
     log.info("Starting write...")
 
     try {
+      val tokenRangeAccumulator = maybeSavepointsManager.flatMap {
+        case cqlManager: CqlSavepointsManager => Some(cqlManager.accumulator)
+        case _                                => None
+      }
       writers.Scylla.writeDataframe(
         target,
         migratorConfig.getRenamesOrNil,
         sourceDF.dataFrame,
         sourceDF.timestampColumns,
-        maybeSavepointsManager.map(_.accumulator))
+        tokenRangeAccumulator)
     } catch {
       case NonFatal(e) => // Catching everything on purpose to try and dump the accumulator state
         log.error(
@@ -85,7 +106,10 @@ object ScyllaMigrator {
     } finally {
       for (savePointsManger <- maybeSavepointsManager) {
         savePointsManger.dumpMigrationState("final")
-        savePointsManger.close()
+        // Only close internal savepoints manager, not external one
+        if (externalSavepointsManager.isEmpty) {
+          savePointsManger.close()
+        }
       }
     }
   }

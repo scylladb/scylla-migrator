@@ -40,8 +40,22 @@ object Migrator {
             migratorConfig.getSkipTokenRangesOrEmptySet)
           ScyllaMigrator.migrate(migratorConfig, scyllaTarget, sourceDF)
         case (parquetSource: SourceSettings.Parquet, scyllaTarget: TargetSettings.Scylla) =>
-          val sourceDF = readers.Parquet.readDataFrame(spark, parquetSource)
-          ScyllaMigrator.migrate(migratorConfig, scyllaTarget, sourceDF)
+          val preparedReader = readers.Parquet.prepareParquetReader(
+            spark,
+            parquetSource,
+            migratorConfig.getSkipParquetFilesOrEmptySet)
+
+          val savepointsManager = readers.ParquetSavepointsManager(
+            migratorConfig,
+            spark.sparkContext
+          )
+
+          scala.util.Using.resource(savepointsManager) { manager =>
+            val sourceDF = preparedReader.readDataFrame(spark)
+            ScyllaMigrator.migrate(migratorConfig, scyllaTarget, sourceDF, Some(manager))
+            manager.markAllFilesAsProcessed(preparedReader.allFiles)
+            log.info("Parquet migration completed successfully")
+          }
         case (dynamoSource: SourceSettings.DynamoDB, alternatorTarget: TargetSettings.DynamoDB) =>
           AlternatorMigrator.migrateFromDynamoDB(dynamoSource, alternatorTarget, migratorConfig)
         case (
