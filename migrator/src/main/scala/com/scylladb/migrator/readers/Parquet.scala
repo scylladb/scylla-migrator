@@ -2,12 +2,8 @@ package com.scylladb.migrator.readers
 
 import com.scylladb.migrator.config.SourceSettings
 import com.scylladb.migrator.scylla.SourceDataFrame
-import org.apache.hadoop.fs.{ FileSystem, Path, PathFilter }
 import org.apache.log4j.LogManager
 import org.apache.spark.sql.SparkSession
-
-import scala.collection.mutable.ListBuffer
-import scala.util.{ Failure, Success, Try }
 
 /**
   * Prepared reader for Parquet files with savepoints support.
@@ -112,61 +108,24 @@ object Parquet {
   }
 
   /**
-    * List all Parquet files in the given path (supports S3, HDFS, local filesystem)
+    * List all Parquet files by leveraging Spark's built-in file discovery.
+    *
+    * Uses DataFrame.inputFiles which returns the actual files Spark will read.
+    * This is simpler and more reliable than manual filesystem traversal.
     */
   def listParquetFiles(spark: SparkSession, path: String): Seq[String] = {
-    val hadoopConf = spark.sparkContext.hadoopConfiguration
+    log.info(s"Discovering Parquet files in $path")
 
-    Try {
-      val pathObj = new Path(path)
-      val fs = FileSystem.get(pathObj.toUri, hadoopConf)
+    // Let Spark discover files (handles _SUCCESS, _metadata, etc. automatically)
+    // Read only schema, not data
+    val files = spark.read.parquet(path).limit(0).inputFiles.toSeq.sorted
 
-      // Check if it's a single file or directory
-      val fileStatus = fs.getFileStatus(pathObj)
-      if (fileStatus.isFile) {
-        // Single file case
-        if (path.endsWith(".parquet")) {
-          Seq(path)
-        } else {
-          log.warn(s"Single file $path doesn't have .parquet extension")
-          Seq(path)
-        }
-      } else {
-        // Directory case - recursively find all .parquet files
-        val files = ListBuffer[String]()
-
-        def collectParquetFiles(dir: Path): Unit = {
-          val dirStatus = fs.listStatus(
-            dir,
-            new PathFilter {
-              override def accept(path: Path): Boolean = {
-                val name = path.getName
-                !name.startsWith("_") && !name.startsWith(".") // Skip hidden/metadata files
-              }
-            }
-          )
-
-          dirStatus.foreach { status =>
-            if (status.isDirectory) {
-              collectParquetFiles(status.getPath)
-            } else if (status.getPath.getName.endsWith(".parquet")) {
-              files += status.getPath.toString
-            }
-          }
-        }
-
-        collectParquetFiles(pathObj)
-        files.toSeq.sorted
-      }
-    } match {
-      case Success(files) =>
-        log.info(s"Listed ${files.size} Parquet files from $path")
-        files
-      case Failure(ex) =>
-        log.error(s"Failed to list files from $path: ${ex.getMessage}")
-        // Fallback to simple path approach
-        Seq(path)
+    if (files.isEmpty) {
+      throw new IllegalArgumentException(s"No Parquet files found in $path")
     }
+
+    log.info(s"Found ${files.size} Parquet file(s)")
+    files
   }
 
 }
