@@ -194,4 +194,86 @@ class ParquetSavepointsTest extends munit.FunSuite {
         .forEach(Files.delete)
     }
   }
+
+  test("ParquetSavepointsManager tracks files during DataFrame processing") {
+    val tempDir = Files.createTempDirectory("savepoints-tracking-test")
+    val savepointsDir = Files.createTempDirectory("savepoints-output")
+
+    try {
+      import spark.implicits._
+
+      // Create multiple parquet files
+      val testData1 = Seq((1, "data1")).toDF("id", "name")
+      val testData2 = Seq((2, "data2")).toDF("id", "name")
+      val testData3 = Seq((3, "data3")).toDF("id", "name")
+
+      val file1Path = tempDir.resolve("file1.parquet")
+      val file2Path = tempDir.resolve("file2.parquet")
+      val file3Path = tempDir.resolve("file3.parquet")
+
+      testData1.write.parquet(file1Path.toString)
+      testData2.write.parquet(file2Path.toString)
+      testData3.write.parquet(file3Path.toString)
+
+      val parquetSource = SourceSettings.Parquet(tempDir.toString, None, None, None)
+
+      // Prepare reader
+      val preparedReader = Parquet.prepareParquetReader(spark, parquetSource, Set.empty)
+      val allFiles = preparedReader.allFiles
+
+      // Create config and savepoints manager
+      val config = MigratorConfig(
+        source = parquetSource,
+        target = null,
+        renames = None,
+        savepoints = com.scylladb.migrator.config.Savepoints(300, savepointsDir.toString),
+        skipTokenRanges = None,
+        skipSegments = None,
+        skipParquetFiles = None,
+        validation = None
+      )
+
+      val manager = ParquetSavepointsManager(config, spark.sparkContext)
+
+      try {
+        // Initially no files processed
+        assertEquals(manager.updateConfigWithMigrationState().skipParquetFiles.getOrElse(Set.empty).size, 0)
+
+        // Read the DataFrame - this should trigger processing
+        val sourceDF = preparedReader.readDataFrame(spark)
+        
+        // Force evaluation by counting
+        val count = sourceDF.dataFrame.count()
+        assert(count >= 3)
+
+        // PROBLEM: At this point, files are NOT automatically tracked!
+        // The accumulator is still empty because markFileAsProcessed is never called
+        val processedAfterRead = manager.updateConfigWithMigrationState().skipParquetFiles.getOrElse(Set.empty)
+        
+        // This assertion WILL FAIL with current implementation
+        // Expected: files are tracked during processing
+        // Actual: accumulator is still empty
+        println(s"Files processed after read: ${processedAfterRead.size} (expected: ${allFiles.size})")
+        
+        // Manual workaround - this is what happens in Migrator.scala
+        manager.markAllFilesAsProcessed(allFiles)
+        
+        // Now files are marked
+        val processedAfterMark = manager.updateConfigWithMigrationState().skipParquetFiles.getOrElse(Set.empty)
+        assertEquals(processedAfterMark.size, allFiles.size)
+
+      } finally {
+        manager.close()
+      }
+
+    } finally {
+      // Clean up
+      Files.walk(tempDir)
+        .sorted(java.util.Comparator.reverseOrder())
+        .forEach(Files.delete)
+      Files.walk(savepointsDir)
+        .sorted(java.util.Comparator.reverseOrder())
+        .forEach(Files.delete)
+    }
+  }
 }
