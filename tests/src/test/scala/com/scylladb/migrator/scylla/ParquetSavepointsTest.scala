@@ -170,18 +170,17 @@ class ParquetSavepointsTest extends munit.FunSuite {
       val allFiles = preparedReaderAll.allFiles
       assert(allFiles.length >= 2) // Should have at least 2 parquet files
       
-      // Test reading all files
-      val allDataDF = preparedReaderAll.readDataFrame(spark)
+      // Test reading all files using legacy method
+      val allDataDF = Parquet.readDataFrame(spark, parquetSource)
       assert(allDataDF.dataFrame.count() >= 2L)
       
       // Test reading with skip files - skip the first found file
-      // Note: Since skip is based on actual parquet file paths (not directory names),
-      // we need to skip an actual file path found by listParquetFiles
-      val fileToSkip = allFiles.head // Skip first actual parquet file
+      val fileToSkip = allFiles.head
       val preparedReaderFiltered = Parquet.prepareParquetReader(spark, parquetSource, Set(fileToSkip))
       
       if (preparedReaderFiltered.filesToProcess.nonEmpty) {
-        val filteredDataDF = preparedReaderFiltered.readDataFrame(spark)
+        // Use legacy method with skipFiles
+        val filteredDataDF = Parquet.readDataFrame(spark, parquetSource, Set(fileToSkip))
         // Should have less data after filtering
         val filteredCount = filteredDataDF.dataFrame.count()
         assert(filteredCount < allDataDF.dataFrame.count())
@@ -195,7 +194,7 @@ class ParquetSavepointsTest extends munit.FunSuite {
     }
   }
 
-  test("ParquetSavepointsManager tracks files during DataFrame processing") {
+  test("ParquetSavepointsManager tracks files during per-file processing") {
     val tempDir = Files.createTempDirectory("savepoints-tracking-test")
     val savepointsDir = Files.createTempDirectory("savepoints-output")
 
@@ -219,7 +218,7 @@ class ParquetSavepointsTest extends munit.FunSuite {
 
       // Prepare reader
       val preparedReader = Parquet.prepareParquetReader(spark, parquetSource, Set.empty)
-      val allFiles = preparedReader.allFiles
+      val allFiles = preparedReader.filesToProcess
 
       // Create config and savepoints manager
       val config = MigratorConfig(
@@ -239,28 +238,25 @@ class ParquetSavepointsTest extends munit.FunSuite {
         // Initially no files processed
         assertEquals(manager.updateConfigWithMigrationState().skipParquetFiles.getOrElse(Set.empty).size, 0)
 
-        // Read the DataFrame - this should trigger processing
-        val sourceDF = preparedReader.readDataFrame(spark)
-        
-        // Force evaluation by counting
-        val count = sourceDF.dataFrame.count()
-        assert(count >= 3)
+        // Simulate per-file processing (as done in Migrator.scala)
+        allFiles.zipWithIndex.foreach { case (filePath, index) =>
+          // Read and process single file
+          val singleFileDF = spark.read.parquet(filePath)
+          val count = singleFileDF.count()
+          assert(count >= 1)
 
-        // PROBLEM: At this point, files are NOT automatically tracked!
-        // The accumulator is still empty because markFileAsProcessed is never called
-        val processedAfterRead = manager.updateConfigWithMigrationState().skipParquetFiles.getOrElse(Set.empty)
-        
-        // This assertion WILL FAIL with current implementation
-        // Expected: files are tracked during processing
-        // Actual: accumulator is still empty
-        println(s"Files processed after read: ${processedAfterRead.size} (expected: ${allFiles.size})")
-        
-        // Manual workaround - this is what happens in Migrator.scala
-        manager.markAllFilesAsProcessed(allFiles)
-        
-        // Now files are marked
-        val processedAfterMark = manager.updateConfigWithMigrationState().skipParquetFiles.getOrElse(Set.empty)
-        assertEquals(processedAfterMark.size, allFiles.size)
+          // Mark file as processed immediately after successful processing
+          manager.markFileAsProcessed(filePath)
+
+          // Verify accumulator is updated
+          val processedSoFar = manager.updateConfigWithMigrationState().skipParquetFiles.getOrElse(Set.empty)
+          assertEquals(processedSoFar.size, index + 1, s"After processing file ${index + 1}")
+        }
+
+        // All files should be marked as processed now
+        val finalProcessed = manager.updateConfigWithMigrationState().skipParquetFiles.getOrElse(Set.empty)
+        assertEquals(finalProcessed.size, allFiles.size)
+        assert(finalProcessed == allFiles.toSet)
 
       } finally {
         manager.close()

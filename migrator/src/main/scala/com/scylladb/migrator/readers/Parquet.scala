@@ -2,20 +2,17 @@ package com.scylladb.migrator.readers
 
 import com.scylladb.migrator.config.SourceSettings
 import com.scylladb.migrator.scylla.SourceDataFrame
-import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{ FileSystem, Path, PathFilter }
-import org.apache.hadoop.mapreduce.lib.input.{ CombineFileSplit, FileInputFormat }
 import org.apache.log4j.LogManager
 import org.apache.spark.sql.SparkSession
 
-import java.net.URI
 import scala.collection.mutable.ListBuffer
 import scala.util.{ Failure, Success, Try }
 
 /**
   * Prepared reader for Parquet files with savepoints support.
-  * This class separates file discovery from actual DataFrame reading to enable
-  * InputSplit analysis in savepoints manager.
+  * This class separates file discovery from file processing.
+  * Files are processed one-by-one in Migrator.scala to enable granular savepoints.
   */
 case class ParquetReaderWithSavepoints(source: SourceSettings.Parquet,
                                        allFiles: Seq[String],
@@ -29,7 +26,7 @@ case class ParquetReaderWithSavepoints(source: SourceSettings.Parquet,
   val filesToProcess: Seq[String] = allFiles.filterNot(skipFiles.contains)
 
   /**
-    * Configure Hadoop configuration for the source
+    * Configure Hadoop configuration for the source (called once before processing files)
     */
   def configureHadoop(spark: SparkSession): Unit =
     source.finalCredentials.foreach { credentials =>
@@ -39,7 +36,6 @@ case class ParquetReaderWithSavepoints(source: SourceSettings.Parquet,
       }
       spark.sparkContext.hadoopConfiguration.set("fs.s3a.access.key", credentials.accessKey)
       spark.sparkContext.hadoopConfiguration.set("fs.s3a.secret.key", credentials.secretKey)
-      // See https://hadoop.apache.org/docs/stable/hadoop-aws/tools/hadoop-aws/index.html#Using_Session_Credentials_with_TemporaryAWSCredentialsProvider
       credentials.maybeSessionToken.foreach { sessionToken =>
         spark.sparkContext.hadoopConfiguration.set(
           "fs.s3a.aws.credentials.provider",
@@ -50,35 +46,6 @@ case class ParquetReaderWithSavepoints(source: SourceSettings.Parquet,
         )
       }
     }
-
-  /**
-    * Read DataFrame from the prepared files
-    */
-  def readDataFrame(spark: SparkSession): SourceDataFrame = {
-    configureHadoop(spark)
-
-    log.info(s"Processing ${filesToProcess.size} Parquet files")
-
-    if (filesToProcess.isEmpty) {
-      log.warn("No files to process after filtering. Migration may be complete.")
-      // Return empty DataFrame with proper schema by reading one file if available
-      val samplePath = if (allFiles.nonEmpty) allFiles.head else source.path
-      val emptyDf = spark.read.parquet(samplePath).limit(0)
-      return SourceDataFrame(emptyDf, None, false)
-    }
-
-    // Process files using the parallelize approach similar to DynamoDB S3 Export
-    val df = if (filesToProcess.size == 1) {
-      // Single file optimization
-      spark.read.parquet(filesToProcess.head)
-    } else {
-      // Multiple files - use union approach
-      val dataFrames = filesToProcess.map(spark.read.parquet)
-      dataFrames.reduce(_.union(_))
-    }
-
-    SourceDataFrame(df, None, false)
-  }
 }
 
 object Parquet {
@@ -105,20 +72,43 @@ object Parquet {
 
   /**
     * Legacy method for backward compatibility.
-    * Use prepareParquetReader + readDataFrame for savepoints-enabled migrations.
+    * Reads all files at once (non-savepoints mode).
+    * For savepoints-enabled migrations, use prepareParquetReader and process files individually.
     */
   def readDataFrame(spark: SparkSession, source: SourceSettings.Parquet): SourceDataFrame =
     readDataFrame(spark, source, Set.empty)
 
   /**
     * Legacy method for backward compatibility.
-    * Use prepareParquetReader + readDataFrame for savepoints-enabled migrations.
+    * Reads all files at once (non-savepoints mode).
+    * For savepoints-enabled migrations, use prepareParquetReader and process files individually.
     */
   def readDataFrame(spark: SparkSession,
                     source: SourceSettings.Parquet,
                     skipFiles: Set[String]): SourceDataFrame = {
     val preparedReader = prepareParquetReader(spark, source, skipFiles)
-    preparedReader.readDataFrame(spark)
+    preparedReader.configureHadoop(spark)
+
+    val filesToRead = preparedReader.filesToProcess
+
+    if (filesToRead.isEmpty) {
+      log.warn("No files to process after filtering. Migration may be complete.")
+      val samplePath =
+        if (preparedReader.allFiles.nonEmpty) preparedReader.allFiles.head else source.path
+      val emptyDf = spark.read.parquet(samplePath).limit(0)
+      return SourceDataFrame(emptyDf, None, false)
+    }
+
+    log.info(s"Reading ${filesToRead.size} Parquet files")
+
+    val df = if (filesToRead.size == 1) {
+      spark.read.parquet(filesToRead.head)
+    } else {
+      val dataFrames = filesToRead.map(spark.read.parquet)
+      dataFrames.reduce(_.union(_))
+    }
+
+    SourceDataFrame(df, None, false)
   }
 
   /**

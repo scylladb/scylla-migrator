@@ -5,7 +5,7 @@ import com.datastax.spark.connector.rdd.partitioner.dht.Token
 import com.datastax.spark.connector.writer.TokenRangeAccumulator
 import com.scylladb.migrator.{ SavepointsManager }
 import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
-import com.scylladb.migrator.readers.TimestampColumns
+import com.scylladb.migrator.readers.{ ParquetSavepointsManager, TimestampColumns }
 import com.scylladb.migrator.writers
 import org.apache.log4j.LogManager
 import org.apache.spark.sql.{ DataFrame, SparkSession }
@@ -16,40 +16,30 @@ case class SourceDataFrame(dataFrame: DataFrame,
                            timestampColumns: Option[TimestampColumns],
                            savepointsSupported: Boolean)
 
-object ScyllaMigrator {
-  val log = LogManager.getLogger("com.scylladb.migrator.scylla")
+trait ScyllaMigratorBase {
+  protected val log = LogManager.getLogger("com.scylladb.migrator.scylla")
 
-  def migrate(migratorConfig: MigratorConfig,
-              target: TargetSettings.Scylla,
-              sourceDF: SourceDataFrame)(implicit spark: SparkSession): Unit =
-    migrate(migratorConfig, target, sourceDF, None)
+  protected def externalSavepointsManager: Option[SavepointsManager] = None
+
+  protected def createSavepointsManager(
+    migratorConfig: MigratorConfig,
+    sourceDF: SourceDataFrame
+  )(implicit spark: SparkSession): Option[SavepointsManager]
+
+  protected def shouldCloseManager(manager: SavepointsManager): Boolean
 
   def migrate(
     migratorConfig: MigratorConfig,
     target: TargetSettings.Scylla,
-    sourceDF: SourceDataFrame,
-    externalSavepointsManager: Option[SavepointsManager])(implicit spark: SparkSession): Unit = {
+    sourceDF: SourceDataFrame
+  )(implicit spark: SparkSession): Unit = {
 
     log.info("Created source dataframe; resulting schema:")
     sourceDF.dataFrame.printSchema()
 
-    externalSavepointsManager.foreach {
-      case _: com.scylladb.migrator.readers.ParquetSavepointsManager =>
-        log.info("Using external Parquet savepoints manager")
-      case other =>
-        throw new IllegalArgumentException(
-          s"Unexpected external savepoints manager type: ${other.getClass.getName}")
-    }
-
-    val maybeSavepointsManager = externalSavepointsManager.orElse {
-      if (!sourceDF.savepointsSupported) None
-      else {
-        val tokenRangeAccumulator = TokenRangeAccumulator.empty
-        spark.sparkContext.register(tokenRangeAccumulator, "Token ranges copied")
-
-        Some(CqlSavepointsManager(migratorConfig, tokenRangeAccumulator))
-      }
-    }
+    val maybeSavepointsManager = externalSavepointsManager.orElse(
+      createSavepointsManager(migratorConfig, sourceDF)
+    )
 
     log.info(
       "We need to transfer: " + sourceDF.dataFrame.rdd.getNumPartitions + " partitions in total")
@@ -99,19 +89,59 @@ object ScyllaMigrator {
         sourceDF.timestampColumns,
         tokenRangeAccumulator)
     } catch {
-      case NonFatal(e) => // Catching everything on purpose to try and dump the accumulator state
+      case NonFatal(e) =>
         log.error(
           "Caught error while writing the DataFrame. Will create a savepoint before exiting",
           e)
     } finally {
       for (savePointsManger <- maybeSavepointsManager) {
         savePointsManger.dumpMigrationState("final")
-        // Only close internal savepoints manager, not external one
-        if (externalSavepointsManager.isEmpty) {
+        if (shouldCloseManager(savePointsManger)) {
           savePointsManger.close()
         }
       }
     }
   }
+}
 
+object ScyllaMigrator extends ScyllaMigratorBase {
+
+  protected override def createSavepointsManager(
+    migratorConfig: MigratorConfig,
+    sourceDF: SourceDataFrame
+  )(implicit spark: SparkSession): Option[SavepointsManager] =
+    if (!sourceDF.savepointsSupported) None
+    else {
+      val tokenRangeAccumulator = TokenRangeAccumulator.empty
+      spark.sparkContext.register(tokenRangeAccumulator, "Token ranges copied")
+      Some(CqlSavepointsManager(migratorConfig, tokenRangeAccumulator))
+    }
+
+  protected override def shouldCloseManager(manager: SavepointsManager): Boolean = true
+}
+
+class ScyllaParquetMigrator(savepointsManager: ParquetSavepointsManager)
+    extends ScyllaMigratorBase {
+
+  protected override def externalSavepointsManager: Option[SavepointsManager] = {
+    log.info("Using external Parquet savepoints manager")
+    Some(savepointsManager)
+  }
+
+  protected override def createSavepointsManager(
+    migratorConfig: MigratorConfig,
+    sourceDF: SourceDataFrame
+  )(implicit spark: SparkSession): Option[SavepointsManager] = None
+
+  protected override def shouldCloseManager(manager: SavepointsManager): Boolean = false
+}
+
+object ScyllaParquetMigrator {
+  def migrate(
+    migratorConfig: MigratorConfig,
+    target: TargetSettings.Scylla,
+    sourceDF: SourceDataFrame,
+    savepointsManager: ParquetSavepointsManager
+  )(implicit spark: SparkSession): Unit =
+    new ScyllaParquetMigrator(savepointsManager).migrate(migratorConfig, target, sourceDF)
 }

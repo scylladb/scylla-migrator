@@ -51,10 +51,38 @@ object Migrator {
           )
 
           scala.util.Using.resource(savepointsManager) { manager =>
-            val sourceDF = preparedReader.readDataFrame(spark)
-            ScyllaMigrator.migrate(migratorConfig, scyllaTarget, sourceDF, Some(manager))
-            manager.markAllFilesAsProcessed(preparedReader.allFiles)
-            log.info("Parquet migration completed successfully")
+            preparedReader.configureHadoop(spark)
+
+            val filesToProcess = preparedReader.filesToProcess
+            val totalFiles = filesToProcess.size
+
+            if (totalFiles == 0) {
+              log.info(
+                "No Parquet files to process. Migration may be complete or all files already processed.")
+            } else {
+              log.info(s"Starting Parquet migration: processing $totalFiles files")
+
+              filesToProcess.zipWithIndex.foreach {
+                case (filePath, index) =>
+                  val fileNum = index + 1
+                  log.info(s"Processing file $fileNum/$totalFiles: $filePath")
+
+                  val singleFileDF = spark.read.parquet(filePath)
+                  val sourceDF = scylla.SourceDataFrame(singleFileDF, None, false)
+
+                  scylla.ScyllaParquetMigrator.migrate(
+                    migratorConfig,
+                    scyllaTarget,
+                    sourceDF,
+                    manager
+                  )
+
+                  manager.markFileAsProcessed(filePath)
+                  log.info(s"Successfully processed file $fileNum/$totalFiles: $filePath")
+              }
+
+              log.info(s"Parquet migration completed successfully: $totalFiles files processed")
+            }
           }
         case (dynamoSource: SourceSettings.DynamoDB, alternatorTarget: TargetSettings.DynamoDB) =>
           AlternatorMigrator.migrateFromDynamoDB(dynamoSource, alternatorTarget, migratorConfig)
