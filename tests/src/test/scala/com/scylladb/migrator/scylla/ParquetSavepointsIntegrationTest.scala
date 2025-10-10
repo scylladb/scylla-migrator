@@ -1,3 +1,5 @@
+package com.scylladb.migrator.scylla
+
 import com.datastax.oss.driver.api.core.CqlSession
 import com.datastax.oss.driver.api.querybuilder.{ QueryBuilder, SchemaBuilder }
 import com.github.mjakubowski84.parquet4s.ParquetWriter
@@ -15,8 +17,9 @@ import scala.util.chaining._
 import scala.util.Using
 
 class ParquetSavepointsIntegrationTest extends munit.FunSuite {
-
   case class SavepointsTestSchema(id: String, foo: String, bar: Int)
+
+  override val munitTimeout: FiniteDuration = 2.minutes
 
   private val parquetHostRoot: Path = Paths.get("docker/parquet")
   private val parquetTestDirectory: Path = parquetHostRoot.resolve("savepoints")
