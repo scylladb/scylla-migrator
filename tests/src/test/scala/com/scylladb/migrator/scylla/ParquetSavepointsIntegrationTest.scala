@@ -8,6 +8,8 @@ import org.apache.parquet.hadoop.ParquetFileWriter
 
 import java.net.InetSocketAddress
 import java.nio.file.{ Files, Path, Paths }
+import scala.annotation.tailrec
+import scala.concurrent.duration._
 import scala.jdk.CollectionConverters._
 import scala.util.chaining._
 import scala.util.Using
@@ -68,7 +70,7 @@ class ParquetSavepointsIntegrationTest extends munit.FunSuite {
         )
       }
 
-      val expectedProcessedFiles = listDataFiles(parquetTestDirectory).map(toContainerParquetUri)
+      val expectedProcessedFiles = parquetBatches.map { case (path, _) => toContainerParquetUri(path) }.toSet
 
       successfullyPerformMigration(configFileName)
 
@@ -89,11 +91,12 @@ class ParquetSavepointsIntegrationTest extends munit.FunSuite {
         }
       }
 
-      val savepointFile = findLatestSavepoint(savepointsTestDirectory)
-        .getOrElse(fail("Savepoint file was not created"))
-
-      val savepointConfig = MigratorConfig.loadFrom(savepointFile.toString)
-      val skipFiles = savepointConfig.skipParquetFiles.getOrElse(fail("skipParquetFiles were not written"))
+      val skipFiles = awaitSavepointWithFiles(
+        savepointsTestDirectory,
+        expectedProcessedFiles,
+        attempts = 10,
+        delay = 1.second
+      )
 
       assertEquals(skipFiles, expectedProcessedFiles)
     } finally {
@@ -124,18 +127,40 @@ class ParquetSavepointsIntegrationTest extends munit.FunSuite {
     Files.deleteIfExists(path)
   }
 
-  private def listDataFiles(root: Path): Set[Path] =
-    Using.resource(Files.walk(root)) { stream =>
-      stream.iterator().asScala
-        .filter(path => Files.isRegularFile(path))
-        .filter(_.getFileName.toString.startsWith("part-"))
-        .toSet
-    }
-
   private def toContainerParquetUri(path: Path): String = {
     require(path.startsWith(parquetHostRoot), s"Unexpected parquet file location: $path")
     val relative = parquetHostRoot.relativize(path)
     Paths.get("/app/parquet").resolve(relative).toUri.toString
+  }
+
+  private def awaitSavepointWithFiles(directory: Path,
+                                      expected: Set[String],
+                                      attempts: Int,
+                                      delay: FiniteDuration): Set[String] = {
+    @tailrec
+    def loop(remaining: Int, lastObserved: Option[Set[String]]): Set[String] = {
+      if (remaining == 0) {
+        val observed = lastObserved.getOrElse(Set.empty)
+        fail(
+          s"Savepoint did not include the expected files within ${attempts * delay.toSeconds} seconds. Last observed: $observed"
+        )
+      } else {
+        val maybeSkipFiles = for {
+          savepoint <- findLatestSavepoint(directory)
+          config <- Option(MigratorConfig.loadFrom(savepoint.toString))
+          files <- config.skipParquetFiles
+        } yield files
+
+        maybeSkipFiles match {
+          case Some(files) if files == expected => files
+          case other =>
+            Thread.sleep(delay.toMillis)
+            loop(remaining - 1, other.orElse(lastObserved))
+        }
+      }
+    }
+
+    loop(attempts, None)
   }
 
   private def findLatestSavepoint(directory: Path): Option[Path] =
