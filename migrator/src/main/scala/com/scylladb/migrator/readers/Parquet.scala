@@ -35,12 +35,12 @@ object Parquet {
   }
 
   @deprecated(
-    "Use prepareParquetReader and process files individually for savepoints support. Example in Migrator class")
+    "Use prepareParquetReader and process files individually for savepoints support. See Migrator.scala for file-by-file processing pattern.")
   def readDataFrame(spark: SparkSession, source: SourceSettings.Parquet): SourceDataFrame =
     readDataFrame(spark, source, Set.empty)
 
   @deprecated(
-    "Use prepareParquetReader and process files individually for savepoints support. Example in Migrator class")
+    "Use prepareParquetReader and process files individually for savepoints support. See Migrator.scala for file-by-file processing pattern.")
   def readDataFrame(spark: SparkSession,
                     source: SourceSettings.Parquet,
                     skipFiles: Set[String]): SourceDataFrame = {
