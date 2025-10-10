@@ -21,7 +21,6 @@ class StringSetAccumulatorTest extends munit.FunSuite {
     assertEquals(accumulator.value, Set.empty[String])
   }
 
-
   test("StringSetAccumulator merge functionality") {
     val accumulator1 = StringSetAccumulator(Set("file1.parquet"))
     val accumulator2 = StringSetAccumulator(Set("file2.parquet", "file3.parquet"))
