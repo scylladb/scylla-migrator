@@ -3,7 +3,7 @@ package com.scylladb.migrator.scylla
 import com.datastax.spark.connector.rdd.partitioner.{ CassandraPartition, CqlTokenRange }
 import com.datastax.spark.connector.rdd.partitioner.dht.Token
 import com.datastax.spark.connector.writer.TokenRangeAccumulator
-import com.scylladb.migrator.{ SavepointsManager }
+import com.scylladb.migrator.SavepointsManager
 import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
 import com.scylladb.migrator.readers.{ ParquetSavepointsManager, TimestampColumns }
 import com.scylladb.migrator.writers
