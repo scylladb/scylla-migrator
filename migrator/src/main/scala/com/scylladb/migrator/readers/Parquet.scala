@@ -3,7 +3,7 @@ package com.scylladb.migrator.readers
 import com.scylladb.migrator.config.SourceSettings
 import com.scylladb.migrator.scylla.SourceDataFrame
 import org.apache.log4j.LogManager
-import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.{AnalysisException, SparkSession}
 
 /**
   * Prepared reader for Parquet files with savepoints support.
@@ -25,23 +25,7 @@ case class ParquetReaderWithSavepoints(source: SourceSettings.Parquet,
     * Configure Hadoop configuration for the source (called once before processing files)
     */
   def configureHadoop(spark: SparkSession): Unit =
-    source.finalCredentials.foreach { credentials =>
-      log.info("Loaded AWS credentials from config file")
-      source.region.foreach { region =>
-        spark.sparkContext.hadoopConfiguration.set("fs.s3a.endpoint.region", region)
-      }
-      spark.sparkContext.hadoopConfiguration.set("fs.s3a.access.key", credentials.accessKey)
-      spark.sparkContext.hadoopConfiguration.set("fs.s3a.secret.key", credentials.secretKey)
-      credentials.maybeSessionToken.foreach { sessionToken =>
-        spark.sparkContext.hadoopConfiguration.set(
-          "fs.s3a.aws.credentials.provider",
-          "org.apache.hadoop.fs.s3a.TemporaryAWSCredentialsProvider")
-        spark.sparkContext.hadoopConfiguration.set(
-          "fs.s3a.session.token",
-          sessionToken
-        )
-      }
-    }
+    Parquet.configureHadoopCredentials(spark, source)
 }
 
 object Parquet {
@@ -55,6 +39,10 @@ object Parquet {
   def prepareParquetReader(spark: SparkSession,
                            source: SourceSettings.Parquet,
                            skipFiles: Set[String] = Set.empty): ParquetReaderWithSavepoints = {
+    // Configure Hadoop credentials before trying to discover files. Without this Spark
+    // would fail to access e.g. S3 buckets when listing Parquet files.
+    configureHadoopCredentials(spark, source)
+
     // Get all Parquet files from the source path
     val allFiles = listParquetFiles(spark, source.path)
     log.info(s"Found ${allFiles.size} Parquet files in ${source.path}")
@@ -116,16 +104,48 @@ object Parquet {
   def listParquetFiles(spark: SparkSession, path: String): Seq[String] = {
     log.info(s"Discovering Parquet files in $path")
 
-    // Let Spark discover files (handles _SUCCESS, _metadata, etc. automatically)
-    // Read only schema, not data
-    val files = spark.read.parquet(path).limit(0).inputFiles.toSeq.sorted
+    // Let Spark discover files (handles _SUCCESS, _metadata, nested directories, etc.
+    // automatically). Enable recursive lookup so that directories containing multiple
+    // Parquet datasets are handled correctly (as generated in our tests) and rely on the
+    // DataFrame's inputFiles metadata instead of manually walking the filesystem.
+    try {
+      val dataFrame = spark.read
+        .option("recursiveFileLookup", "true")
+        .parquet(path)
 
-    if (files.isEmpty) {
-      throw new IllegalArgumentException(s"No Parquet files found in $path")
+      val files = dataFrame.inputFiles.toSeq.distinct.sorted
+
+      if (files.isEmpty) {
+        throw new IllegalArgumentException(s"No Parquet files found in $path")
+      }
+
+      log.info(s"Found ${files.size} Parquet file(s)")
+      files
+    } catch {
+      case e: AnalysisException =>
+        val message = s"Failed to list Parquet files from $path: ${e.getMessage}"
+        log.error(message)
+        throw new IllegalArgumentException(message, e)
     }
-
-    log.info(s"Found ${files.size} Parquet file(s)")
-    files
   }
 
+  private[readers] def configureHadoopCredentials(spark: SparkSession,
+                                                  source: SourceSettings.Parquet): Unit =
+    source.finalCredentials.foreach { credentials =>
+      log.info("Loaded AWS credentials from config file")
+      source.region.foreach { region =>
+        spark.sparkContext.hadoopConfiguration.set("fs.s3a.endpoint.region", region)
+      }
+      spark.sparkContext.hadoopConfiguration.set("fs.s3a.access.key", credentials.accessKey)
+      spark.sparkContext.hadoopConfiguration.set("fs.s3a.secret.key", credentials.secretKey)
+      credentials.maybeSessionToken.foreach { sessionToken =>
+        spark.sparkContext.hadoopConfiguration.set(
+          "fs.s3a.aws.credentials.provider",
+          "org.apache.hadoop.fs.s3a.TemporaryAWSCredentialsProvider")
+        spark.sparkContext.hadoopConfiguration.set(
+          "fs.s3a.session.token",
+          sessionToken
+        )
+      }
+    }
 }
