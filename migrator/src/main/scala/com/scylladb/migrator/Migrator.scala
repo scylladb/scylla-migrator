@@ -80,7 +80,8 @@ object Migrator {
                   manager.markFileAsProcessed(filePath)
                   log.info(s"Successfully processed file $fileNum/$totalFiles: $filePath")
               }
-
+              
+              manager.dumpMigrationState("completed")
               log.info(s"Parquet migration completed successfully: $totalFiles files processed")
             }
           }
