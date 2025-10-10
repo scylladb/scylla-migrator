@@ -4,7 +4,6 @@ import com.github.mjakubowski84.parquet4s.ParquetWriter
 import com.scylladb.migrator.CassandraUtils.dropAndRecreateTable
 import com.scylladb.migrator.SparkUtils.successfullyPerformMigration
 import com.scylladb.migrator.config.MigratorConfig
-import com.scylladb.migrator.scylla.ParquetSavepointsIntegrationTest.SavepointsTestSchema
 import org.apache.parquet.hadoop.ParquetFileWriter
 
 import java.net.InetSocketAddress
@@ -14,6 +13,8 @@ import scala.util.chaining._
 import scala.util.Using
 
 class ParquetSavepointsIntegrationTest extends munit.FunSuite {
+
+  case class SavepointsTestSchema(id: String, foo: String, bar: Int)
 
   private val parquetHostRoot: Path = Paths.get("docker/parquet")
   private val parquetTestDirectory: Path = parquetHostRoot.resolve("savepoints")
@@ -147,8 +148,4 @@ class ParquetSavepointsIntegrationTest extends munit.FunSuite {
           .toSeq
       }.sortBy(path => Files.getLastModifiedTime(path).toMillis)
         .lastOption
-}
-
-object ParquetSavepointsIntegrationTest {
-  case class SavepointsTestSchema(id: String, foo: String, bar: Int)
 }
