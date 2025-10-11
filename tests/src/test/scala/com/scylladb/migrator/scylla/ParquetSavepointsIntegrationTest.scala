@@ -10,7 +10,6 @@ import org.apache.parquet.hadoop.ParquetFileWriter
 
 import java.net.InetSocketAddress
 import java.nio.file.{ Files, Path, Paths }
-import scala.annotation.tailrec
 import scala.concurrent.duration._
 import scala.jdk.CollectionConverters._
 import scala.util.chaining._
@@ -18,8 +17,6 @@ import scala.util.Using
 
 class ParquetSavepointsIntegrationTest extends munit.FunSuite {
   case class SavepointsTestSchema(id: String, foo: String, bar: Int)
-
-  override val munitTimeout: FiniteDuration = 2.minutes
 
   private val parquetHostRoot: Path = Paths.get("docker/parquet")
   private val parquetTestDirectory: Path = parquetHostRoot.resolve("savepoints")
@@ -94,14 +91,13 @@ class ParquetSavepointsIntegrationTest extends munit.FunSuite {
         }
       }
 
-      val skipFiles = awaitSavepointWithFiles(
-        savepointsTestDirectory,
-        expectedProcessedFiles,
-        attempts = 10,
-        delay = 1.second
-      )
+      val skipFiles = for {
+        savepoint <- findLatestSavepoint(savepointsTestDirectory)
+        config <- Option(MigratorConfig.loadFrom(savepoint.toString))
+        files <- config.skipParquetFiles
+      } yield files
 
-      assertEquals(skipFiles, expectedProcessedFiles)
+      assertEquals(skipFiles, Some(expectedProcessedFiles))
     } finally {
       val dropTableQuery = SchemaBuilder.dropTable(keyspace, tableName).build()
       targetScylla.execute(dropTableQuery)
@@ -134,36 +130,6 @@ class ParquetSavepointsIntegrationTest extends munit.FunSuite {
     require(path.startsWith(parquetHostRoot), s"Unexpected parquet file location: $path")
     val relative = parquetHostRoot.relativize(path)
     Paths.get("/app/parquet").resolve(relative).toUri.toString
-  }
-
-  private def awaitSavepointWithFiles(directory: Path,
-                                      expected: Set[String],
-                                      attempts: Int,
-                                      delay: FiniteDuration): Set[String] = {
-    @tailrec
-    def loop(remaining: Int, lastObserved: Option[Set[String]]): Set[String] = {
-      if (remaining == 0) {
-        val observed = lastObserved.getOrElse(Set.empty)
-        fail(
-          s"Savepoint did not include the expected files within ${attempts * delay.toSeconds} seconds. Last observed: $observed"
-        )
-      } else {
-        val maybeSkipFiles = for {
-          savepoint <- findLatestSavepoint(directory)
-          config <- Option(MigratorConfig.loadFrom(savepoint.toString))
-          files <- config.skipParquetFiles
-        } yield files
-
-        maybeSkipFiles match {
-          case Some(files) if files == expected => files
-          case other =>
-            Thread.sleep(delay.toMillis)
-            loop(remaining - 1, other.orElse(lastObserved))
-        }
-      }
-    }
-
-    loop(attempts, None)
   }
 
   private def findLatestSavepoint(directory: Path): Option[Path] =
