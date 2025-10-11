@@ -1,9 +1,12 @@
 package com.scylladb.migrator.readers
 
 import com.scylladb.migrator.config.SourceSettings
+import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
 import com.scylladb.migrator.scylla.SourceDataFrame
+import com.scylladb.migrator.scylla
 import org.apache.log4j.LogManager
 import org.apache.spark.sql.{ AnalysisException, SparkSession }
+import scala.util.Using
 
 case class ParquetReaderWithSavepoints(source: SourceSettings.Parquet,
                                        allFiles: Seq[String],
@@ -17,6 +20,58 @@ case class ParquetReaderWithSavepoints(source: SourceSettings.Parquet,
 
 object Parquet {
   val log = LogManager.getLogger("com.scylladb.migrator.readers.Parquet")
+
+  def migrateToScylla(config: MigratorConfig,
+                      source: SourceSettings.Parquet,
+                      target: TargetSettings.Scylla)(implicit spark: SparkSession): Unit = {
+    val preparedReader = prepareParquetReader(
+      spark,
+      source,
+      config.getSkipParquetFilesOrEmptySet
+    )
+
+    val savepointsManager = ParquetSavepointsManager(
+      config,
+      spark.sparkContext
+    )
+
+    Using.resource(savepointsManager) { manager =>
+      preparedReader.configureHadoop(spark)
+
+      val filesToProcess = preparedReader.filesToProcess
+      val totalFiles = filesToProcess.size
+
+      if (totalFiles == 0) {
+        log.info(
+          "No Parquet files to process. Migration may be complete or all files already processed.")
+      } else {
+        log.info(s"Starting Parquet migration: processing $totalFiles files")
+
+        filesToProcess.zipWithIndex.foreach {
+          case (filePath, index) =>
+            val fileNum = index + 1
+            log.info(s"Processing file $fileNum/$totalFiles: $filePath")
+
+            val singleFileDF = spark.read.parquet(filePath)
+            val sourceDF = scylla.SourceDataFrame(singleFileDF, None, false)
+
+            scylla.ScyllaParquetMigrator.migrate(
+              config,
+              target,
+              sourceDF,
+              manager
+            )
+
+            manager.markFileAsProcessed(filePath)
+            log.info(s"Successfully processed file $fileNum/$totalFiles: $filePath")
+        }
+
+        manager.dumpMigrationState("completed")
+
+        log.info(s"Parquet migration completed successfully: $totalFiles files processed")
+      }
+    }
+  }
 
   def prepareParquetReader(spark: SparkSession,
                            source: SourceSettings.Parquet,
@@ -35,12 +90,12 @@ object Parquet {
   }
 
   @deprecated(
-    "Use prepareParquetReader and process files individually for savepoints support. See Migrator.scala for file-by-file processing pattern.")
+    "Use prepareParquetReader and process files individually for savepoints support. See migrateToScylla for file-by-file processing pattern.")
   def readDataFrame(spark: SparkSession, source: SourceSettings.Parquet): SourceDataFrame =
     readDataFrame(spark, source, Set.empty)
 
   @deprecated(
-    "Use prepareParquetReader and process files individually for savepoints support. See Migrator.scala for file-by-file processing pattern.")
+    "Use prepareParquetReader and process files individually for savepoints support. See migrateToScylla function for file-by-file processing pattern.")
   def readDataFrame(spark: SparkSession,
                     source: SourceSettings.Parquet,
                     skipFiles: Set[String]): SourceDataFrame = {
