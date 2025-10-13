@@ -92,7 +92,7 @@ abstract class ParquetMigratorSuite extends MigratorSuite(sourcePort = 0) {
     Using.resource(Files.walk(root)) { stream =>
       stream.iterator().asScala
         .filter(path => Files.isRegularFile(path))
-        .filter(_.getFileName.toString.startsWith("part-"))
+        .filter(_.getFileName.toString.endsWith(".parquet"))
         .toSet
     }
 
