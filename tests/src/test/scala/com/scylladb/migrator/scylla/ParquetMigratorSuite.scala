@@ -18,6 +18,30 @@ abstract class ParquetMigratorSuite extends MigratorSuite(sourcePort = 0) {
 
   override def munitFixtures: Seq[Fixture[_]] = Seq(targetScylla)
 
+  // Override withTable to only create table in target (no source Cassandra for Parquet tests)
+  override def withTable(name: String, renames: Map[String, String] = Map.empty): FunFixture[String] =
+    FunFixture(
+      setup = { _ =>
+        try {
+          // Only create table in target ScyllaDB, not in source
+          dropAndRecreateTable(
+            targetScylla(),
+            keyspace,
+            name,
+            columnName = originalName => renames.getOrElse(originalName, originalName))
+        } catch {
+          case any: Throwable =>
+            fail(s"Something did not work as expected", any)
+        }
+        name
+      },
+      teardown = { _ =>
+        val dropTableQuery = SchemaBuilder.dropTable(keyspace, name).build()
+        targetScylla().execute(dropTableQuery)
+        ()
+      }
+    )
+
   def withParquetDir(parquetDir: String): FunFixture[Path] =
     FunFixture(
       setup = { _ =>
