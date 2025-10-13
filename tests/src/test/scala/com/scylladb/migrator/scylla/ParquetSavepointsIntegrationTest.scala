@@ -4,6 +4,7 @@ import com.datastax.oss.driver.api.querybuilder.QueryBuilder
 import com.scylladb.migrator.SparkUtils.successfullyPerformMigration
 import com.scylladb.migrator.config.MigratorConfig
 
+import java.nio.file.Files
 import scala.jdk.CollectionConverters._
 import scala.util.chaining._
 
@@ -12,7 +13,10 @@ class ParquetSavepointsIntegrationTest extends ParquetMigratorSuite {
 
   private val configFileName: String = "parquet-to-scylla-savepoints.yaml"
 
-  withTableAndSavepoints("savepointstest", "savepoints", "parquet-savepoints-test").test("Parquet savepoints include all processed files") { case (tableName, (parquetDir, savepointsDir)) =>
+  withTableAndSavepoints("savepointstest", "savepoints", "parquet-savepoints-test").test("Parquet savepoints include all processed files") { case (tableName, (parquetRoot, savepointsDir)) =>
+
+    val parquetDir = parquetRoot.resolve("savepoints")
+    Files.createDirectories(parquetDir)
 
     val parquetBatches = List(
       parquetDir.resolve("batch-1.parquet") -> List(

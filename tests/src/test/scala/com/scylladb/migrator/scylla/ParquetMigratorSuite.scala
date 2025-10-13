@@ -45,9 +45,8 @@ abstract class ParquetMigratorSuite extends MigratorSuite(sourcePort = 0) {
   def withParquetDir(parquetDir: String): FunFixture[Path] =
     FunFixture(
       setup = { _ =>
-        val directory = parquetHostRoot.resolve(parquetDir)
-        ensureEmptyDirectory(directory)
-        directory
+        ensureEmptyDirectory(parquetHostRoot)
+        parquetHostRoot
       },
       teardown = { directory =>
         ensureEmptyDirectory(directory)
