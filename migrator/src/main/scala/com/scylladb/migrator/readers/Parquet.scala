@@ -117,6 +117,16 @@ object Parquet {
     }
   }
 
+  /**
+   * Configures Hadoop S3A credentials for reading from AWS S3.
+   *
+   * This method sets the necessary Hadoop configuration properties for AWS access key, secret key,
+   * and optionally a session token. When a session token is present, it sets the credentials provider
+   * to TemporaryAWSCredentialsProvider as required by Hadoop.
+   *
+   * For more details, see the official Hadoop AWS documentation:
+   * https://hadoop.apache.org/docs/stable/hadoop-aws/tools/hadoop-aws/index.html#Authentication
+   */
   private[readers] def configureHadoopCredentials(spark: SparkSession,
                                                   source: SourceSettings.Parquet): Unit =
     source.finalCredentials.foreach { credentials =>
