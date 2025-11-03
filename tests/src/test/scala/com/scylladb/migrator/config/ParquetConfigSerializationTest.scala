@@ -28,7 +28,7 @@ class ParquetConfigSerializationTest extends munit.FunSuite {
         consistencyLevel = "LOCAL_QUORUM"
       ),
       renames = None,
-      savepoints = Savepoints(300, "/app/savepoints"),
+      savepoints = Savepoints(300, "/app/savepoints", None),
       skipTokenRanges = None,
       skipSegments = None,
       skipParquetFiles = Some(Set(
@@ -120,7 +120,7 @@ validation: null
         consistencyLevel = "LOCAL_QUORUM"
       ),
       renames = None,
-      savepoints = Savepoints(300, "/tmp"),
+      savepoints = Savepoints(300, "/tmp", None),
       skipTokenRanges = None,
       skipSegments = None,
       skipParquetFiles = Some(originalFiles),
@@ -137,6 +137,118 @@ validation: null
       assertEquals(config2.skipParquetFiles.get, originalFiles)
     } finally {
       Files.delete(tempFile)
+    }
+  }
+
+  test("parquetProcessingMode serialization and deserialization") {
+    val config = MigratorConfig(
+      source = SourceSettings.Parquet("s3a://bucket/", None, None, None),
+      target = TargetSettings.Scylla(
+        host = "localhost",
+        port = 9042,
+        localDC = Some("dc1"),
+        credentials = None,
+        sslOptions = None,
+        keyspace = "ks",
+        table = "tbl",
+        connections = Some(8),
+        stripTrailingZerosForDecimals = false,
+        writeTTLInS = None,
+        writeWritetimestampInuS = None,
+        consistencyLevel = "LOCAL_QUORUM"
+      ),
+      renames = None,
+      savepoints = Savepoints(300, "/tmp", Some(ParquetProcessingMode.Sequential)),
+      skipTokenRanges = None,
+      skipSegments = None,
+      skipParquetFiles = None,
+      validation = None
+    )
+
+    val yaml = config.render
+    assert(yaml.contains("parquetProcessingMode"))
+    assert(yaml.contains("sequential"))
+
+    val tempFile = Files.createTempFile("mode-config", ".yaml")
+    try {
+      Files.write(tempFile, yaml.getBytes(StandardCharsets.UTF_8))
+      val loadedConfig = MigratorConfig.loadFrom(tempFile.toString)
+
+      assertEquals(loadedConfig.savepoints.parquetProcessingMode, Some(ParquetProcessingMode.Sequential))
+      assertEquals(loadedConfig.savepoints.getParquetProcessingMode, ParquetProcessingMode.Sequential)
+    } finally {
+      Files.delete(tempFile)
+    }
+  }
+
+  test("parquetProcessingMode defaults to Parallel when not specified") {
+    val yamlContent = """
+source:
+  type: parquet
+  path: "s3a://bucket/"
+
+target:
+  type: scylla
+  host: localhost
+  port: 9042
+  keyspace: ks
+  table: tbl
+  consistencyLevel: LOCAL_QUORUM
+  stripTrailingZerosForDecimals: false
+
+savepoints:
+  path: /tmp
+  intervalSeconds: 300
+"""
+
+    val tempFile = Files.createTempFile("default-mode-config", ".yaml")
+    try {
+      Files.write(tempFile, yamlContent.getBytes(StandardCharsets.UTF_8))
+      val config = MigratorConfig.loadFrom(tempFile.toString)
+
+      assertEquals(config.savepoints.parquetProcessingMode, None)
+      assertEquals(config.savepoints.getParquetProcessingMode, ParquetProcessingMode.Parallel)
+    } finally {
+      Files.delete(tempFile)
+    }
+  }
+
+  test("parquetProcessingMode accepts both parallel and sequential values") {
+    val modes = List(
+      ("parallel", ParquetProcessingMode.Parallel),
+      ("sequential", ParquetProcessingMode.Sequential)
+    )
+
+    modes.foreach { case (modeStr, expectedMode) =>
+      val yamlContent = s"""
+source:
+  type: parquet
+  path: "s3a://bucket/"
+
+target:
+  type: scylla
+  host: localhost
+  port: 9042
+  keyspace: ks
+  table: tbl
+  consistencyLevel: LOCAL_QUORUM
+  stripTrailingZerosForDecimals: false
+
+savepoints:
+  path: /tmp
+  intervalSeconds: 300
+  parquetProcessingMode: $modeStr
+"""
+
+      val tempFile = Files.createTempFile(s"mode-$modeStr", ".yaml")
+      try {
+        Files.write(tempFile, yamlContent.getBytes(StandardCharsets.UTF_8))
+        val config = MigratorConfig.loadFrom(tempFile.toString)
+
+        assertEquals(config.savepoints.getParquetProcessingMode, expectedMode)
+      } finally {
+        Files.delete(tempFile)
+      }
     }
   }
 }

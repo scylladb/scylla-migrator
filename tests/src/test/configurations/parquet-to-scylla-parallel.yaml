@@ -1,6 +1,6 @@
 source:
   type: parquet
-  path: /app/parquet/savepoints
+  path: /app/parquet/parallel
 
 target:
   type: scylla
@@ -11,12 +11,12 @@ target:
     username: dummy
     password: dummy
   keyspace: test
-  table: savepointstest
+  table: paralleltest
   consistencyLevel: LOCAL_QUORUM
   connections: 16
   stripTrailingZerosForDecimals: false
 
 savepoints:
-  path: /app/savepoints/parquet-savepoints-test
-  intervalSeconds: 1
-  parquetProcessingMode: sequential
+  path: /app/savepoints
+  intervalSeconds: 300
+  parquetProcessingMode: parallel
