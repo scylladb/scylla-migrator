@@ -59,12 +59,12 @@ object Parquet {
   }
 
   @deprecated(
-    "Use prepareParquetReader and process files individually for savepoints support. See migrateToScylla for file-by-file processing pattern.")
+    "Use prepareParquetReader and process files individually for savepoints support. See SequentialParquetStrategy for file-by-file processing pattern.")
   def readDataFrame(spark: SparkSession, source: SourceSettings.Parquet): SourceDataFrame =
     readDataFrame(spark, source, Set.empty)
 
   @deprecated(
-    "Use prepareParquetReader and process files individually for savepoints support. See migrateToScylla function for file-by-file processing pattern.")
+    "Use prepareParquetReader and process files individually for savepoints support. See SequentialParquetStrategy for file-by-file processing pattern.")
   def readDataFrame(spark: SparkSession,
                     source: SourceSettings.Parquet,
                     skipFiles: Set[String]): SourceDataFrame = {

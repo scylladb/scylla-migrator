@@ -8,6 +8,9 @@ class StringSetAccumulator(initialValue: Set[String] = Set.empty)
 
   private val ref = new AtomicReference(initialValue)
 
+  // Note: isZero may be momentarily inconsistent in concurrent scenarios,
+  // as it reads the current value of the set without synchronization.
+  // This is eventually consistent and thread-safe, but may not reflect the most recent updates.
   def isZero: Boolean = ref.get.isEmpty
   def copy(): StringSetAccumulator = new StringSetAccumulator(ref.get)
   def reset(): Unit = ref.set(Set.empty)

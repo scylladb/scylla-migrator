@@ -24,6 +24,11 @@ object ParquetProcessingMode {
 case class Savepoints(intervalSeconds: Int,
                       path: String,
                       parquetProcessingMode: Option[ParquetProcessingMode]) {
+  /**
+   * Returns the configured Parquet processing mode.
+   * Defaults to [[ParquetProcessingMode.Parallel]] if not specified.
+   * This default affects migration semantics.
+   */
   def getParquetProcessingMode: ParquetProcessingMode =
     parquetProcessingMode.getOrElse(ParquetProcessingMode.Parallel)
 }

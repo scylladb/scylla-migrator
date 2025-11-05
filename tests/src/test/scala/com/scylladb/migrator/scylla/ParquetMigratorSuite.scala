@@ -11,6 +11,9 @@ import scala.util.Using
 
 abstract class ParquetMigratorSuite extends MigratorSuite(sourcePort = 0) {
 
+  // parquet4s automatically derives the Parquet schema from this case class definition.
+  // This definition must remain consistent with the table schema created by dropAndRecreateTable,
+  // which has columns: id TEXT, foo TEXT, bar INT.
   case class TestRecord(id: String, foo: String, bar: Int)
 
   protected val parquetHostRoot: Path = Paths.get("docker/parquet")
