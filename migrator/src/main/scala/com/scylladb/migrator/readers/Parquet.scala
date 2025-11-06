@@ -88,6 +88,9 @@ object Parquet {
     * This method sets the necessary Hadoop configuration properties for AWS access key, secret key,
     * and optionally a session token. When a session token is present, it sets the credentials provider
     * to TemporaryAWSCredentialsProvider as required by Hadoop.
+    * 
+    * If a region is specified in the source configuration, this method also sets the S3A endpoint region
+    * via the `fs.s3a.endpoint.region` property.
     *
     * For more details, see the official Hadoop AWS documentation:
     * https://hadoop.apache.org/docs/stable/hadoop-aws/tools/hadoop-aws/index.html#Authentication
