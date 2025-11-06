@@ -40,8 +40,7 @@ object Migrator {
             migratorConfig.getSkipTokenRangesOrEmptySet)
           ScyllaMigrator.migrate(migratorConfig, scyllaTarget, sourceDF)
         case (parquetSource: SourceSettings.Parquet, scyllaTarget: TargetSettings.Scylla) =>
-          val sourceDF = readers.Parquet.readDataFrame(spark, parquetSource)
-          ScyllaMigrator.migrate(migratorConfig, scyllaTarget, sourceDF)
+          readers.Parquet.migrateToScylla(migratorConfig, parquetSource, scyllaTarget)(spark)
         case (dynamoSource: SourceSettings.DynamoDB, alternatorTarget: TargetSettings.DynamoDB) =>
           AlternatorMigrator.migrateFromDynamoDB(dynamoSource, alternatorTarget, migratorConfig)
         case (
