@@ -21,10 +21,11 @@ class SequentialParquetStrategy extends ParquetProcessingStrategy {
       config.getSkipParquetFilesOrEmptySet
     )
 
-    Using.resource(ParquetSavepointsManager(
-      config,
-      spark.sparkContext
-    )) { manager =>
+    Using.resource(
+      ParquetSavepointsManager(
+        config,
+        spark.sparkContext
+      )) { manager =>
       preparedReader.configureHadoop(spark)
 
       val filesToProcess = preparedReader.filesToProcess

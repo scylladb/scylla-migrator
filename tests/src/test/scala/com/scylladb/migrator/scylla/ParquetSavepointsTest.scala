@@ -3,12 +3,9 @@ package com.scylladb.migrator.scylla
 import com.scylladb.migrator.config.{MigratorConfig, SourceSettings}
 import com.scylladb.migrator.readers.{Parquet, ParquetSavepointsManager}
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.{SparkConf, SparkContext}
 
-import java.nio.file.{Files, Path, Paths}
-import scala.annotation.nowarn
+import java.nio.file.Files
 
-@nowarn("cat=deprecation")
 class ParquetSavepointsTest extends munit.FunSuite {
 
   implicit val spark: SparkSession = SparkSession
@@ -122,22 +119,17 @@ class ParquetSavepointsTest extends munit.FunSuite {
 
       val parquetSource = SourceSettings.Parquet(tempDir.toString, None, None, None)
 
+      // Test without skipFiles
       val preparedReaderAll = Parquet.prepareParquetReader(spark, parquetSource, Set.empty)
       val allFiles = preparedReaderAll.allFiles
       assert(allFiles.length >= 2)
+      assertEquals(preparedReaderAll.filesToProcess.size, allFiles.size)
 
-      // Deprecated approach
-      val allDataDF = Parquet.readDataFrame(spark, parquetSource)
-      assert(allDataDF.dataFrame.count() >= 2L)
-
+      // Test with skipFiles
       val fileToSkip = allFiles.head
       val preparedReaderFiltered = Parquet.prepareParquetReader(spark, parquetSource, Set(fileToSkip))
-
-      if (preparedReaderFiltered.filesToProcess.nonEmpty) {
-        val filteredDataDF = Parquet.readDataFrame(spark, parquetSource, Set(fileToSkip))
-        val filteredCount = filteredDataDF.dataFrame.count()
-        assert(filteredCount < allDataDF.dataFrame.count())
-      }
+      assertEquals(preparedReaderFiltered.filesToProcess.size, allFiles.size - 1)
+      assert(!preparedReaderFiltered.filesToProcess.contains(fileToSkip))
 
     } finally {
       Files.walk(tempDir)
