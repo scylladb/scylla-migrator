@@ -3,6 +3,7 @@ package com.scylladb.migrator.scylla
 import com.datastax.spark.connector.rdd.partitioner.{ CassandraPartition, CqlTokenRange }
 import com.datastax.spark.connector.rdd.partitioner.dht.Token
 import com.datastax.spark.connector.writer.TokenRangeAccumulator
+import com.scylladb.migrator.SavepointsManager
 import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
 import com.scylladb.migrator.readers.TimestampColumns
 import com.scylladb.migrator.writers
@@ -15,24 +16,30 @@ case class SourceDataFrame(dataFrame: DataFrame,
                            timestampColumns: Option[TimestampColumns],
                            savepointsSupported: Boolean)
 
-object ScyllaMigrator {
-  val log = LogManager.getLogger("com.scylladb.migrator.scylla")
+trait ScyllaMigratorBase {
+  protected val log = LogManager.getLogger("com.scylladb.migrator.scylla")
 
-  def migrate(migratorConfig: MigratorConfig,
-              target: TargetSettings.Scylla,
-              sourceDF: SourceDataFrame)(implicit spark: SparkSession): Unit = {
+  protected def externalSavepointsManager: Option[SavepointsManager] = None
+
+  protected def createSavepointsManager(
+    migratorConfig: MigratorConfig,
+    sourceDF: SourceDataFrame
+  )(implicit spark: SparkSession): Option[SavepointsManager]
+
+  protected def shouldCloseManager(manager: SavepointsManager): Boolean
+
+  def migrate(
+    migratorConfig: MigratorConfig,
+    target: TargetSettings.Scylla,
+    sourceDF: SourceDataFrame
+  )(implicit spark: SparkSession): Unit = {
 
     log.info("Created source dataframe; resulting schema:")
     sourceDF.dataFrame.printSchema()
 
-    val maybeSavepointsManager =
-      if (!sourceDF.savepointsSupported) None
-      else {
-        val tokenRangeAccumulator = TokenRangeAccumulator.empty
-        spark.sparkContext.register(tokenRangeAccumulator, "Token ranges copied")
-
-        Some(CqlSavepointsManager(migratorConfig, tokenRangeAccumulator))
-      }
+    val maybeSavepointsManager = externalSavepointsManager.orElse(
+      createSavepointsManager(migratorConfig, sourceDF)
+    )
 
     log.info(
       "We need to transfer: " + sourceDF.dataFrame.rdd.getNumPartitions + " partitions in total")
@@ -71,23 +78,46 @@ object ScyllaMigrator {
     log.info("Starting write...")
 
     try {
+      val tokenRangeAccumulator = maybeSavepointsManager.flatMap {
+        case cqlManager: CqlSavepointsManager => Some(cqlManager.accumulator)
+        case _                                => None
+      }
       writers.Scylla.writeDataframe(
         target,
         migratorConfig.getRenamesOrNil,
         sourceDF.dataFrame,
         sourceDF.timestampColumns,
-        maybeSavepointsManager.map(_.accumulator))
+        tokenRangeAccumulator)
     } catch {
-      case NonFatal(e) => // Catching everything on purpose to try and dump the accumulator state
+      // Catch all non-fatal exceptions to ensure that a savepoint is created
+      // even in the event of unexpected errors during the write process.
+      case NonFatal(e) =>
         log.error(
           "Caught error while writing the DataFrame. Will create a savepoint before exiting",
           e)
     } finally {
       for (savePointsManger <- maybeSavepointsManager) {
         savePointsManger.dumpMigrationState("final")
-        savePointsManger.close()
+        if (shouldCloseManager(savePointsManger)) {
+          savePointsManger.close()
+        }
       }
     }
   }
+}
 
+object ScyllaMigrator extends ScyllaMigratorBase {
+
+  protected override def createSavepointsManager(
+    migratorConfig: MigratorConfig,
+    sourceDF: SourceDataFrame
+  )(implicit spark: SparkSession): Option[SavepointsManager] =
+    if (!sourceDF.savepointsSupported) None
+    else {
+      val tokenRangeAccumulator = TokenRangeAccumulator.empty
+      spark.sparkContext.register(tokenRangeAccumulator, "Token ranges copied")
+      Some(CqlSavepointsManager(migratorConfig, tokenRangeAccumulator))
+    }
+
+  protected override def shouldCloseManager(manager: SavepointsManager): Boolean = true
 }
