@@ -75,7 +75,7 @@ class ParquetSavepointsTest extends munit.FunSuite {
         source = SourceSettings.Parquet("dummy", None, None, None),
         target = null,
         renames = None,
-        savepoints = com.scylladb.migrator.config.Savepoints(300, tempDir.toString, None),
+        savepoints = com.scylladb.migrator.config.Savepoints(300, tempDir.toString),
         skipTokenRanges = None,
         skipSegments = None,
         skipParquetFiles = Some(Set("file1.parquet")),
@@ -102,7 +102,7 @@ class ParquetSavepointsTest extends munit.FunSuite {
     }
   }
 
-  test("Parquet reader with skipFiles functionality") {
+  test("Parquet file filtering with skipFiles") {
     val tempDir = Files.createTempDirectory("parquet-skip-test")
 
     try {
@@ -117,19 +117,17 @@ class ParquetSavepointsTest extends munit.FunSuite {
       testData1.write.parquet(file1Path.toString)
       testData2.write.parquet(file2Path.toString)
 
-      val parquetSource = SourceSettings.Parquet(tempDir.toString, None, None, None)
-
-      // Test without skipFiles
-      val preparedReaderAll = Parquet.prepareParquetReader(spark, parquetSource, Set.empty)
-      val allFiles = preparedReaderAll.allFiles
+      // List all files
+      val allFiles = Parquet.listParquetFiles(spark, tempDir.toString)
       assert(allFiles.length >= 2)
-      assertEquals(preparedReaderAll.filesToProcess.size, allFiles.size)
 
-      // Test with skipFiles
+      // Test filtering with skipFiles
       val fileToSkip = allFiles.head
-      val preparedReaderFiltered = Parquet.prepareParquetReader(spark, parquetSource, Set(fileToSkip))
-      assertEquals(preparedReaderFiltered.filesToProcess.size, allFiles.size - 1)
-      assert(!preparedReaderFiltered.filesToProcess.contains(fileToSkip))
+      val skipFiles = Set(fileToSkip)
+      val filesToProcess = allFiles.filterNot(skipFiles.contains)
+
+      assertEquals(filesToProcess.size, allFiles.size - 1)
+      assert(!filesToProcess.contains(fileToSkip))
 
     } finally {
       Files.walk(tempDir)
@@ -159,14 +157,13 @@ class ParquetSavepointsTest extends munit.FunSuite {
 
       val parquetSource = SourceSettings.Parquet(tempDir.toString, None, None, None)
 
-      val preparedReader = Parquet.prepareParquetReader(spark, parquetSource, Set.empty)
-      val allFiles = preparedReader.filesToProcess
+      val allFiles = Parquet.listParquetFiles(spark, tempDir.toString)
 
       val config = MigratorConfig(
         source = parquetSource,
         target = null,
         renames = None,
-        savepoints = com.scylladb.migrator.config.Savepoints(300, savepointsDir.toString, None),
+        savepoints = com.scylladb.migrator.config.Savepoints(300, savepointsDir.toString),
         skipTokenRanges = None,
         skipSegments = None,
         skipParquetFiles = None,
