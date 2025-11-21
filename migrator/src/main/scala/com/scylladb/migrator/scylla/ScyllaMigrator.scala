@@ -89,9 +89,7 @@ trait ScyllaMigratorBase {
         sourceDF.timestampColumns,
         tokenRangeAccumulator)
     } catch {
-      // Catch all non-fatal exceptions to ensure that a savepoint is created
-      // even in the event of unexpected errors during the write process.
-      case NonFatal(e) =>
+      case NonFatal(e) => // Catching everything on purpose to try and dump the accumulator state
         log.error(
           "Caught error while writing the DataFrame. Will create a savepoint before exiting",
           e)

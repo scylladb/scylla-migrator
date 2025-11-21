@@ -19,4 +19,3 @@ target:
 savepoints:
   path: /app/savepoints
   intervalSeconds: 300
-  parquetProcessingMode: parallel

@@ -1,26 +1,10 @@
 package com.scylladb.migrator.readers
 
-import com.scylladb.migrator.config.{
-  MigratorConfig,
-  ParquetProcessingMode,
-  SourceSettings,
-  TargetSettings
-}
-import com.scylladb.migrator.scylla.SourceDataFrame
-import com.scylladb.migrator.scylla
+import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
+import com.scylladb.migrator.scylla.{ ScyllaParquetMigrator, SourceDataFrame }
 import org.apache.log4j.LogManager
 import org.apache.spark.sql.{ AnalysisException, SparkSession }
 import scala.util.Using
-
-case class ParquetReaderWithSavepoints(source: SourceSettings.Parquet,
-                                       allFiles: Seq[String],
-                                       skipFiles: Set[String]) {
-
-  val filesToProcess: Seq[String] = allFiles.filterNot(skipFiles.contains)
-
-  def configureHadoop(spark: SparkSession): Unit =
-    Parquet.configureHadoopCredentials(spark, source)
-}
 
 object Parquet {
   val log = LogManager.getLogger("com.scylladb.migrator.readers.Parquet")
@@ -28,34 +12,62 @@ object Parquet {
   def migrateToScylla(config: MigratorConfig,
                       source: SourceSettings.Parquet,
                       target: TargetSettings.Scylla)(implicit spark: SparkSession): Unit = {
-    val processingMode = config.savepoints.getParquetProcessingMode
-
-    val strategy: ParquetProcessingStrategy = processingMode match {
-      case ParquetProcessingMode.Parallel =>
-        log.info("Selected PARALLEL processing mode (default)")
-        new ParallelParquetStrategy()
-      case ParquetProcessingMode.Sequential =>
-        log.info("Selected SEQUENTIAL processing mode (with savepoints)")
-        new SequentialParquetStrategy()
-    }
-
-    strategy.migrate(config, source, target)
-  }
-
-  def prepareParquetReader(spark: SparkSession,
-                           source: SourceSettings.Parquet,
-                           skipFiles: Set[String] = Set.empty): ParquetReaderWithSavepoints = {
+    log.info("Starting Parquet migration with parallel processing and file-level savepoints")
 
     configureHadoopCredentials(spark, source)
 
     val allFiles = listParquetFiles(spark, source.path)
-    log.info(s"Found ${allFiles.size} Parquet files in ${source.path}")
+    val skipFiles = config.getSkipParquetFilesOrEmptySet
+    val filesToProcess = allFiles.filterNot(skipFiles.contains)
 
-    if (skipFiles.nonEmpty) {
-      log.info(s"Skipping ${skipFiles.size} already processed files")
+    if (filesToProcess.isEmpty) {
+      log.info("No Parquet files to process. Migration is complete.")
+      return
     }
 
-    ParquetReaderWithSavepoints(source, allFiles, skipFiles)
+    log.info(s"Processing ${filesToProcess.size} Parquet files")
+
+    val df = if (skipFiles.isEmpty) {
+      spark.read.parquet(source.path)
+    } else {
+      spark.read.parquet(filesToProcess: _*)
+    }
+
+    log.info("Reading partition metadata for file tracking...")
+    val metadata = PartitionMetadataReader.readMetadataFromDataFrame(df)
+
+    val partitionToFiles = PartitionMetadataReader.buildPartitionToFileMap(metadata)
+    val fileToPartitions = PartitionMetadataReader.buildFileToPartitionsMap(metadata)
+
+    log.info(
+      s"Discovered ${fileToPartitions.size} files with ${metadata.size} total partitions to process")
+
+    Using.resource(ParquetSavepointsManager(config, spark.sparkContext)) { savepointsManager =>
+      val listener = new FileCompletionListener(
+        partitionToFiles,
+        fileToPartitions,
+        savepointsManager
+      )
+      spark.sparkContext.addSparkListener(listener)
+
+      try {
+        val sourceDF = SourceDataFrame(df, None, savepointsSupported = false)
+
+        log.info("Created DataFrame from Parquet source")
+
+        ScyllaParquetMigrator.migrate(config, target, sourceDF, savepointsManager)
+
+        savepointsManager.dumpMigrationState("completed")
+
+        log.info(
+          s"Parquet migration completed successfully: " +
+            s"${listener.getCompletedFilesCount}/${listener.getTotalFilesCount} files processed")
+
+      } finally {
+        spark.sparkContext.removeSparkListener(listener)
+        log.info(s"Final progress: ${listener.getProgressReport}")
+      }
+    }
   }
 
   def listParquetFiles(spark: SparkSession, path: String): Seq[String] = {
@@ -88,7 +100,7 @@ object Parquet {
     * This method sets the necessary Hadoop configuration properties for AWS access key, secret key,
     * and optionally a session token. When a session token is present, it sets the credentials provider
     * to TemporaryAWSCredentialsProvider as required by Hadoop.
-    * 
+    *
     * If a region is specified in the source configuration, this method also sets the S3A endpoint region
     * via the `fs.s3a.endpoint.region` property.
     *
