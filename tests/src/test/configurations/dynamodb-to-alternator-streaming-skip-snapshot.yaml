@@ -1,11 +1,11 @@
 source:
   type: dynamodb
-  table: StreamedItemsSkipSnapshotTest
+  table: migrator-StreamedItemsSkipSnapshotTest
   region: us-east-1
 
 target:
   type: dynamodb
-  table: StreamedItemsSkipSnapshotTest
+  table: migrator-StreamedItemsSkipSnapshotTest
   region: dummy
   endpoint:
     host: http://scylla
