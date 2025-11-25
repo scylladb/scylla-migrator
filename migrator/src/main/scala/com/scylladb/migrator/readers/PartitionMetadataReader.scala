@@ -46,11 +46,13 @@ object PartitionMetadataReader {
 
       logger.info(s"Discovered ${metadata.size} partition-to-file mappings")
 
-      val fileStats = metadata.groupBy(_.filename).view.mapValues(_.size)
-      logger.info(s"Files distribution: ${fileStats.size} unique files")
-      fileStats.foreach {
-        case (file, partCount) =>
-          logger.debug(s"  File: $file -> $partCount partition(s)")
+      if (logger.isDebugEnabled) {
+        val fileStats = metadata.groupBy(_.filename).view.mapValues(_.size)
+        logger.info(s"Files distribution: ${fileStats.size} unique files")
+        fileStats.foreach {
+          case (file, partCount) =>
+            logger.debug(s"  File: $file -> $partCount partition(s)")
+        }
       }
 
       metadata
