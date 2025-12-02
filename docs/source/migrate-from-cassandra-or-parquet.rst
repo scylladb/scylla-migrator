@@ -2,7 +2,7 @@
 Migrate from Apache Cassandra or from a Parquet File
 ====================================================
 
-This page explains how to fill the ``source`` and ``target`` properties of the `configuration file <../configuration>`_ to migrate data:
+This page explains how to fill the ``source`` and ``target`` properties of the `configuration file </configuration>`_ to migrate data:
 
 - from Apache Cassandra, ScyllaDB, or from a `Parquet <https://parquet.apache.org/>`_ file,
 - to Apache Cassandra or ScyllaDB.
@@ -124,7 +124,7 @@ In case the object is not public in the S3 bucket, you can provide the AWS crede
 
 Where ``<access-key>`` and ``<secret-key>`` should be replaced with your actual AWS access key and secret key.
 
-The Migrator also supports advanced AWS authentication options such as using `AssumeRole <https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html>`_. Please read the `configuration reference <../configuration/#aws-authentication>`__ for more details.
+The Migrator also supports advanced AWS authentication options such as using `AssumeRole <https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html>`_. Please read the `configuration reference </configuration#aws-authentication>`__ for more details.
 
 ---------------------------
 Configuring the Destination
