@@ -327,6 +327,8 @@ The optional ``renames`` property lists the item columns to rename along the mig
       to: <target-column-name>
     # ... other columns to rename
 
+.. _config-savepoints:
+
 ----------
 Savepoints
 ----------
@@ -363,6 +365,8 @@ The ``validation`` field and its properties are mandatory only when the applicat
     floatingPointTolerance: 0.001
     # What difference in ms should we allow between timestamps?
     timestampMsTolerance: 0
+
+.. _aws-authentication:
 
 ------------------
 AWS Authentication
