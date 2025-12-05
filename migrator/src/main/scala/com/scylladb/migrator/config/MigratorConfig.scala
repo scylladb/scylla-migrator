@@ -14,6 +14,7 @@ case class MigratorConfig(source: SourceSettings,
                           savepoints: Savepoints,
                           skipTokenRanges: Option[Set[(Token[_], Token[_])]],
                           skipSegments: Option[Set[Int]],
+                          skipParquetFiles: Option[Set[String]],
                           validation: Option[Validation]) {
   def render: String = this.asJson.asYaml.spaces2
 
@@ -24,6 +25,8 @@ case class MigratorConfig(source: SourceSettings,
     getRenamesOrNil.map(rename => rename.from -> rename.to).toMap.withDefault(identity)
 
   def getSkipTokenRangesOrEmptySet: Set[(Token[_], Token[_])] = skipTokenRanges.getOrElse(Set.empty)
+
+  def getSkipParquetFilesOrEmptySet: Set[String] = skipParquetFiles.getOrElse(Set.empty)
 
 }
 object MigratorConfig {
