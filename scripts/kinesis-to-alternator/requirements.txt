@@ -1,0 +1,3 @@
+tzlocal
+boto3~=1.40.30
+python-dotenv~=1.1.1
