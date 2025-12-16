@@ -1,0 +1,472 @@
+# =============================================================================
+# ScyllaDB Migrator - MariaDB Source Configuration Example
+# =============================================================================
+#
+# This configuration file demonstrates how to migrate data from MariaDB to ScyllaDB.
+#
+# The migration process:
+# 1. Connects to MariaDB and acquires BACKUP STAGE lock for consistent snapshot
+# 2. Captures GTID position for binlog streaming
+# 3. Creates target table in ScyllaDB (if not exists)
+# 4. Performs parallel snapshot transfer using PK range scanning
+# 5. Releases BACKUP STAGE lock
+# 6. Optionally streams binlog for CDC (ongoing replication)
+#
+# Requirements:
+# - MariaDB 10.4+ (for BACKUP STAGE support)
+# - GTID mode enabled on MariaDB (gtid_mode=ON)
+# - User with RELOAD, REPLICATION CLIENT, REPLICATION SLAVE privileges
+# - ScyllaDB cluster accessible from Spark workers
+# - Native library (libmariadb-scylla-migrator-jni) in java.library.path
+#
+
+# =============================================================================
+# Source Configuration (MariaDB)
+# =============================================================================
+source:
+  # Source type - must be 'mariadb' for MariaDB migrations
+  type: mariadb
+  
+  # MariaDB server hostname or IP address
+  host: mariadb.example.com
+  
+  # MariaDB server port (default: 3306)
+  port: 3306
+  
+  # Database credentials
+  credentials:
+    user: migrator_user
+    password: your_secure_password
+  
+  # Source database name
+  database: source_db
+  
+  # Source table name
+  table: source_table
+  
+  # Optional - SSL configuration for secure connections
+  # sslOptions:
+  #   enabled: true
+  #   caCertPath: /path/to/ca-cert.pem
+  #   clientCertPath: /path/to/client-cert.pem
+  #   clientKeyPath: /path/to/client-key.pem
+  #   verifyServerCert: true
+  
+  # Connection pool size per worker (default: 4)
+  connectionPoolSize: 4
+  
+  # Connection timeout in milliseconds (default: 30000)
+  connectionTimeoutMs: 30000
+  
+  # Read timeout in milliseconds (default: 300000 = 5 minutes)
+  readTimeoutMs: 300000
+  
+  # Use BACKUP STAGE for consistent snapshot (default: true)
+  # Requires RELOAD privilege and MariaDB 10.4+
+  # Set to false for MySQL compatibility (less consistent snapshot)
+  useBackupStage: true
+  
+  # Stream binlog for CDC after initial snapshot (default: true)
+  # Requires REPLICATION CLIENT and REPLICATION SLAVE privileges
+  # The migration will run continuously until stopped
+  streamBinlog: true
+  
+  # Optional - Server ID for binlog streaming
+  # If not set, a random ID will be generated
+  # serverId: "12345"
+  
+  # Number of ranges to split the table into for parallel scanning
+  # Higher values = more parallelism, but more overhead
+  # Aim for 4-8 ranges per Spark core
+  splitCount: 256
+  
+  # Number of rows to fetch per batch (default: 1000)
+  fetchSize: 1000
+
+# =============================================================================
+# Target Configuration (ScyllaDB)
+# =============================================================================
+target:
+  # Target type - must be 'scylla' for ScyllaDB
+  type: scylla
+  
+  # ScyllaDB contact points (comma-separated for multiple nodes)
+  host: scylla-node1.example.com,scylla-node2.example.com,scylla-node3.example.com
+  
+  # CQL native transport port (default: 9042)
+  port: 9042
+  
+  # Optional - Local datacenter name for DC-aware load balancing
+  # localDC: datacenter1
+  
+  # Optional - Authentication credentials
+  credentials:
+    username: scylla_user
+    password: your_scylla_password
+  
+  # Optional - SSL configuration
+  # sslOptions:
+  #   enabled: true
+  #   clientAuthEnabled: false
+  #   trustStorePath: /path/to/truststore.jks
+  #   trustStorePassword: truststore_password
+  #   trustStoreType: JKS
+  
+  # Target keyspace (must exist before migration)
+  keyspace: target_keyspace
+  
+  # Target table name (will be created if not exists)
+  table: target_table
+  
+  # Number of connections per ScyllaDB node (default: 16)
+  connections: 16
+  
+  # Write consistency level
+  # Options: LOCAL_ONE, ONE, LOCAL_QUORUM, QUORUM
+  consistencyLevel: LOCAL_QUORUM
+  
+  # Strip trailing zeros from decimal values (default: false)
+  # Spark may pad decimals with zeros; enable this to preserve original precision
+  stripTrailingZerosForDecimals: false
+  
+  # Optional - Set a fixed TTL for all written rows (in seconds)
+  # writeTTLInS: 7776000  # 90 days
+  
+  # Optional - Set a fixed WRITETIME for all written rows (in microseconds)
+  # writeWritetimestampInuS: 1640998861000
+
+# =============================================================================
+# Optional - Column Renaming
+# =============================================================================
+# Rename columns during migration
+# renames:
+#   # Optional - Rename the target keyspace
+#   keyspace: new_keyspace_name
+#   
+#   # Optional - Rename the target table
+#   table: new_table_name
+#   
+#   # Optional - Rename specific columns
+#   columns:
+#     - from: old_column_name
+#       to: new_column_name
+#     - from: another_old_name
+#       to: another_new_name
+
+# =============================================================================
+# Optional - Savepoints for Resumable Migrations
+# =============================================================================
+# savepoints:
+#   # Path to save progress files (local filesystem or HDFS)
+#   path: /path/to/savepoints
+#   
+#   # Interval between savepoint writes (in seconds)
+#   intervalSeconds: 300
+
+# =============================================================================
+# Notes on Data Type Mapping
+# =============================================================================
+#
+# MariaDB Type          -> CQL Type
+# -------------------      --------
+# TINYINT               -> tinyint
+# SMALLINT              -> smallint
+# MEDIUMINT, INT        -> int
+# BIGINT                -> bigint
+# FLOAT                 -> float
+# DOUBLE, REAL          -> double
+# DECIMAL, NUMERIC      -> decimal
+# BOOLEAN, BOOL         -> boolean
+# DATE                  -> date
+# TIME                  -> time
+# DATETIME, TIMESTAMP   -> timestamp
+# YEAR                  -> int
+# CHAR, VARCHAR, TEXT   -> text
+# BINARY, VARBINARY     -> blob
+# BLOB types            -> blob
+# JSON                  -> text
+# ENUM, SET             -> text
+# UUID                  -> uuid (if valid UUID format)
+#
+# Primary Key Mapping:
+# - First PK column becomes the partition key
+# - Remaining PK columns become clustering columns
+# - Composite PKs are supported
+
+# =============================================================================
+# Required MariaDB User Privileges
+# =============================================================================
+#
+# For basic snapshot migration:
+#   GRANT SELECT ON source_db.source_table TO 'migrator_user'@'%';
+#   GRANT RELOAD ON *.* TO 'migrator_user'@'%';  -- For BACKUP STAGE
+#
+# For binlog streaming (CDC):
+#   GRANT REPLICATION CLIENT ON *.* TO 'migrator_user'@'%';
+#   GRANT REPLICATION SLAVE ON *.* TO 'migrator_user'@'%';
+#
+# Full example:
+#   CREATE USER 'migrator_user'@'%' IDENTIFIED BY 'your_secure_password';
+#   GRANT SELECT ON source_db.* TO 'migrator_user'@'%';
+#   GRANT RELOAD, REPLICATION CLIENT, REPLICATION SLAVE ON *.* TO 'migrator_user'@'%';
+#   FLUSH PRIVILEGES;
+
+# =============================================================================
+# Running the Migration
+# =============================================================================
+#
+# 1. Build the migrator:
+#    ./build.sh
+#
+# 2. Submit to Spark:
+#    spark-submit \
+#      --class com.scylladb.migrator.Migrator \
+#      --master spark://spark-master:7077 \
+#      --conf spark.scylla.config=/path/to/config.yaml \
+#      --conf spark.executor.extraJavaOptions="-Djava.library.path=/path/to/native/lib" \
+#      --driver-java-options "-Djava.library.path=/path/to/native/lib" \
+#      scylla-migrator-assembly.jar
+#
+# 3. Monitor progress:
+#    - Spark UI: http://spark-master:4040
+#    - Check logs for row counts and progress
+#
+# 4. Stop the migration (if streaming binlog):
+#    - Send SIGTERM to the Spark driver
+#    - Or cancel the job through Spark UI
+# =============================================================================
+# ScyllaDB Migrator - MariaDB Source Configuration Example
+# =============================================================================
+#
+# This configuration file demonstrates how to migrate data from MariaDB to ScyllaDB.
+#
+# The migration process:
+# 1. Connects to MariaDB and acquires BACKUP STAGE lock for consistent snapshot
+# 2. Captures GTID position for binlog streaming
+# 3. Creates target table in ScyllaDB (if not exists)
+# 4. Performs parallel snapshot transfer using PK range scanning
+# 5. Releases BACKUP STAGE lock
+# 6. Optionally streams binlog for CDC (ongoing replication)
+#
+# Requirements:
+# - MariaDB 10.4+ (for BACKUP STAGE support)
+# - GTID mode enabled on MariaDB (gtid_mode=ON)
+# - User with RELOAD, REPLICATION CLIENT, REPLICATION SLAVE privileges
+# - ScyllaDB cluster accessible from Spark workers
+# - Native library (libmariadb-scylla-migrator-jni) in java.library.path
+#
+
+# =============================================================================
+# Source Configuration (MariaDB)
+# =============================================================================
+source:
+  # Source type - must be 'mariadb' for MariaDB migrations
+  type: mariadb
+  
+  # MariaDB server hostname or IP address
+  host: mariadb.example.com
+  
+  # MariaDB server port (default: 3306)
+  port: 3306
+  
+  # Database credentials
+  credentials:
+    user: migrator_user
+    password: your_secure_password
+  
+  # Source database name
+  database: source_db
+  
+  # Source table name
+  table: source_table
+  
+  # Optional - SSL configuration for secure connections
+  # sslOptions:
+  #   enabled: true
+  #   caCertPath: /path/to/ca-cert.pem
+  #   clientCertPath: /path/to/client-cert.pem
+  #   clientKeyPath: /path/to/client-key.pem
+  #   verifyServerCert: true
+  
+  # Connection pool size per worker (default: 4)
+  connectionPoolSize: 4
+  
+  # Connection timeout in milliseconds (default: 30000)
+  connectionTimeoutMs: 30000
+  
+  # Read timeout in milliseconds (default: 300000 = 5 minutes)
+  readTimeoutMs: 300000
+  
+  # Use BACKUP STAGE for consistent snapshot (default: true)
+  # Requires RELOAD privilege and MariaDB 10.4+
+  # Set to false for MySQL compatibility (less consistent snapshot)
+  useBackupStage: true
+  
+  # Stream binlog for CDC after initial snapshot (default: true)
+  # Requires REPLICATION CLIENT and REPLICATION SLAVE privileges
+  # The migration will run continuously until stopped
+  streamBinlog: true
+  
+  # Optional - Server ID for binlog streaming
+  # If not set, a random ID will be generated
+  # serverId: "12345"
+  
+  # Number of ranges to split the table into for parallel scanning
+  # Higher values = more parallelism, but more overhead
+  # Aim for 4-8 ranges per Spark core
+  splitCount: 256
+  
+  # Number of rows to fetch per batch (default: 1000)
+  fetchSize: 1000
+
+# =============================================================================
+# Target Configuration (ScyllaDB)
+# =============================================================================
+target:
+  # Target type - must be 'scylla' for ScyllaDB
+  type: scylla
+  
+  # ScyllaDB contact points (comma-separated for multiple nodes)
+  host: scylla-node1.example.com,scylla-node2.example.com,scylla-node3.example.com
+  
+  # CQL native transport port (default: 9042)
+  port: 9042
+  
+  # Optional - Local datacenter name for DC-aware load balancing
+  # localDC: datacenter1
+  
+  # Optional - Authentication credentials
+  credentials:
+    username: scylla_user
+    password: your_scylla_password
+  
+  # Optional - SSL configuration
+  # sslOptions:
+  #   enabled: true
+  #   clientAuthEnabled: false
+  #   trustStorePath: /path/to/truststore.jks
+  #   trustStorePassword: truststore_password
+  #   trustStoreType: JKS
+  
+  # Target keyspace (must exist before migration)
+  keyspace: target_keyspace
+  
+  # Target table name (will be created if not exists)
+  table: target_table
+  
+  # Number of connections per ScyllaDB node (default: 16)
+  connections: 16
+  
+  # Write consistency level
+  # Options: LOCAL_ONE, ONE, LOCAL_QUORUM, QUORUM
+  consistencyLevel: LOCAL_QUORUM
+  
+  # Strip trailing zeros from decimal values (default: false)
+  # Spark may pad decimals with zeros; enable this to preserve original precision
+  stripTrailingZerosForDecimals: false
+  
+  # Optional - Set a fixed TTL for all written rows (in seconds)
+  # writeTTLInS: 7776000  # 90 days
+  
+  # Optional - Set a fixed WRITETIME for all written rows (in microseconds)
+  # writeWritetimestampInuS: 1640998861000
+
+# =============================================================================
+# Optional - Column Renaming
+# =============================================================================
+# Rename columns during migration
+# renames:
+#   # Optional - Rename the target keyspace
+#   keyspace: new_keyspace_name
+#   
+#   # Optional - Rename the target table
+#   table: new_table_name
+#   
+#   # Optional - Rename specific columns
+#   columns:
+#     - from: old_column_name
+#       to: new_column_name
+#     - from: another_old_name
+#       to: another_new_name
+
+# =============================================================================
+# Optional - Savepoints for Resumable Migrations
+# =============================================================================
+# savepoints:
+#   # Path to save progress files (local filesystem or HDFS)
+#   path: /path/to/savepoints
+#   
+#   # Interval between savepoint writes (in seconds)
+#   intervalSeconds: 300
+
+# =============================================================================
+# Notes on Data Type Mapping
+# =============================================================================
+#
+# MariaDB Type          -> CQL Type
+# -------------------      --------
+# TINYINT               -> tinyint
+# SMALLINT              -> smallint
+# MEDIUMINT, INT        -> int
+# BIGINT                -> bigint
+# FLOAT                 -> float
+# DOUBLE, REAL          -> double
+# DECIMAL, NUMERIC      -> decimal
+# BOOLEAN, BOOL         -> boolean
+# DATE                  -> date
+# TIME                  -> time
+# DATETIME, TIMESTAMP   -> timestamp
+# YEAR                  -> int
+# CHAR, VARCHAR, TEXT   -> text
+# BINARY, VARBINARY     -> blob
+# BLOB types            -> blob
+# JSON                  -> text
+# ENUM, SET             -> text
+# UUID                  -> uuid (if valid UUID format)
+#
+# Primary Key Mapping:
+# - First PK column becomes the partition key
+# - Remaining PK columns become clustering columns
+# - Composite PKs are supported
+
+# =============================================================================
+# Required MariaDB User Privileges
+# =============================================================================
+#
+# For basic snapshot migration:
+#   GRANT SELECT ON source_db.source_table TO 'migrator_user'@'%';
+#   GRANT RELOAD ON *.* TO 'migrator_user'@'%';  -- For BACKUP STAGE
+#
+# For binlog streaming (CDC):
+#   GRANT REPLICATION CLIENT ON *.* TO 'migrator_user'@'%';
+#   GRANT REPLICATION SLAVE ON *.* TO 'migrator_user'@'%';
+#
+# Full example:
+#   CREATE USER 'migrator_user'@'%' IDENTIFIED BY 'your_secure_password';
+#   GRANT SELECT ON source_db.* TO 'migrator_user'@'%';
+#   GRANT RELOAD, REPLICATION CLIENT, REPLICATION SLAVE ON *.* TO 'migrator_user'@'%';
+#   FLUSH PRIVILEGES;
+
+# =============================================================================
+# Running the Migration
+# =============================================================================
+#
+# 1. Build the migrator:
+#    ./build.sh
+#
+# 2. Submit to Spark:
+#    spark-submit \
+#      --class com.scylladb.migrator.Migrator \
+#      --master spark://spark-master:7077 \
+#      --conf spark.scylla.config=/path/to/config.yaml \
+#      --conf spark.executor.extraJavaOptions="-Djava.library.path=/path/to/native/lib" \
+#      --driver-java-options "-Djava.library.path=/path/to/native/lib" \
+#      scylla-migrator-assembly.jar
+#
+# 3. Monitor progress:
+#    - Spark UI: http://spark-master:4040
+#    - Check logs for row counts and progress
+#
+# 4. Stop the migration (if streaming binlog):
+#    - Send SIGTERM to the Spark driver
+#    - Or cancel the job through Spark UI
