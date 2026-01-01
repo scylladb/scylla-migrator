@@ -12,7 +12,7 @@ case class PartitionMetadata(
 /**
   * This reader uses Spark's internal partition information to build mappings
   * between partition IDs and file paths. This allows us to track when all
-  * partitions of a file have been processed, enabling file-level savepointse.
+  * partitions of a file have been processed, enabling file-level savepoints.
   */
 object PartitionMetadataReader {
   private val logger = LogManager.getLogger("com.scylladb.migrator.readers.PartitionMetadataReader")

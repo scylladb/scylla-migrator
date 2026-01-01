@@ -13,7 +13,7 @@ import scala.collection.concurrent.TrieMap
   * partitions and files. When all partitions belonging to a file have been successfully
   * completed, it marks the file as processed via the ParquetSavepointsManager.
   *
-  * @param partitionToFile Mapping from Spark partition ID to source file paths
+  * @param partitionToFiles Mapping from Spark partition ID to source file paths
   * @param fileToPartitions Mapping from file path to the set of partition IDs reading from it
   * @param savepointsManager Manager to notify when files are completed
   */
