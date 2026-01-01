@@ -2,7 +2,7 @@ package com.scylladb.migrator.readers
 
 import org.apache.log4j.LogManager
 import org.apache.spark.sql.{ DataFrame, SparkSession }
-import org.apache.spark.sql.functions._
+import org.apache.spark.sql.execution.datasources.PartitionMetadataExtractor
 
 case class PartitionMetadata(
   partitionId: Int,
@@ -25,30 +25,20 @@ object PartitionMetadataReader {
 
   def readMetadataFromDataFrame(df: DataFrame): Seq[PartitionMetadata] =
     try {
+      logger.info("Extracting partition metadata from execution plan")
 
-      val partitionInfo = df
-        .select(input_file_name().as("filename"))
-        .rdd
-        .mapPartitionsWithIndex { (partitionId, iter) =>
-          val files = iter.map(row => row.getString(0)).toSet
-          files.map(filename => (partitionId, filename)).iterator
-        }
-        .collect()
-        .toSeq
+      val fileMap: Map[Int, Seq[String]] = PartitionMetadataExtractor.getPartitionFiles(df)
 
-      val metadata = partitionInfo.zipWithIndex.map {
-        case ((partitionId, filename), idx) =>
-          PartitionMetadata(
-            partitionId = partitionId,
-            filename    = filename
-          )
-      }
+      val metadata = fileMap.flatMap {
+        case (partId, files) =>
+          files.map(f => PartitionMetadata(partId, f))
+      }.toSeq
 
       logger.info(s"Discovered ${metadata.size} partition-to-file mappings")
 
       if (logger.isDebugEnabled) {
         val fileStats = metadata.groupBy(_.filename).view.mapValues(_.size)
-        logger.info(s"Files distribution: ${fileStats.size} unique files")
+        logger.debug(s"Files distribution: ${fileStats.size} unique files")
         fileStats.foreach {
           case (file, partCount) =>
             logger.debug(s"  File: $file -> $partCount partition(s)")
