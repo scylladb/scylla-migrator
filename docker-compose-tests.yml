@@ -27,8 +27,12 @@ services:
       - "9044:9042"
     expose:
       - 9044
-    command: "--smp 1 --memory 2048M --alternator-port 8000 --alternator-write-isolation only_rmw_uses_lwt"
-
+    command: >
+      --smp 1
+      --memory 2048M
+      --alternator-port 8000
+      --alternator-write-isolation only_rmw_uses_lwt
+      --tablets-mode-for-new-keyspaces disabled
   scylla:
     image: scylladb/scylla:latest
     volumes:
@@ -36,7 +40,12 @@ services:
     ports:
       - "8000:8000"
       - "9042:9042"
-    command: "--smp 1 --memory 2048M --alternator-port 8000 --alternator-write-isolation only_rmw_uses_lwt"
+    command: >
+      --smp 1
+      --memory 2048M
+      --alternator-port 8000
+      --alternator-write-isolation only_rmw_uses_lwt
+      --tablets-mode-for-new-keyspaces disabled
 
   s3:
     image: localstack/localstack:s3-latest
