@@ -1,11 +1,12 @@
 package com.scylladb.migrator.config
 
-import io.circe.{ Decoder, Encoder }
-import io.circe.generic.semiauto.{ deriveDecoder, deriveEncoder }
+import io.circe.Codec
+import io.circe.generic.extras.Configuration
+import io.circe.generic.extras.semiauto._
 
-case class Savepoints(intervalSeconds: Int, path: String)
+case class Savepoints(intervalSeconds: Int, path: String, enableParquetFileTracking: Boolean = true)
 
 object Savepoints {
-  implicit val encoder: Encoder[Savepoints] = deriveEncoder[Savepoints]
-  implicit val decoder: Decoder[Savepoints] = deriveDecoder[Savepoints]
+  implicit val config: Configuration = Configuration.default.withDefaults
+  implicit val codec: Codec[Savepoints] = deriveConfiguredCodec[Savepoints]
 }

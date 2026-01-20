@@ -1,7 +1,7 @@
 package com.scylladb.migrator.readers
 
 import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
-import com.scylladb.migrator.scylla.{ ScyllaParquetMigrator, SourceDataFrame }
+import com.scylladb.migrator.scylla.{ ScyllaMigrator, ScyllaParquetMigrator, SourceDataFrame }
 import org.apache.log4j.LogManager
 import org.apache.spark.sql.{ AnalysisException, SparkSession }
 import scala.util.Using
@@ -12,8 +12,30 @@ object Parquet {
   def migrateToScylla(config: MigratorConfig,
                       source: SourceSettings.Parquet,
                       target: TargetSettings.Scylla)(implicit spark: SparkSession): Unit = {
-    log.info("Starting Parquet migration with parallel processing and file-level savepoints")
 
+    val useFileTracking = config.savepoints.enableParquetFileTracking
+
+    if (useFileTracking) {
+      log.info(
+        "Starting Parquet migration with file-level savepoint tracking")
+      migrateWithSavepoints(config, source, target)
+    } else {
+      log.info("Starting Parquet migration without savepoint tracking")
+      migrateWithoutSavepoints(config, source, target)
+    }
+  }
+
+  /**
+    * Parquet migration with file-level savepoint tracking.
+    *
+    * This mode tracks completion of individual Parquet files, enabling resume capability
+    * if the migration is interrupted. Uses SparkListener to detect when all partitions
+    * of a file have been processed.
+    */
+  private def migrateWithSavepoints(
+    config: MigratorConfig,
+    source: SourceSettings.Parquet,
+    target: TargetSettings.Scylla)(implicit spark: SparkSession): Unit = {
     configureHadoopCredentials(spark, source)
 
     val allFiles = listParquetFiles(spark, source.path)
@@ -68,6 +90,21 @@ object Parquet {
         log.info(s"Final progress: ${listener.getProgressReport}")
       }
     }
+  }
+
+  /**
+    * Parquet migration without savepoint tracking.
+    *
+    * This mode reads all Parquet files using Spark's native parallelism but does not
+    * track individual file completion. If migration is interrupted, it will restart
+    * from the beginning.
+    */
+  private def migrateWithoutSavepoints(
+    config: MigratorConfig,
+    source: SourceSettings.Parquet,
+    target: TargetSettings.Scylla)(implicit spark: SparkSession): Unit = {
+    val sourceDF = ParquetWithoutSavepoints.readDataFrame(spark, source)
+    ScyllaMigrator.migrate(config, target, sourceDF)
   }
 
   def listParquetFiles(spark: SparkSession, path: String): Seq[String] = {
