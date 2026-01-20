@@ -1,0 +1,22 @@
+source:
+  type: parquet
+  path: /app/parquet/comparison-data
+
+target:
+  type: scylla
+  host: scylla
+  port: 9042
+  localDC: datacenter1
+  credentials:
+    username: dummy
+    password: dummy
+  keyspace: test
+  table: comparison
+  consistencyLevel: LOCAL_QUORUM
+  connections: 16
+  stripTrailingZerosForDecimals: false
+
+savepoints:
+  path: /app/spark-master/comparison-savepoints
+  intervalSeconds: 300
+  enableParquetFileTracking: true
