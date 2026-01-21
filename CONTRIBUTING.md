@@ -28,12 +28,26 @@ Tests are implemented in the `tests` sbt submodule. They simulate the submission
    sbt testOnly com.scylladb.migrator.BasicMigrationTest
    ~~~
 
-  Or, to run the tests that access AWS, first configure your AWS credentials with `aws configure`, and then:
+   Or, to run the tests that access AWS:
 
-  ~~~ sh
-  AWS_REGION=us-east-1 \
-  sbt "testOnly -- --include-categories=com.scylladb.migrator.AWS"
-  ~~~
+   1. Create an IAM test user and an IAM role to grant them access to your actual AWS account, according to [this tutorial](https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html).
+   2. Log-in as the test user in the CLI
+   3. Create temporary credentials via `aws sts assume-role`:
+      ~~~ sh
+      aws sts assume-role --role-arn "your-role-arn" --role-session-name "scylla-migrator-test"
+      ~~~
+   4. Export the resulting credentials in environment variables:
+      ~~~ sh
+      export AWS_REGION=us-east-1
+      export AWS_ACCESS_KEY_ID=xxx
+      export AWS_SECRET_ACCESS_KEY=yyy
+      export AWS_SESSION_TOKEN=zzz
+      ~~~
+      Where `xxx`, `yyy`, and `zzz` are the credentials returned by the `sts assume-role` command.
+   5. In the same shell, run the tests:
+      ~~~ sh
+      sbt "testOnly -- --include-categories=com.scylladb.migrator.AWS"
+      ~~~
 
 4. Ultimately, stop the Docker containers
 
