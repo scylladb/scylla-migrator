@@ -259,6 +259,12 @@ savepoints:
   # Interval in which savepoints will be created
   intervalSeconds: 300
 
+  # Optional - enables file-level savepoint tracking for parquet migrations.
+  # When enabled (default), the migrator tracks which parquet files have been fully migrated
+  # and skips them on restart, allowing for more granular resume capability.
+  # Set to `false` to revert to generic behaviour without file-level savepoints.
+  enableParquetFileTracking: true
+
 # Optional - Column renaming configuration. If you'd like to rename any columns, specify them like so:
 # - from: source_column_name
 #   to: dest_column_name
