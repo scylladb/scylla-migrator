@@ -28,13 +28,13 @@ object PartitionMetadataExtractor {
       case list if list.size == 1 => 
         list.head
       case list if list.size > 1 =>
-				val message = "Several FileSourceScanExec were found in plan"
-				logger.error(s"$message. Plan: ${plan.treeString}")
-				throw new IllegalArgumentException(message)
+        val message = "Several FileSourceScanExec were found in plan"
+        logger.error(s"$message. Plan: ${plan.treeString}")
+        throw new IllegalArgumentException(message)
       case list if list.isEmpty =>
-				val message = "DataFrame is not based on file source (FileSourceScanExec not found in plan)"
-				logger.error(s"$message. Plan: ${plan.treeString}")
-				throw new IllegalArgumentException(message)
+        val message = "DataFrame is not based on file source (FileSourceScanExec not found in plan)"
+        logger.error(s"$message. Plan: ${plan.treeString}")
+        throw new IllegalArgumentException(message)
     }
 
     val rdd = scanExec.inputRDD
