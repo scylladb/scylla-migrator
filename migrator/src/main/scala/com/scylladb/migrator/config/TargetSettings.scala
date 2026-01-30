@@ -32,7 +32,7 @@ object TargetSettings {
                       throughputWritePercent: Option[Float],
                       streamChanges: Boolean,
                       skipInitialSnapshotTransfer: Option[Boolean],
-                      removeConsumedCapacity: Option[Boolean] = None,
+                      removeConsumedCapacity: Option[Boolean] = Some(true),
                       billingMode: Option[BillingMode] = None)
       extends TargetSettings {
     lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =

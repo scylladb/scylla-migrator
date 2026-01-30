@@ -245,8 +245,8 @@ target:
 #   # from the source table or defaults to PAY_PER_REQUEST.
 #   billingMode: PAY_PER_REQUEST
 #
-#   # When billingMode is set to PAY_PER_REQUEST this should be true
-#   # For PROVISIONED it can stay false
+#   # When billingMode is set to PROVISIONED or unset this should be true
+#   # Table created with provisioned mode in Alternator should have the `--provisioned-throughput ReadCapacityUnits=1,WriteCapacityUnits=1` set
 #   # It configures the capacity accounting and removes the need for it (needed for Scylla version > 2024.2)
 #   # removeConsumedCapacity: true
 #
