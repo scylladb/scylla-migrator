@@ -245,6 +245,11 @@ target:
 #   # from the source table or defaults to PAY_PER_REQUEST.
 #   billingMode: PAY_PER_REQUEST
 #
+#   # When billingMode is set to PAY_PER_REQUEST this should be true
+#   # For PROVISIONED it can stay false
+#   # It configures the capacity accounting and removes the need for it (needed for Scylla version > 2024.2)
+#   # removeConsumedCapacity: true
+#
 #   # Optional - when streamChanges is true, skip the initial snapshot transfer and only stream changes.
 #   # This setting is ignored if streamChanges is false.
 #   #skipInitialSnapshotTransfer: false
