@@ -89,6 +89,42 @@ class DynamoDBRowComparisonTest extends munit.FunSuite {
     assertEquals(result, expected)
   }
 
+  test("String sets with different order are equal") {
+    val source = Map("foo" -> DdbValue.Ss(Seq("a", "b", "c")))
+    val target = Map("foo" -> DdbValue.Ss(Seq("c", "a", "b")))
+    val result = RowComparisonFailure.compareDynamoDBRows(
+      source,
+      Some(target),
+      sameColumns,
+      floatingPointTolerance
+    )
+    assertEquals(result, None)
+  }
+
+  test("Number sets with different order are equal") {
+    val source = Map("foo" -> DdbValue.Ns(Seq("1", "2", "3")))
+    val target = Map("foo" -> DdbValue.Ns(Seq("3", "1", "2")))
+    val result = RowComparisonFailure.compareDynamoDBRows(
+      source,
+      Some(target),
+      sameColumns,
+      floatingPointTolerance
+    )
+    assertEquals(result, None)
+  }
+
+  test("Number sets with different order are equal within tolerance") {
+    val source = Map("foo" -> DdbValue.Ns(Seq("1.001", "2.002")))
+    val target = Map("foo" -> DdbValue.Ns(Seq("2.003", "1.002")))
+    val result = RowComparisonFailure.compareDynamoDBRows(
+      source,
+      Some(target),
+      sameColumns,
+      floatingPointTolerance
+    )
+    assertEquals(result, None)
+  }
+
   test("Numerical values within the tolerance threshold") {
     val numericalItem =
       Map(
