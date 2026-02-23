@@ -4,15 +4,15 @@ import org.apache.spark.util.AccumulatorV2
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Accumulator for tracking processed Parquet file paths during migration.
- *
- * This accumulator collects the set of Parquet file paths that have been processed
- * as part of a migration job. It is useful for monitoring progress, avoiding duplicate
- * processing, and debugging migration workflows. The accumulator is thread-safe and
- * can be used in distributed Spark jobs.
- *
- * @param initialValue The initial set of processed file paths (usually empty).
- */
+  * Accumulator for tracking processed Parquet file paths during migration.
+  *
+  * This accumulator collects the set of Parquet file paths that have been processed
+  * as part of a migration job. It is useful for monitoring progress, avoiding duplicate
+  * processing, and debugging migration workflows. The accumulator is thread-safe and
+  * can be used in distributed Spark jobs.
+  *
+  * @param initialValue The initial set of processed file paths (usually empty).
+  */
 class StringSetAccumulator(initialValue: Set[String] = Set.empty)
     extends AccumulatorV2[String, Set[String]] {
 

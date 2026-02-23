@@ -2,17 +2,86 @@ package com.scylladb.migrator.writers
 
 import com.datastax.spark.connector.writer._
 import com.datastax.spark.connector._
+import com.datastax.spark.connector.cql.Schema
 import com.scylladb.migrator.Connectors
 import com.scylladb.migrator.config.{ Rename, TargetSettings }
 import com.scylladb.migrator.readers.TimestampColumns
 import org.apache.log4j.{ LogManager, Logger }
+import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{ DataFrame, Row, SparkSession }
+import org.apache.spark.sql.types.StructType
+import org.apache.spark.util.LongAccumulator
 import com.datastax.oss.driver.api.core.ConsistencyLevel
 
 import scala.collection.immutable.ArraySeq
+import java.util.Locale
 
 object Scylla {
   val log: Logger = LogManager.getLogger("com.scylladb.migrator.writer.Scylla")
+
+  private[writers] case class PrimaryKeyResolution(
+    sourcePkNames: Set[String],
+    resolvedSourcePkNames: Set[String],
+    unresolvedSourcePkNames: Set[String],
+    fieldIndices: Array[Int]
+  )
+
+  private[writers] def resolvePrimaryKeyColumns(
+    targetPkNames: Set[String],
+    renames: List[Rename],
+    dfSchema: StructType
+  ): PrimaryKeyResolution = {
+    val reverseRenames = renames.map(r => r.to -> r.from).toMap
+    val sourcePkNames =
+      targetPkNames.map(name => reverseRenames.getOrElse(name, name))
+    val dfFieldNamesLower =
+      dfSchema.fieldNames.map(name => name.toLowerCase(Locale.ROOT) -> name).toMap
+    val resolution = sourcePkNames.map { sourcePkName =>
+      sourcePkName -> dfFieldNamesLower.get(sourcePkName.toLowerCase(Locale.ROOT))
+    }
+
+    val resolvedSourcePkNames = resolution.collect {
+      case (_, Some(dfFieldName)) =>
+        dfFieldName
+    }
+    val unresolvedSourcePkNames = resolution.collect {
+      case (sourcePkName, None) =>
+        sourcePkName
+    }
+    val fieldIndices = resolvedSourcePkNames.map(dfSchema.fieldIndex).toArray
+
+    PrimaryKeyResolution(
+      sourcePkNames,
+      resolvedSourcePkNames,
+      unresolvedSourcePkNames,
+      fieldIndices
+    )
+  }
+
+  private[writers] def requireAllPrimaryKeysResolved(
+    targetPkNames: Set[String],
+    pkResolution: PrimaryKeyResolution
+  ): Unit =
+    if (pkResolution.resolvedSourcePkNames.size != targetPkNames.size) {
+      val resolved = pkResolution.resolvedSourcePkNames.mkString(", ")
+      val unresolved = pkResolution.unresolvedSourcePkNames.mkString(", ")
+      throw new IllegalArgumentException(
+        s"Cannot resolve all primary key columns from the source DataFrame. " +
+          s"Resolved: [${resolved}], unresolved: [${unresolved}]. " +
+          s"Check that column names in the source data match the target table, " +
+          s"or configure renames accordingly.")
+    }
+
+  private[writers] def dropRowsWithNullPrimaryKeys(
+    rdd: RDD[Row],
+    pkFieldIndices: Array[Int],
+    nullPkRowsDropped: LongAccumulator
+  ): RDD[Row] =
+    rdd.filter { row =>
+      val hasNullPk = pkFieldIndices.exists(i => row.isNullAt(i))
+      if (hasNullPk) nullPkRowsDropped.add(1L)
+      !hasNullPk
+    }
 
   def writeDataframe(
     target: TargetSettings.Scylla,
@@ -81,6 +150,26 @@ object Scylla {
     val columnSelector = SomeColumns(
       ArraySeq.unsafeWrapArray(renamedSchema.fields.map(_.name: ColumnRef)): _*)
 
+    // Retrieve the target table schema to identify primary key columns
+    val tableDef =
+      connector.withSessionDo(Schema.tableFromCassandra(_, target.keyspace, target.table))
+    val targetPkNames = tableDef.primaryKey.map(_.columnName).toSet
+
+    val pkResolution = resolvePrimaryKeyColumns(targetPkNames, renames, df.schema)
+    pkResolution.unresolvedSourcePkNames.foreach { sourcePkName =>
+      log.warn(s"Primary key column '${sourcePkName}' not found in source DataFrame schema")
+    }
+    requireAllPrimaryKeysResolved(targetPkNames, pkResolution)
+
+    val pkColumnsInDf = pkResolution.resolvedSourcePkNames
+    val pkFieldIndices = pkResolution.fieldIndices
+    log.info(
+      s"Primary key columns in target table: ${targetPkNames.mkString(", ")}; " +
+        s"corresponding source columns: ${pkColumnsInDf.mkString(", ")}")
+
+    val nullPkRowsDropped =
+      spark.sparkContext.longAccumulator("Rows dropped due to null primary key")
+
     // Spark's conversion from its internal Decimal type to java.math.BigDecimal
     // pads the resulting value with trailing zeros corresponding to the scale of the
     // Decimal type. Some users don't like this so we conditionally strip those.
@@ -94,7 +183,11 @@ object Scylla {
           })
         }
 
-    rdd
+    // Filter out rows where any primary key column is null to prevent infinite
+    // retries against the target database (see issue #262)
+    val filteredRdd = dropRowsWithNullPrimaryKeys(rdd, pkFieldIndices, nullPkRowsDropped)
+
+    filteredRdd
       .saveToCassandra(
         target.keyspace,
         target.table,
@@ -102,6 +195,12 @@ object Scylla {
         writeConf,
         tokenRangeAccumulator = tokenRangeAccumulator
       )(connector, SqlRowWriter.Factory)
+
+    if (nullPkRowsDropped.value > 0) {
+      log.warn(
+        s"Dropped ${nullPkRowsDropped.value} rows with null primary key values " +
+          s"(columns: ${targetPkNames.mkString(", ")})")
+    }
   }
 
 }
