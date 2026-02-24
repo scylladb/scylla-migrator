@@ -1,6 +1,7 @@
 package com.scylladb.migrator
 
-import com.scylladb.alternator.AlternatorEndpointProvider
+import com.scylladb.alternator.internal.AlternatorLiveNodes
+import com.scylladb.alternator.queryplan.BasicQueryPlanInterceptor
 import com.scylladb.migrator.config.{ DynamoDBEndpoint, SourceSettings, TargetSettings }
 import org.apache.hadoop.conf.{ Configurable, Configuration }
 import org.apache.hadoop.dynamodb.read.DynamoDBInputFormat
@@ -366,11 +367,12 @@ object DynamoUtils {
     private var conf: Configuration = null
 
     override def apply(builder: DynamoDbClientBuilder): DynamoDbClientBuilder = {
-      for (customEndpoint <- Option(conf.get(DynamoDBConstants.ENDPOINT)))
-        builder.endpointProvider(
-          new AlternatorEndpointProvider(URI.create(customEndpoint))
-        )
       val overrideConf = ClientOverrideConfiguration.builder()
+      for (customEndpoint <- Option(conf.get(DynamoDBConstants.ENDPOINT))) {
+        val liveNodes = new AlternatorLiveNodes(URI.create(customEndpoint), null, null)
+        liveNodes.start()
+        overrideConf.addExecutionInterceptor(new BasicQueryPlanInterceptor(liveNodes))
+      }
       if (conf.get(RemoveConsumedCapacityConfig, "false").toBoolean)
         overrideConf.addExecutionInterceptor(new RemoveConsumedCapacityInterceptor)
       builder.overrideConfiguration(overrideConf.build())
