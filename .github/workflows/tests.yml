@@ -27,6 +27,8 @@ jobs:
           java-version: 8
           cache: sbt
       - uses: sbt/setup-sbt@v1
+      - name: Check formatting
+        run: sbt scalafmtCheckAll
       - name: Build migrator
         run: ./build.sh
       - name: Set up services
