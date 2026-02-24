@@ -42,6 +42,15 @@ jobs:
           .github/wait-for-port.sh 8080 # Spark master
           .github/wait-for-port.sh 8081 # Spark worker
       - name: Run tests locally
-        run: sbt "testOnly -- --exclude-categories=com.scylladb.migrator.AWS"
+        run: sbt coverage "testOnly -- --exclude-categories=com.scylladb.migrator.AWS"
       - name: Stop services
         run: docker compose -f docker-compose-tests.yml down
+      - name: Generate coverage report
+        run: sbt coverageReport
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            tests/target/scala-2.13/scoverage-report/
+            migrator/target/scala-2.13/scoverage-report/
