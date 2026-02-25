@@ -48,7 +48,7 @@ trait MigratorSuite extends munit.FunSuite {
         endpoint = Some(DynamoDBEndpoint("http://localhost", 8000)),
         creds =
           Some(StaticCredentialsProvider.create(AwsBasicCredentials.create("dummy", "dummy"))),
-        region = Some("dummy"),
+        region       = Some("dummy"),
         interceptors = Seq(new DynamoUtils.RemoveConsumedCapacityInterceptor)
       )
     override def afterAll(): Unit = client.close()

@@ -26,27 +26,27 @@ class FileCompletionListenerTest extends munit.FunSuite {
     success: Boolean = true
   ): SparkListenerTaskEnd = {
     val taskInfo = new TaskInfo(
-      taskId = partitionId.toLong,
-      index = partitionId,
+      taskId        = partitionId.toLong,
+      index         = partitionId,
       attemptNumber = 0,
-      partitionId = partitionId,
-      launchTime = System.currentTimeMillis(),
-      executorId = "executor-1",
-      host = "localhost",
-      taskLocality = org.apache.spark.scheduler.TaskLocality.PROCESS_LOCAL,
-      speculative = false
+      partitionId   = partitionId,
+      launchTime    = System.currentTimeMillis(),
+      executorId    = "executor-1",
+      host          = "localhost",
+      taskLocality  = org.apache.spark.scheduler.TaskLocality.PROCESS_LOCAL,
+      speculative   = false
     )
 
     val reason: TaskEndReason = if (success) Success else org.apache.spark.TaskKilled("test")
 
     new SparkListenerTaskEnd(
-      stageId = stageId,
-      stageAttemptId = 0,
-      taskType = "ResultTask",
-      reason = reason,
-      taskInfo = taskInfo,
+      stageId             = stageId,
+      stageAttemptId      = 0,
+      taskType            = "ResultTask",
+      reason              = reason,
+      taskInfo            = taskInfo,
       taskExecutorMetrics = null,
-      taskMetrics = null
+      taskMetrics         = null
     )
   }
 
@@ -55,14 +55,14 @@ class FileCompletionListenerTest extends munit.FunSuite {
 
     try {
       val config = MigratorConfig(
-        source = SourceSettings.Parquet("dummy", None, None, None),
-        target = null,
-        renames = None,
-        savepoints = com.scylladb.migrator.config.Savepoints(300, tempDir.toString),
-        skipTokenRanges = None,
-        skipSegments = None,
+        source           = SourceSettings.Parquet("dummy", None, None, None),
+        target           = null,
+        renames          = None,
+        savepoints       = com.scylladb.migrator.config.Savepoints(300, tempDir.toString),
+        skipTokenRanges  = None,
+        skipSegments     = None,
         skipParquetFiles = None,
-        validation = None
+        validation       = None
       )
 
       val manager = ParquetSavepointsManager(config, spark.sparkContext)
@@ -117,14 +117,14 @@ class FileCompletionListenerTest extends munit.FunSuite {
 
     try {
       val config = MigratorConfig(
-        source = SourceSettings.Parquet("dummy", None, None, None),
-        target = null,
-        renames = None,
-        savepoints = com.scylladb.migrator.config.Savepoints(300, tempDir.toString),
-        skipTokenRanges = None,
-        skipSegments = None,
+        source           = SourceSettings.Parquet("dummy", None, None, None),
+        target           = null,
+        renames          = None,
+        savepoints       = com.scylladb.migrator.config.Savepoints(300, tempDir.toString),
+        skipTokenRanges  = None,
+        skipSegments     = None,
         skipParquetFiles = None,
-        validation = None
+        validation       = None
       )
 
       val manager = ParquetSavepointsManager(config, spark.sparkContext)
@@ -181,14 +181,14 @@ class FileCompletionListenerTest extends munit.FunSuite {
 
     try {
       val config = MigratorConfig(
-        source = SourceSettings.Parquet("dummy", None, None, None),
-        target = null,
-        renames = None,
-        savepoints = com.scylladb.migrator.config.Savepoints(300, tempDir.toString),
-        skipTokenRanges = None,
-        skipSegments = None,
+        source           = SourceSettings.Parquet("dummy", None, None, None),
+        target           = null,
+        renames          = None,
+        savepoints       = com.scylladb.migrator.config.Savepoints(300, tempDir.toString),
+        skipTokenRanges  = None,
+        skipSegments     = None,
         skipParquetFiles = None,
-        validation = None
+        validation       = None
       )
 
       val manager = ParquetSavepointsManager(config, spark.sparkContext)
@@ -233,14 +233,14 @@ class FileCompletionListenerTest extends munit.FunSuite {
 
     try {
       val config = MigratorConfig(
-        source = SourceSettings.Parquet("dummy", None, None, None),
-        target = null,
-        renames = None,
-        savepoints = com.scylladb.migrator.config.Savepoints(300, tempDir.toString),
-        skipTokenRanges = None,
-        skipSegments = None,
+        source           = SourceSettings.Parquet("dummy", None, None, None),
+        target           = null,
+        renames          = None,
+        savepoints       = com.scylladb.migrator.config.Savepoints(300, tempDir.toString),
+        skipTokenRanges  = None,
+        skipSegments     = None,
         skipParquetFiles = None,
-        validation = None
+        validation       = None
       )
 
       val manager = ParquetSavepointsManager(config, spark.sparkContext)
@@ -276,14 +276,14 @@ class FileCompletionListenerTest extends munit.FunSuite {
 
     try {
       val config = MigratorConfig(
-        source = SourceSettings.Parquet("dummy", None, None, None),
-        target = null,
-        renames = None,
-        savepoints = com.scylladb.migrator.config.Savepoints(300, tempDir.toString),
-        skipTokenRanges = None,
-        skipSegments = None,
+        source           = SourceSettings.Parquet("dummy", None, None, None),
+        target           = null,
+        renames          = None,
+        savepoints       = com.scylladb.migrator.config.Savepoints(300, tempDir.toString),
+        skipTokenRanges  = None,
+        skipSegments     = None,
         skipParquetFiles = None,
-        validation = None
+        validation       = None
       )
 
       val manager = ParquetSavepointsManager(config, spark.sparkContext)
@@ -332,14 +332,14 @@ class FileCompletionListenerTest extends munit.FunSuite {
 
     try {
       val config = MigratorConfig(
-        source = SourceSettings.Parquet("dummy", None, None, None),
-        target = null,
-        renames = None,
-        savepoints = com.scylladb.migrator.config.Savepoints(300, tempDir.toString),
-        skipTokenRanges = None,
-        skipSegments = None,
+        source           = SourceSettings.Parquet("dummy", None, None, None),
+        target           = null,
+        renames          = None,
+        savepoints       = com.scylladb.migrator.config.Savepoints(300, tempDir.toString),
+        skipTokenRanges  = None,
+        skipSegments     = None,
         skipParquetFiles = None,
-        validation = None
+        validation       = None
       )
 
       val manager = ParquetSavepointsManager(config, spark.sparkContext)

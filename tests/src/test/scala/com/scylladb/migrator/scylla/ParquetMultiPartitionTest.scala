@@ -70,7 +70,7 @@ class ParquetMultiPartitionTest extends ParquetMigratorSuite {
       val largeData = (1 to 500).map { i =>
         // Each record is ~200 bytes, total ~100KB file
         TestRecord(
-          id = f"id-$i%05d",
+          id  = f"id-$i%05d",
           foo = s"data-$i-" + ("x" * 150), // Large string to increase file size
           bar = i * 10
         )
@@ -149,7 +149,7 @@ class ParquetMultiPartitionTest extends ParquetMigratorSuite {
         ),
         parquetDir.resolve("large.parquet") -> (1 to 500).map { i =>
           TestRecord(
-            id = f"large-$i%05d",
+            id  = f"large-$i%05d",
             foo = s"data-$i-" + ("x" * 150),
             bar = i * 10
           )

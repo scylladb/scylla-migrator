@@ -26,25 +26,25 @@ object Connectors {
             case None => CassandraConnectorConf.DefaultCassandraSSLConf
             case Some(sslOptions) =>
               CassandraConnectorConf.CassandraSSLConf(
-                enabled = sslOptions.enabled,
-                trustStorePath = sslOptions.trustStorePath,
+                enabled            = sslOptions.enabled,
+                trustStorePath     = sslOptions.trustStorePath,
                 trustStorePassword = sslOptions.trustStorePassword,
-                trustStoreType = sslOptions.trustStoreType.getOrElse("JKS"),
-                protocol = sslOptions.protocol.getOrElse("TLS"),
+                trustStoreType     = sslOptions.trustStoreType.getOrElse("JKS"),
+                protocol           = sslOptions.protocol.getOrElse("TLS"),
                 enabledAlgorithms = sslOptions.enabledAlgorithms.getOrElse(
                   Set("TLS_RSA_WITH_AES_128_CBC_SHA", "TLS_RSA_WITH_AES_256_CBC_SHA")
                 ),
                 clientAuthEnabled = sslOptions.clientAuthEnabled,
-                keyStorePath = sslOptions.keyStorePath,
-                keyStorePassword = sslOptions.keyStorePassword,
-                keyStoreType = sslOptions.keyStoreType.getOrElse("JKS")
+                keyStorePath      = sslOptions.keyStorePath,
+                keyStorePassword  = sslOptions.keyStorePassword,
+                keyStoreType      = sslOptions.keyStoreType.getOrElse("JKS")
               )
           }
         ),
-        localDC = sourceSettings.localDC,
-        localConnectionsPerExecutor = sourceSettings.connections,
+        localDC                      = sourceSettings.localDC,
+        localConnectionsPerExecutor  = sourceSettings.connections,
         remoteConnectionsPerExecutor = sourceSettings.connections,
-        queryRetryCount = -1
+        queryRetryCount              = -1
       )
     )
 
@@ -61,14 +61,14 @@ object Connectors {
             case None => CassandraConnectorConf.DefaultCassandraSSLConf
             case Some(sslOptions) =>
               CassandraConnectorConf.CassandraSSLConf(
-                enabled = sslOptions.enabled,
-                clientAuthEnabled = sslOptions.clientAuthEnabled,
-                trustStorePath = sslOptions.trustStorePath,
+                enabled            = sslOptions.enabled,
+                clientAuthEnabled  = sslOptions.clientAuthEnabled,
+                trustStorePath     = sslOptions.trustStorePath,
                 trustStorePassword = sslOptions.trustStorePassword,
-                trustStoreType = sslOptions.trustStoreType.getOrElse("JKS"),
-                protocol = sslOptions.protocol.getOrElse("TLS"),
-                keyStorePath = sslOptions.keyStorePath,
-                keyStorePassword = sslOptions.keyStorePassword,
+                trustStoreType     = sslOptions.trustStoreType.getOrElse("JKS"),
+                protocol           = sslOptions.protocol.getOrElse("TLS"),
+                keyStorePath       = sslOptions.keyStorePath,
+                keyStorePassword   = sslOptions.keyStorePassword,
                 enabledAlgorithms = sslOptions.enabledAlgorithms.getOrElse(
                   Set("TLS_RSA_WITH_AES_128_CBC_SHA", "TLS_RSA_WITH_AES_256_CBC_SHA")
                 ),
@@ -76,10 +76,10 @@ object Connectors {
               )
           }
         ),
-        localDC = targetSettings.localDC,
-        localConnectionsPerExecutor = targetSettings.connections,
+        localDC                      = targetSettings.localDC,
+        localConnectionsPerExecutor  = targetSettings.connections,
         remoteConnectionsPerExecutor = targetSettings.connections,
-        queryRetryCount = -1
+        queryRetryCount              = -1
       )
     )
 }

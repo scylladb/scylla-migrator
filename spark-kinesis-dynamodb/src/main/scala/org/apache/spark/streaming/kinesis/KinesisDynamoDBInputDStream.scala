@@ -34,7 +34,7 @@ class KinesisDynamoDBInputDStream[T: ClassTag](
       DEFAULT_STORAGE_LEVEL,
       messageHandler,
       kinesisCreds,
-      dynamoDBCreds = None,
+      dynamoDBCreds   = None,
       cloudWatchCreds = None,
       DEFAULT_METRICS_LEVEL,
       DEFAULT_METRICS_ENABLED_DIMENSIONS

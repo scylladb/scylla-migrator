@@ -84,8 +84,8 @@ object ScyllaValidator {
           ReadConf
             .fromSparkConf(spark.sparkContext.getConf)
             .copy(
-              splitCount = sourceSettings.splitCount,
-              fetchSizeInRows = sourceSettings.fetchSize,
+              splitCount       = sourceSettings.splitCount,
+              fetchSizeInRows  = sourceSettings.fetchSize,
               consistencyLevel = consistencyLevel
             )
         )

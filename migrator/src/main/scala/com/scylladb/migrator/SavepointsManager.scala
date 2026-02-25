@@ -65,7 +65,7 @@ abstract class SavepointsManager(migratorConfig: MigratorConfig) extends AutoClo
 
     oldUsr2Handler = Signal.handle(new Signal("USR2"), handler)
     oldTermHandler = Signal.handle(new Signal("TERM"), handler)
-    oldIntHandler = Signal.handle(new Signal("INT"), handler)
+    oldIntHandler  = Signal.handle(new Signal("INT"), handler)
   }
 
   private def startSavepointSchedule(): Unit = {

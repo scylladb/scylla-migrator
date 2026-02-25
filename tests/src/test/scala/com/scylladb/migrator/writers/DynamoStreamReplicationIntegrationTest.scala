@@ -133,14 +133,14 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
         .asInstanceOf[RDD[Option[DynamoStreamReplication.DynamoItem]]]
 
       val targetSettings = TargetSettings.DynamoDB(
-        table = tableName,
-        region = Some("eu-central-1"),
-        endpoint = Some(DynamoDBEndpoint("http://localhost", 8000)),
-        credentials = Some(AWSCredentials("dummy", "dummy", None)),
-        streamChanges = false,
+        table                       = tableName,
+        region                      = Some("eu-central-1"),
+        endpoint                    = Some(DynamoDBEndpoint("http://localhost", 8000)),
+        credentials                 = Some(AWSCredentials("dummy", "dummy", None)),
+        streamChanges               = false,
         skipInitialSnapshotTransfer = Some(true),
-        writeThroughput = None,
-        throughputWritePercent = None
+        writeThroughput             = None,
+        throughputWritePercent      = None
       )
 
       val tableDesc = targetAlternator()

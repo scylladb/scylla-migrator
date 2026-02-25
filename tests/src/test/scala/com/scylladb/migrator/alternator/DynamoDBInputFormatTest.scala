@@ -29,9 +29,9 @@ class DynamoDBInputFormatTest extends munit.FunSuite {
     "no configured scanSegments in on-demand billing mode, table size is 100 GB, and read throughput is 1,000,000"
   ) {
     checkPartitions(1024)(
-      tableSizeBytes = 100 * GB,
+      tableSizeBytes             = 100 * GB,
       tableProvisionedThroughput = None,
-      configuredReadThroughput = Some(1000000)
+      configuredReadThroughput   = Some(1000000)
     )
   }
 
@@ -78,18 +78,18 @@ class DynamoDBInputFormatTest extends munit.FunSuite {
     }
 
     val jobConf = DynamoDB.makeJobConf(
-      spark = spark,
-      endpoint = None,
-      credentials = None,
-      region = None,
-      table = "DummyTable",
-      scanSegments = configuredScanSegments,
-      maxMapTasks = configuredMaxMapTasks,
-      readThroughput = configuredReadThroughput,
-      throughputReadPercent = configuredThroughputReadPercent,
-      description = tableDescriptionBuilder.build(),
-      maybeTtlDescription = None,
-      skipSegments = None,
+      spark                  = spark,
+      endpoint               = None,
+      credentials            = None,
+      region                 = None,
+      table                  = "DummyTable",
+      scanSegments           = configuredScanSegments,
+      maxMapTasks            = configuredMaxMapTasks,
+      readThroughput         = configuredReadThroughput,
+      throughputReadPercent  = configuredThroughputReadPercent,
+      description            = tableDescriptionBuilder.build(),
+      maybeTtlDescription    = None,
+      skipSegments           = None,
       removeConsumedCapacity = false
     )
     val splits = new DynamoDBInputFormat().getSplits(jobConf, 1)
