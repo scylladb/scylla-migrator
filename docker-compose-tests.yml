@@ -48,7 +48,7 @@ services:
       --tablets-mode-for-new-keyspaces disabled
 
   s3:
-    image: localstack/localstack:s3-4.3
+    image: localstack/localstack:s3-latest
     ports:
       - "127.0.0.1:4566:4566"            # LocalStack Gateway
     environment:
@@ -58,7 +58,6 @@ services:
       - "/var/run/docker.sock:/var/run/docker.sock"
 
   spark-master:
-    image: ghcr.io/scylladb/scylla-migrator/spark:latest
     build: dockerfiles/spark
     command: master
     environment:
@@ -77,7 +76,6 @@ services:
       - ./tests/docker/parquet:/app/parquet
 
   spark-worker:
-    image: ghcr.io/scylladb/scylla-migrator/spark:latest
     build: dockerfiles/spark
     command: worker
     environment:
