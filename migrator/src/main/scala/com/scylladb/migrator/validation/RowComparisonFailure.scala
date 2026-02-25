@@ -6,9 +6,11 @@ import com.scylladb.migrator.alternator.DdbValue
 
 import java.time.temporal.ChronoUnit
 
-case class RowComparisonFailure(rowRepr: String,
-                                otherRepr: Option[String],
-                                items: List[RowComparisonFailure.Item]) {
+case class RowComparisonFailure(
+  rowRepr: String,
+  otherRepr: Option[String],
+  items: List[RowComparisonFailure.Item]
+) {
 
   override def toString: String =
     s"""
@@ -28,32 +30,35 @@ object RowComparisonFailure {
     case object MismatchedColumnNames extends Item("Mismatched column names")
     case class DifferingFieldValues(fields: List[String])
         extends Item(s"Differing fields: ${fields.mkString(", ")}")
-    case class DifferingTtls(details: List[(String, Long)])
-        extends Item(s"Differing TTLs: ${details
-          .map {
-            case (fieldName, ttlDiff) => s"$fieldName ($ttlDiff millis)"
-          }
-          .mkString(", ")}")
+    case class DifferingTtls(details: List[(String, Long)]) extends Item(s"Differing TTLs: ${details
+            .map { case (fieldName, ttlDiff) =>
+              s"$fieldName ($ttlDiff millis)"
+            }
+            .mkString(", ")}")
     case class DifferingWritetimes(details: List[(String, Long)])
         extends Item(s"Differing WRITETIMEs: ${details
-          .map {
-            case (fieldName, writeTimeDiff) => s"$fieldName ($writeTimeDiff millis)"
-          }
-          .mkString(", ")}")
+            .map { case (fieldName, writeTimeDiff) =>
+              s"$fieldName ($writeTimeDiff millis)"
+            }
+            .mkString(", ")}")
   }
 
-  def cassandraRowComparisonFailure(left: CassandraRow,
-                                    right: Option[CassandraRow],
-                                    items: List[Item]): RowComparisonFailure =
+  def cassandraRowComparisonFailure(
+    left: CassandraRow,
+    right: Option[CassandraRow],
+    items: List[Item]
+  ): RowComparisonFailure =
     RowComparisonFailure(left.toString, right.map(_.toString), items)
 
-  def compareCassandraRows(left: CassandraRow,
-                           right: Option[CassandraRow],
-                           floatingPointTolerance: Double,
-                           timestampMsTolerance: Long,
-                           ttlToleranceMillis: Long,
-                           writetimeToleranceMillis: Long,
-                           compareTimestamps: Boolean): Option[RowComparisonFailure] =
+  def compareCassandraRows(
+    left: CassandraRow,
+    right: Option[CassandraRow],
+    floatingPointTolerance: Double,
+    timestampMsTolerance: Long,
+    ttlToleranceMillis: Long,
+    writetimeToleranceMillis: Long,
+    compareTimestamps: Boolean
+  ): Option[RowComparisonFailure] =
     right match {
       case None => Some(cassandraRowComparisonFailure(left, right, List(Item.MissingTargetRow)))
       case Some(right) if left.columnValues.size != right.columnValues.size =>
@@ -84,13 +89,13 @@ object RowComparisonFailure {
               leftTtl  = left.getLongOption(name)
               rightTtl = right.getLongOption(name)
               result <- (leftTtl, rightTtl) match {
-                         case (Some(l), Some(r)) if math.abs(l - r) > ttlToleranceMillis =>
-                           Some(name -> math.abs(l - r))
-                         case (Some(l), None)    => Some(name -> l)
-                         case (None, Some(r))    => Some(name -> r)
-                         case (Some(l), Some(r)) => None
-                         case (None, None)       => None
-                       }
+                          case (Some(l), Some(r)) if math.abs(l - r) > ttlToleranceMillis =>
+                            Some(name -> math.abs(l - r))
+                          case (Some(l), None)    => Some(name -> l)
+                          case (None, Some(r))    => Some(name -> r)
+                          case (Some(l), Some(r)) => None
+                          case (None, None)       => None
+                        }
             } yield result
 
         // WRITETIME is expressed in microseconds
@@ -104,13 +109,13 @@ object RowComparisonFailure {
               leftWritetime  = left.getLongOption(name)
               rightWritetime = right.getLongOption(name)
               result <- (leftWritetime, rightWritetime) match {
-                         case (Some(l), Some(r)) if math.abs(l - r) > writetimeToleranceMicros =>
-                           Some(name -> math.abs(l - r))
-                         case (Some(l), None)    => Some(name -> l)
-                         case (None, Some(r))    => Some(name -> r)
-                         case (Some(l), Some(r)) => None
-                         case (None, None)       => None
-                       }
+                          case (Some(l), Some(r)) if math.abs(l - r) > writetimeToleranceMicros =>
+                            Some(name -> math.abs(l - r))
+                          case (Some(l), None)    => Some(name -> l)
+                          case (None, Some(r))    => Some(name -> r)
+                          case (Some(l), Some(r)) => None
+                          case (None, None)       => None
+                        }
             } yield result
 
         if (differingFieldValues.isEmpty && differingTtls.isEmpty && differingWritetimes.isEmpty)
@@ -132,23 +137,31 @@ object RowComparisonFailure {
           )
     }
 
-  def dynamoDBRowComparisonFailure(left: collection.Map[String, DdbValue],
-                                   maybeRight: Option[collection.Map[String, DdbValue]],
-                                   items: List[Item]): RowComparisonFailure =
+  def dynamoDBRowComparisonFailure(
+    left: collection.Map[String, DdbValue],
+    maybeRight: Option[collection.Map[String, DdbValue]],
+    items: List[Item]
+  ): RowComparisonFailure =
     RowComparisonFailure(left.toString, maybeRight.map(_.toString), items)
 
-  /**
-    * @param left                   The first item to compare
-    * @param maybeRight             The possible second item to compare
-    * @param renamedColumn          A function describing how the columns of the first items should be expected to be
-    *                               renamed in the second item
-    * @param floatingPointTolerance The tolerance to apply when comparing floating point values
-    * @return Some comparison failure if the compared items were different, otherwise `None`.
+  /** @param left
+    *   The first item to compare
+    * @param maybeRight
+    *   The possible second item to compare
+    * @param renamedColumn
+    *   A function describing how the columns of the first items should be expected to be renamed in
+    *   the second item
+    * @param floatingPointTolerance
+    *   The tolerance to apply when comparing floating point values
+    * @return
+    *   Some comparison failure if the compared items were different, otherwise `None`.
     */
-  def compareDynamoDBRows(left: collection.Map[String, DdbValue],
-                          maybeRight: Option[collection.Map[String, DdbValue]],
-                          renamedColumn: String => String,
-                          floatingPointTolerance: Double): Option[RowComparisonFailure] =
+  def compareDynamoDBRows(
+    left: collection.Map[String, DdbValue],
+    maybeRight: Option[collection.Map[String, DdbValue]],
+    renamedColumn: String => String,
+    floatingPointTolerance: Double
+  ): Option[RowComparisonFailure] =
     maybeRight match {
       case None => Some(dynamoDBRowComparisonFailure(left, maybeRight, List(Item.MissingTargetRow)))
       case Some(right) if left.keySet.size != right.keySet.size =>
@@ -164,7 +177,8 @@ object RowComparisonFailure {
               Some(leftValue),
               rightValue,
               0L, // There is no Timestamp type in DynamoDB
-              floatingPointTolerance)
+              floatingPointTolerance
+            )
           } yield columnName
         if (differingFieldValues.isEmpty) None
         else
@@ -172,20 +186,28 @@ object RowComparisonFailure {
             dynamoDBRowComparisonFailure(
               left,
               maybeRight,
-              List(Item.DifferingFieldValues(differingFieldValues.toList))))
+              List(Item.DifferingFieldValues(differingFieldValues.toList))
+            )
+          )
     }
 
-  /**
-    * @param leftValue              First value to compare
-    * @param rightValue             Second value to compare
-    * @param timestampMsTolerance   Tolerance when comparing instant values
-    * @param floatingPointTolerance Tolerance when comparing floating point values
-    * @return `true` if the `leftValue` is different from the `rightValue`
+  /** @param leftValue
+    *   First value to compare
+    * @param rightValue
+    *   Second value to compare
+    * @param timestampMsTolerance
+    *   Tolerance when comparing instant values
+    * @param floatingPointTolerance
+    *   Tolerance when comparing floating point values
+    * @return
+    *   `true` if the `leftValue` is different from the `rightValue`
     */
-  private def areDifferent(leftValue: Option[Any],
-                           rightValue: Option[Any],
-                           timestampMsTolerance: Long,
-                           floatingPointTolerance: Double): Boolean =
+  private def areDifferent(
+    leftValue: Option[Any],
+    rightValue: Option[Any],
+    timestampMsTolerance: Long,
+    floatingPointTolerance: Double
+  ): Boolean =
     (rightValue, leftValue) match {
       // All timestamp types need to be compared with a configured tolerance
       case (Some(l: java.time.Instant), Some(r: java.time.Instant)) if timestampMsTolerance > 0 =>
@@ -211,8 +233,8 @@ object RowComparisonFailure {
       case (Some(DdbValue.Ns(l)), Some(DdbValue.Ns(r))) =>
         val xs = l.map(BigDecimal(_))
         val ys = r.map(BigDecimal(_))
-        xs.size != ys.size || xs.zip(ys).exists {
-          case (x, y) => areNumericalValuesDifferent(x, y, floatingPointTolerance)
+        xs.size != ys.size || xs.zip(ys).exists { case (x, y) =>
+          areNumericalValuesDifferent(x, y, floatingPointTolerance)
         }
 
       // All remaining types get compared with standard equality
@@ -223,9 +245,11 @@ object RowComparisonFailure {
     }
 
   /** @return true iff the difference between `x` and `y` is greater than the `tolerance` */
-  private def areNumericalValuesDifferent(x: BigDecimal,
-                                          y: BigDecimal,
-                                          tolerance: BigDecimal): Boolean =
+  private def areNumericalValuesDifferent(
+    x: BigDecimal,
+    y: BigDecimal,
+    tolerance: BigDecimal
+  ): Boolean =
     (x - y).abs > tolerance
 
 }

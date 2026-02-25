@@ -46,11 +46,11 @@ class PartitionMetadataReaderTest extends munit.FunSuite {
       val uniqueFiles = metadata.map(_.filename).toSet
       assert(uniqueFiles.size >= 2, s"Should have at least 2 unique files, got ${uniqueFiles.size}")
 
-    } finally {
-      Files.walk(tempDir)
+    } finally
+      Files
+        .walk(tempDir)
         .sorted(java.util.Comparator.reverseOrder())
         .forEach(Files.delete)
-    }
   }
 
   test("buildFileToPartitionsMap creates correct mapping") {
@@ -143,14 +143,17 @@ class PartitionMetadataReaderTest extends munit.FunSuite {
       assert(filteredMetadata.size < allMetadata.size)
 
       filteredMetadata.foreach { pm =>
-        assert(pm.filename != fileToSkip, s"Skipped file ${fileToSkip} should not appear in filtered metadata")
+        assert(
+          pm.filename != fileToSkip,
+          s"Skipped file ${fileToSkip} should not appear in filtered metadata"
+        )
       }
 
-    } finally {
-      Files.walk(tempDir)
+    } finally
+      Files
+        .walk(tempDir)
         .sorted(java.util.Comparator.reverseOrder())
         .forEach(Files.delete)
-    }
   }
 
   test("readMetadata handles single partition per file") {
@@ -173,10 +176,10 @@ class PartitionMetadataReaderTest extends munit.FunSuite {
 
       assertEquals(fileToPartitions.size, 1)
 
-    } finally {
-      Files.walk(tempDir)
+    } finally
+      Files
+        .walk(tempDir)
         .sorted(java.util.Comparator.reverseOrder())
         .forEach(Files.delete)
-    }
   }
 }

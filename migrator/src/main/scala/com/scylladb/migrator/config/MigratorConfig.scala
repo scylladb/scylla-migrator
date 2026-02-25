@@ -8,14 +8,16 @@ import io.circe.yaml.parser
 import io.circe.yaml.syntax._
 import io.circe.{ Decoder, DecodingFailure, Encoder, Error, Json }
 
-case class MigratorConfig(source: SourceSettings,
-                          target: TargetSettings,
-                          renames: Option[List[Rename]],
-                          savepoints: Savepoints,
-                          skipTokenRanges: Option[Set[(Token[_], Token[_])]],
-                          skipSegments: Option[Set[Int]],
-                          skipParquetFiles: Option[Set[String]],
-                          validation: Option[Validation]) {
+case class MigratorConfig(
+  source: SourceSettings,
+  target: TargetSettings,
+  renames: Option[List[Rename]],
+  savepoints: Savepoints,
+  skipTokenRanges: Option[Set[(Token[_], Token[_])]],
+  skipSegments: Option[Set[Int]],
+  skipParquetFiles: Option[Set[String]],
+  validation: Option[Validation]
+) {
   def render: String = this.asJson.asYaml.spaces2
 
   def getRenamesOrNil: List[Rename] = renames.getOrElse(Nil)
@@ -31,7 +33,7 @@ case class MigratorConfig(source: SourceSettings,
 }
 object MigratorConfig {
   implicit val tokenEncoder: Encoder[Token[_]] = Encoder.instance {
-    case LongToken(value)   => Json.obj("type" := "long", "value"   := value)
+    case LongToken(value)   => Json.obj("type" := "long", "value" := value)
     case BigIntToken(value) => Json.obj("type" := "bigint", "value" := value)
   }
 
@@ -39,10 +41,10 @@ object MigratorConfig {
     for {
       tpe <- cursor.get[String]("type")
       result <- tpe match {
-                 case "long"    => cursor.get[Long]("value").map(LongToken(_))
-                 case "bigint"  => cursor.get[BigInt]("value").map(BigIntToken(_))
-                 case otherwise => Left(DecodingFailure(s"Unknown token type '$otherwise'", Nil))
-               }
+                  case "long"    => cursor.get[Long]("value").map(LongToken(_))
+                  case "bigint"  => cursor.get[BigInt]("value").map(BigIntToken(_))
+                  case otherwise => Left(DecodingFailure(s"Unknown token type '$otherwise'", Nil))
+                }
     } yield result
   }
 

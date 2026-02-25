@@ -1,10 +1,15 @@
 package com.scylladb.migrator.alternator
 
-import com.scylladb.migrator.SparkUtils.{submitSparkJob, successfullyPerformMigration}
-import software.amazon.awssdk.services.dynamodb.model.{AttributeValue, PutItemRequest, ResourceNotFoundException, ScanRequest}
+import com.scylladb.migrator.SparkUtils.{ submitSparkJob, successfullyPerformMigration }
+import software.amazon.awssdk.services.dynamodb.model.{
+  AttributeValue,
+  PutItemRequest,
+  ResourceNotFoundException,
+  ScanRequest
+}
 
 import java.util.UUID
-import scala.concurrent.duration.{Duration, DurationInt}
+import scala.concurrent.duration.{ Duration, DurationInt }
 import scala.jdk.CollectionConverters._
 import scala.util.chaining._
 
@@ -49,17 +54,18 @@ class SkippedSegmentsTest extends MigratorSuiteWithDynamoDBLocal {
     }
   }
 
-  def createRandomData(tableName: String): Unit = {
+  def createRandomData(tableName: String): Unit =
     for (_ <- 1 to 300) {
       val itemData = Map(
-        "id" -> AttributeValue.fromS(UUID.randomUUID().toString),
+        "id"  -> AttributeValue.fromS(UUID.randomUUID().toString),
         "foo" -> AttributeValue.fromS(UUID.randomUUID().toString),
         "bar" -> AttributeValue.fromS(UUID.randomUUID().toString),
         "baz" -> AttributeValue.fromS(UUID.randomUUID().toString)
       )
-      sourceDDb().putItem(PutItemRequest.builder().tableName(tableName).item(itemData.asJava).build())
+      sourceDDb().putItem(
+        PutItemRequest.builder().tableName(tableName).item(itemData.asJava).build()
+      )
     }
-  }
 
   def targetAlternatorItemCount(tableName: String): Long =
     targetAlternator()

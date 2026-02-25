@@ -1,7 +1,7 @@
 package com.scylladb.migrator.scylla
 
-import com.scylladb.migrator.config.{MigratorConfig, SourceSettings}
-import com.scylladb.migrator.readers.{Parquet, ParquetSavepointsManager}
+import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings }
+import com.scylladb.migrator.readers.{ Parquet, ParquetSavepointsManager }
 import org.apache.spark.sql.SparkSession
 
 import java.nio.file.Files
@@ -33,11 +33,11 @@ class ParquetSavepointsTest extends munit.FunSuite {
       assert(files.size >= 1)
       assert(files.head.contains("part-") && files.head.endsWith(".parquet"))
 
-    } finally {
-      Files.walk(tempDir)
+    } finally
+      Files
+        .walk(tempDir)
         .sorted(java.util.Comparator.reverseOrder())
         .forEach(Files.delete)
-    }
   }
 
   test("Parquet file listing with directory") {
@@ -56,15 +56,13 @@ class ParquetSavepointsTest extends munit.FunSuite {
 
       val files = Parquet.listParquetFiles(spark, tempDir.toString)
       assert(files.size >= 2)
-      files.foreach(file => {
-        assert(file.contains("part-") && file.endsWith(".parquet"))
-      })
+      files.foreach(file => assert(file.contains("part-") && file.endsWith(".parquet")))
 
-    } finally {
-      Files.walk(tempDir)
+    } finally
+      Files
+        .walk(tempDir)
         .sorted(java.util.Comparator.reverseOrder())
         .forEach(Files.delete)
-    }
   }
 
   test("ParquetSavepointsManager initialization and state") {
@@ -91,15 +89,14 @@ class ParquetSavepointsTest extends munit.FunSuite {
         val updatedConfig = manager.updateConfigWithMigrationState()
         assertEquals(updatedConfig.skipParquetFiles.get, Set("file1.parquet"))
 
-      } finally {
+      } finally
         manager.close()
-      }
 
-    } finally {
-      Files.walk(tempDir)
+    } finally
+      Files
+        .walk(tempDir)
         .sorted(java.util.Comparator.reverseOrder())
         .forEach(Files.delete)
-    }
   }
 
   test("Parquet file filtering with skipFiles") {
@@ -129,11 +126,11 @@ class ParquetSavepointsTest extends munit.FunSuite {
       assertEquals(filesToProcess.size, allFiles.size - 1)
       assert(!filesToProcess.contains(fileToSkip))
 
-    } finally {
-      Files.walk(tempDir)
+    } finally
+      Files
+        .walk(tempDir)
         .sorted(java.util.Comparator.reverseOrder())
         .forEach(Files.delete)
-    }
   }
 
   test("ParquetSavepointsManager tracks files during per-file processing") {
@@ -173,7 +170,10 @@ class ParquetSavepointsTest extends munit.FunSuite {
       val manager = ParquetSavepointsManager(config, spark.sparkContext)
 
       try {
-        assertEquals(manager.updateConfigWithMigrationState().skipParquetFiles.getOrElse(Set.empty).size, 0)
+        assertEquals(
+          manager.updateConfigWithMigrationState().skipParquetFiles.getOrElse(Set.empty).size,
+          0
+        )
 
         allFiles.zipWithIndex.foreach { case (filePath, index) =>
           val singleFileDF = spark.read.parquet(filePath)
@@ -181,23 +181,26 @@ class ParquetSavepointsTest extends munit.FunSuite {
           assert(count >= 1)
 
           manager.markFileAsProcessed(filePath)
-          val processedSoFar = manager.updateConfigWithMigrationState().skipParquetFiles.getOrElse(Set.empty)
+          val processedSoFar =
+            manager.updateConfigWithMigrationState().skipParquetFiles.getOrElse(Set.empty)
           assertEquals(processedSoFar.size, index + 1, s"After processing file ${index + 1}")
         }
 
-        val finalProcessed = manager.updateConfigWithMigrationState().skipParquetFiles.getOrElse(Set.empty)
+        val finalProcessed =
+          manager.updateConfigWithMigrationState().skipParquetFiles.getOrElse(Set.empty)
         assertEquals(finalProcessed.size, allFiles.size)
         assert(finalProcessed == allFiles.toSet)
 
-      } finally {
+      } finally
         manager.close()
-      }
 
     } finally {
-      Files.walk(tempDir)
+      Files
+        .walk(tempDir)
         .sorted(java.util.Comparator.reverseOrder())
         .forEach(Files.delete)
-      Files.walk(savepointsDir)
+      Files
+        .walk(savepointsDir)
         .sorted(java.util.Comparator.reverseOrder())
         .forEach(Files.delete)
     }

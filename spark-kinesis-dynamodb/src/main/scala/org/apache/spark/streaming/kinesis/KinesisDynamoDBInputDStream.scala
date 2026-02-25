@@ -1,14 +1,19 @@
 package org.apache.spark.streaming.kinesis
 
 import com.amazonaws.services.kinesis.model.Record
-import org.apache.spark.streaming.kinesis.KinesisInputDStream.{DEFAULT_KINESIS_ENDPOINT_URL, DEFAULT_METRICS_ENABLED_DIMENSIONS, DEFAULT_METRICS_LEVEL, DEFAULT_STORAGE_LEVEL}
+import org.apache.spark.streaming.kinesis.KinesisInputDStream.{
+  DEFAULT_KINESIS_ENDPOINT_URL,
+  DEFAULT_METRICS_ENABLED_DIMENSIONS,
+  DEFAULT_METRICS_LEVEL,
+  DEFAULT_STORAGE_LEVEL
+}
 import org.apache.spark.streaming.receiver.Receiver
 import org.apache.spark.streaming.StreamingContext
 
 import scala.reflect.ClassTag
 
-/**
-  * Override the default behavior of [[KinesisInputDStream]] to create a [[KinesisDynamoDBReceiver]].
+/** Override the default behavior of [[KinesisInputDStream]] to create a
+  * [[KinesisDynamoDBReceiver]].
   */
 class KinesisDynamoDBInputDStream[T: ClassTag](
   ssc: StreamingContext,
@@ -35,7 +40,7 @@ class KinesisDynamoDBInputDStream[T: ClassTag](
       DEFAULT_METRICS_ENABLED_DIMENSIONS
     ) {
 
-  override def getReceiver(): Receiver[T] = {
+  override def getReceiver(): Receiver[T] =
     new KinesisDynamoDBReceiver(
       streamName,
       endpointUrl,
@@ -51,6 +56,5 @@ class KinesisDynamoDBInputDStream[T: ClassTag](
       metricsLevel,
       metricsEnabledDimensions
     )
-  }
 
 }

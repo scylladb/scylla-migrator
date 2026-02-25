@@ -1,7 +1,7 @@
 package com.scylladb.migrator.validation
 
 import com.scylladb.migrator.alternator.DdbValue
-import com.scylladb.migrator.validation.RowComparisonFailure.{Item, dynamoDBRowComparisonFailure}
+import com.scylladb.migrator.validation.RowComparisonFailure.{ dynamoDBRowComparisonFailure, Item }
 
 class DynamoDBRowComparisonTest extends munit.FunSuite {
 
@@ -85,7 +85,9 @@ class DynamoDBRowComparisonTest extends munit.FunSuite {
         dynamoDBRowComparisonFailure(
           item,
           Some(otherItem),
-          List(Item.DifferingFieldValues(List("foo")))))
+          List(Item.DifferingFieldValues(List("foo")))
+        )
+      )
     assertEquals(result, expected)
   }
 
@@ -113,7 +115,9 @@ class DynamoDBRowComparisonTest extends munit.FunSuite {
         dynamoDBRowComparisonFailure(
           numericalItem,
           Some(otherNumericalItem),
-          List(Item.DifferingFieldValues(List("bar")))))
+          List(Item.DifferingFieldValues(List("bar")))
+        )
+      )
     assertEquals(result, expected)
   }
 

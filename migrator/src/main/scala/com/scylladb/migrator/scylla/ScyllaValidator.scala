@@ -24,11 +24,13 @@ object ScyllaValidator {
   def runValidation(
     sourceSettings: SourceSettings.Cassandra,
     targetSettings: TargetSettings.Scylla,
-    config: MigratorConfig)(implicit spark: SparkSession): List[RowComparisonFailure] = {
+    config: MigratorConfig
+  )(implicit spark: SparkSession): List[RowComparisonFailure] = {
 
     val validationConfig =
       config.validation.getOrElse(
-        sys.error("Missing required property 'validation' in the configuration file."))
+        sys.error("Missing required property 'validation' in the configuration file.")
+      )
 
     val sourceConnector: CassandraConnector =
       Connectors.sourceConnector(spark.sparkContext.getConf, sourceSettings)
@@ -37,7 +39,8 @@ object ScyllaValidator {
 
     val sourceTableDef =
       sourceConnector.withSessionDo(
-        Schema.tableFromCassandra(_, sourceSettings.keyspace, sourceSettings.table))
+        Schema.tableFromCassandra(_, sourceSettings.keyspace, sourceSettings.table)
+      )
 
     val source = {
       val regularColumnsProjection =
@@ -66,10 +69,12 @@ object ScyllaValidator {
       }
       if (consistencyLevel.toString == sourceSettings.consistencyLevel) {
         log.info(
-          s"Using consistencyLevel [${consistencyLevel}] for VALIDATOR SOURCE based on validator source config [${sourceSettings.consistencyLevel}]")
+          s"Using consistencyLevel [${consistencyLevel}] for VALIDATOR SOURCE based on validator source config [${sourceSettings.consistencyLevel}]"
+        )
       } else {
         log.info(
-          s"Using DEFAULT consistencyLevel [${consistencyLevel}] for VALIDATOR SOURCE based on unrecognized validator source config [${sourceSettings.consistencyLevel}]")
+          s"Using DEFAULT consistencyLevel [${consistencyLevel}] for VALIDATOR SOURCE based on unrecognized validator source config [${sourceSettings.consistencyLevel}]"
+        )
       }
 
       spark.sparkContext
@@ -79,8 +84,8 @@ object ScyllaValidator {
           ReadConf
             .fromSparkConf(spark.sparkContext.getConf)
             .copy(
-              splitCount       = sourceSettings.splitCount,
-              fetchSizeInRows  = sourceSettings.fetchSize,
+              splitCount = sourceSettings.splitCount,
+              fetchSizeInRows = sourceSettings.fetchSize,
               consistencyLevel = consistencyLevel
             )
         )
@@ -113,22 +118,22 @@ object ScyllaValidator {
           targetSettings.keyspace,
           targetSettings.table,
           SomeColumns(primaryKeyProjection ++ regularColumnsProjection: _*),
-          SomeColumns(joinKey: _*))
+          SomeColumns(joinKey: _*)
+        )
         .withConnector(targetConnector)
     }
 
     joined
-      .flatMap {
-        case (l, r) =>
-          RowComparisonFailure.compareCassandraRows(
-            l,
-            r,
-            validationConfig.floatingPointTolerance,
-            validationConfig.timestampMsTolerance,
-            validationConfig.ttlToleranceMillis,
-            validationConfig.writetimeToleranceMillis,
-            validationConfig.compareTimestamps
-          )
+      .flatMap { case (l, r) =>
+        RowComparisonFailure.compareCassandraRows(
+          l,
+          r,
+          validationConfig.floatingPointTolerance,
+          validationConfig.timestampMsTolerance,
+          validationConfig.ttlToleranceMillis,
+          validationConfig.writetimeToleranceMillis,
+          validationConfig.compareTimestamps
+        )
       }
       .take(validationConfig.failuresToFetch)
       .toList

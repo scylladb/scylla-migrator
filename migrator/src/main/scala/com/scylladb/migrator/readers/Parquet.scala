@@ -9,15 +9,16 @@ import scala.util.Using
 object Parquet {
   val log = LogManager.getLogger("com.scylladb.migrator.readers.Parquet")
 
-  def migrateToScylla(config: MigratorConfig,
-                      source: SourceSettings.Parquet,
-                      target: TargetSettings.Scylla)(implicit spark: SparkSession): Unit = {
+  def migrateToScylla(
+    config: MigratorConfig,
+    source: SourceSettings.Parquet,
+    target: TargetSettings.Scylla
+  )(implicit spark: SparkSession): Unit = {
 
     val useFileTracking = config.savepoints.enableParquetFileTracking
 
     if (useFileTracking) {
-      log.info(
-        "Starting Parquet migration with file-level savepoint tracking")
+      log.info("Starting Parquet migration with file-level savepoint tracking")
       migrateWithSavepoints(config, source, target)
     } else {
       log.info("Starting Parquet migration without savepoint tracking")
@@ -25,17 +26,17 @@ object Parquet {
     }
   }
 
-  /**
-    * Parquet migration with file-level savepoint tracking.
+  /** Parquet migration with file-level savepoint tracking.
     *
-    * This mode tracks completion of individual Parquet files, enabling resume capability
-    * if the migration is interrupted. Uses SparkListener to detect when all partitions
-    * of a file have been processed.
+    * This mode tracks completion of individual Parquet files, enabling resume capability if the
+    * migration is interrupted. Uses SparkListener to detect when all partitions of a file have been
+    * processed.
     */
   private def migrateWithSavepoints(
     config: MigratorConfig,
     source: SourceSettings.Parquet,
-    target: TargetSettings.Scylla)(implicit spark: SparkSession): Unit = {
+    target: TargetSettings.Scylla
+  )(implicit spark: SparkSession): Unit = {
     configureHadoopCredentials(spark, source)
 
     val allFiles = listParquetFiles(spark, source.path)
@@ -62,7 +63,8 @@ object Parquet {
     val fileToPartitions = PartitionMetadataReader.buildFileToPartitionsMap(metadata)
 
     log.info(
-      s"Discovered ${fileToPartitions.size} files with ${metadata.size} total partitions to process")
+      s"Discovered ${fileToPartitions.size} files with ${metadata.size} total partitions to process"
+    )
 
     Using.resource(ParquetSavepointsManager(config, spark.sparkContext)) { savepointsManager =>
       val listener = new FileCompletionListener(
@@ -83,7 +85,8 @@ object Parquet {
 
         log.info(
           s"Parquet migration completed successfully: " +
-            s"${listener.getCompletedFilesCount}/${listener.getTotalFilesCount} files processed")
+            s"${listener.getCompletedFilesCount}/${listener.getTotalFilesCount} files processed"
+        )
 
       } finally {
         spark.sparkContext.removeSparkListener(listener)
@@ -92,17 +95,16 @@ object Parquet {
     }
   }
 
-  /**
-    * Parquet migration without savepoint tracking.
+  /** Parquet migration without savepoint tracking.
     *
-    * This mode reads all Parquet files using Spark's native parallelism but does not
-    * track individual file completion. If migration is interrupted, it will restart
-    * from the beginning.
+    * This mode reads all Parquet files using Spark's native parallelism but does not track
+    * individual file completion. If migration is interrupted, it will restart from the beginning.
     */
   private def migrateWithoutSavepoints(
     config: MigratorConfig,
     source: SourceSettings.Parquet,
-    target: TargetSettings.Scylla)(implicit spark: SparkSession): Unit = {
+    target: TargetSettings.Scylla
+  )(implicit spark: SparkSession): Unit = {
     val sourceDF = ParquetWithoutSavepoints.readDataFrame(spark, source)
     ScyllaMigrator.migrate(config, target, sourceDF)
   }
@@ -131,21 +133,22 @@ object Parquet {
     }
   }
 
-  /**
-    * Configures Hadoop S3A credentials for reading from AWS S3.
+  /** Configures Hadoop S3A credentials for reading from AWS S3.
     *
     * This method sets the necessary Hadoop configuration properties for AWS access key, secret key,
-    * and optionally a session token. When a session token is present, it sets the credentials provider
-    * to TemporaryAWSCredentialsProvider as required by Hadoop.
+    * and optionally a session token. When a session token is present, it sets the credentials
+    * provider to TemporaryAWSCredentialsProvider as required by Hadoop.
     *
-    * If a region is specified in the source configuration, this method also sets the S3A endpoint region
-    * via the `fs.s3a.endpoint.region` property.
+    * If a region is specified in the source configuration, this method also sets the S3A endpoint
+    * region via the `fs.s3a.endpoint.region` property.
     *
     * For more details, see the official Hadoop AWS documentation:
     * https://hadoop.apache.org/docs/stable/hadoop-aws/tools/hadoop-aws/index.html#Authentication
     */
-  private[readers] def configureHadoopCredentials(spark: SparkSession,
-                                                  source: SourceSettings.Parquet): Unit =
+  private[readers] def configureHadoopCredentials(
+    spark: SparkSession,
+    source: SourceSettings.Parquet
+  ): Unit =
     source.finalCredentials.foreach { credentials =>
       log.info("Loaded AWS credentials from config file")
       source.region.foreach { region =>
@@ -156,7 +159,8 @@ object Parquet {
       credentials.maybeSessionToken.foreach { sessionToken =>
         spark.sparkContext.hadoopConfiguration.set(
           "fs.s3a.aws.credentials.provider",
-          "org.apache.hadoop.fs.s3a.TemporaryAWSCredentialsProvider")
+          "org.apache.hadoop.fs.s3a.TemporaryAWSCredentialsProvider"
+        )
         spark.sparkContext.hadoopConfiguration.set(
           "fs.s3a.session.token",
           sessionToken

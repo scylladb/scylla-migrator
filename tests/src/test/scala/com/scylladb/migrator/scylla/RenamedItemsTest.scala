@@ -20,7 +20,8 @@ class RenamedItemsTest extends MigratorSuite(sourcePort = 9043) {
               "id"  -> literal("12345"),
               "foo" -> literal("bar"),
               "bar" -> literal(42)
-            ).asJava)
+            ).asJava
+          )
           .build()
 
       // Insert some items

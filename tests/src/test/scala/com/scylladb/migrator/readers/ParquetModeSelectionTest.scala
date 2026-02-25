@@ -1,7 +1,7 @@
 package com.scylladb.migrator.readers
 
-import com.scylladb.migrator.config.{MigratorConfig, Savepoints, SourceSettings, TargetSettings}
-import java.nio.file.{Files, Paths}
+import com.scylladb.migrator.config.{ MigratorConfig, Savepoints, SourceSettings, TargetSettings }
+import java.nio.file.{ Files, Paths }
 import java.nio.charset.StandardCharsets
 
 class ParquetModeSelectionTest extends munit.FunSuite {
@@ -34,12 +34,14 @@ savepoints:
 
       val config = MigratorConfig.loadFrom(tempFile.toString)
 
-      assertEquals(config.savepoints.enableParquetFileTracking, true,
-        "enableParquetFileTracking should default to true")
+      assertEquals(
+        config.savepoints.enableParquetFileTracking,
+        true,
+        "enableParquetFileTracking should default to true"
+      )
 
-    } finally {
+    } finally
       Files.delete(tempFile)
-    }
   }
 
   test("savepoints.enableParquetFileTracking can be explicitly set to true") {
@@ -71,12 +73,14 @@ savepoints:
 
       val config = MigratorConfig.loadFrom(tempFile.toString)
 
-      assertEquals(config.savepoints.enableParquetFileTracking, true,
-        "enableParquetFileTracking should be true when explicitly set")
+      assertEquals(
+        config.savepoints.enableParquetFileTracking,
+        true,
+        "enableParquetFileTracking should be true when explicitly set"
+      )
 
-    } finally {
+    } finally
       Files.delete(tempFile)
-    }
   }
 
   test("savepoints.enableParquetFileTracking can be set to false for legacy mode") {
@@ -108,12 +112,14 @@ savepoints:
 
       val config = MigratorConfig.loadFrom(tempFile.toString)
 
-      assertEquals(config.savepoints.enableParquetFileTracking, false,
-        "enableParquetFileTracking should be false when explicitly set")
+      assertEquals(
+        config.savepoints.enableParquetFileTracking,
+        false,
+        "enableParquetFileTracking should be false when explicitly set"
+      )
 
-    } finally {
+    } finally
       Files.delete(tempFile)
-    }
   }
 
   test("savepoints configuration round-trip with enableParquetFileTracking") {
@@ -156,10 +162,12 @@ savepoints:
 
       assertEquals(config2.savepoints.intervalSeconds, savepoints1.intervalSeconds)
       assertEquals(config2.savepoints.path, savepoints1.path)
-      assertEquals(config2.savepoints.enableParquetFileTracking, savepoints1.enableParquetFileTracking,
-        "enableParquetFileTracking should survive round-trip serialization")
-    } finally {
+      assertEquals(
+        config2.savepoints.enableParquetFileTracking,
+        savepoints1.enableParquetFileTracking,
+        "enableParquetFileTracking should survive round-trip serialization"
+      )
+    } finally
       Files.delete(tempFile)
-    }
   }
 }

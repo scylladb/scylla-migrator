@@ -18,7 +18,8 @@ class BasicMigrationTest extends MigratorSuite(sourcePort = 9043) {
           Map[String, Term](
             "id"  -> literal("12345"),
             "foo" -> literal("bar")
-          ).asJava)
+          ).asJava
+        )
         .build()
 
     // Insert some items
