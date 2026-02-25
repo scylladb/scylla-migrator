@@ -81,6 +81,27 @@ object DynamoStreamPoller {
       )
       .shardIterator()
 
+  /** Get a shard iterator starting after the given sequence number. Used for resuming from
+    * checkpoints.
+    */
+  def getShardIteratorAfterSequence(
+    streamsClient: DynamoDbStreamsClient,
+    streamArn: String,
+    shardId: String,
+    sequenceNumber: String
+  ): String =
+    streamsClient
+      .getShardIterator(
+        GetShardIteratorRequest
+          .builder()
+          .streamArn(streamArn)
+          .shardId(shardId)
+          .shardIteratorType(ShardIteratorType.AFTER_SEQUENCE_NUMBER)
+          .sequenceNumber(sequenceNumber)
+          .build()
+      )
+      .shardIterator()
+
   /** Read records from a shard iterator. Returns (records, nextShardIterator). The next iterator is
     * None when the shard is closed.
     */

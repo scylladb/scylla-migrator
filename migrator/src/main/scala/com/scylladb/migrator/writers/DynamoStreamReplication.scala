@@ -3,17 +3,30 @@ package com.scylladb.migrator.writers
 import com.scylladb.migrator.{ DynamoStreamPoller, DynamoUtils }
 import com.scylladb.migrator.config.{ SourceSettings, TargetSettings }
 import org.apache.log4j.LogManager
-import org.apache.spark.sql.SparkSession
-import org.apache.spark.streaming.StreamingContext
+import software.amazon.awssdk.services.dynamodb.DynamoDbClient
 import software.amazon.awssdk.services.dynamodb.model.{
+  AttributeDefinition,
   AttributeValue,
+  BillingMode,
+  CreateTableRequest,
   DeleteItemRequest,
+  DescribeTableRequest,
+  DynamoDbException,
+  KeySchemaElement,
+  KeyType,
   PutItemRequest,
+  Record,
+  ResourceNotFoundException,
+  ScalarAttributeType,
   ShardIteratorType,
   TableDescription
 }
+import software.amazon.awssdk.services.dynamodb.streams.DynamoDbStreamsClient
 
 import java.util
+import java.util.concurrent.{ CountDownLatch, ExecutorService, Executors, ThreadFactory, TimeUnit }
+import scala.concurrent.{ Await, ExecutionContext, Future }
+import scala.concurrent.duration.Duration
 import scala.jdk.CollectionConverters._
 
 object DynamoStreamReplication {
@@ -24,6 +37,34 @@ object DynamoStreamReplication {
   private val operationTypeColumn = "_dynamo_op_type"
   private val putOperation = AttributeValue.fromBool(true)
   private val deleteOperation = AttributeValue.fromBool(false)
+
+  /** Maximum consecutive polling failures before stopping stream replication. */
+  private val maxConsecutiveErrors = 50
+
+  /** DynamoDB Streams error codes that are safe to retry with backoff. */
+  private val retryableErrorCodes = Set(
+    "LimitExceededException",
+    "InternalServerError",
+    "ProvisionedThroughputExceededException"
+  )
+
+  /** Handle for managing the lifecycle of stream replication. */
+  class StreamHandle(
+    scheduler: ExecutorService,
+    pollingPool: ExecutorService,
+    latch: CountDownLatch
+  ) {
+
+    /** Block until stream replication stops due to sustained errors. */
+    def awaitTermination(): Unit = latch.await()
+
+    /** Gracefully stop stream replication. */
+    def stop(): Unit = {
+      scheduler.shutdown()
+      pollingPool.shutdown()
+      latch.countDown()
+    }
+  }
 
   private[writers] def run(
     items: Iterable[Option[DynamoItem]],
@@ -95,14 +136,17 @@ object DynamoStreamReplication {
                 |""".stripMargin)
   }
 
-  def createDStream(
-    spark: SparkSession,
-    streamingContext: StreamingContext,
+  /** Start streaming replication from a DynamoDB stream. Returns a [[StreamHandle]] for lifecycle
+    * management. Replaces the previous StreamingContext-based approach with a direct
+    * ScheduledExecutorService for simpler, more predictable scheduling.
+    */
+  def startStreaming(
     src: SourceSettings.DynamoDB,
     target: TargetSettings.DynamoDB,
     targetTableDesc: TableDescription,
-    renamesMap: Map[String, String]
-  ): Unit = {
+    renamesMap: Map[String, String],
+    batchIntervalSeconds: Int = 5
+  ): StreamHandle = {
     val sourceClient =
       DynamoUtils.buildDynamoClient(
         src.endpoint,
@@ -120,89 +164,312 @@ object DynamoStreamReplication {
     val streamArn = DynamoStreamPoller.getStreamArn(sourceClient, src.table)
     log.info(s"Stream ARN: $streamArn")
 
-    // Track shard iterators across batches
+    // Shard state tracking
     var shardIterators = Map.empty[String, String]
     var initialized = false
+    var consecutiveErrors = 0
 
-    streamingContext.queueStream(
-      {
-        val queue =
-          new scala.collection.mutable.Queue[org.apache.spark.rdd.RDD[Unit]]()
+    // Checkpoint table in DynamoDB (same as old KCL-based approach).
+    // Each run creates a fresh table, matching the old behavior where
+    // checkpointAppName = s"migrator_${src.table}_${System.currentTimeMillis()}"
+    val checkpointTableName =
+      s"migrator_${src.table}_${System.currentTimeMillis()}"
+    val checkpointClient =
+      DynamoUtils.buildDynamoClient(
+        src.endpoint,
+        src.finalCredentials.map(_.toProvider),
+        src.region,
+        Seq.empty
+      )
+    createCheckpointTable(checkpointClient, checkpointTableName)
+    log.info(s"Checkpoint table: $checkpointTableName")
+    var shardSequenceNumbers = Map.empty[String, String]
 
-        queue
-      },
-      oneAtATime = true
+    // Thread pool for parallel shard polling
+    val pollingPool = Executors.newFixedThreadPool(
+      math.max(4, Runtime.getRuntime.availableProcessors())
     )
+    implicit val pollingEc: ExecutionContext =
+      ExecutionContext.fromExecutorService(pollingPool)
 
-    // Use a receiver-less approach: poll in the driver on each batch interval
-    streamingContext.addStreamingListener(
-      new org.apache.spark.streaming.scheduler.StreamingListener {
-        override def onBatchCompleted(
-          event: org.apache.spark.streaming.scheduler.StreamingListenerBatchCompleted
-        ): Unit =
-          pollAndProcess()
-      }
-    )
+    val terminationLatch = new CountDownLatch(1)
 
     def pollAndProcess(): Unit =
       try {
-        val shards = DynamoStreamPoller.listShards(streamsClient, streamArn)
-        val shardIds = shards.map(_.shardId()).toSet
-
-        // Initialize iterators for new shards
-        for {
-          shard <- shards
-          if !shardIterators.contains(shard.shardId())
-        } {
-          val iteratorType =
-            if (initialized) ShardIteratorType.LATEST else ShardIteratorType.TRIM_HORIZON
-          val iterator = DynamoStreamPoller.getShardIterator(
-            streamsClient,
-            streamArn,
-            shard.shardId(),
-            iteratorType
+        // Step 1: Poll all existing tracked shards in parallel.
+        // By polling before discovering new shards, we avoid the race where
+        // a shard closes between listShards and getRecords, causing its
+        // last records to be missed.
+        val pollResults = if (shardIterators.nonEmpty) {
+          val futures =
+            shardIterators.toSeq.map { case (shardId, iterator) =>
+              Future(
+                pollShard(streamsClient, shardId, iterator)
+              ).recover { case e: Exception =>
+                log.warn(
+                  s"Failed to poll shard $shardId: ${e.getMessage}"
+                )
+                // Shard will be removed from tracking and re-initialized
+                // from checkpoint on next discovery pass
+                (shardId, Seq.empty[Record], None)
+              }
+            }
+          Await.result(
+            Future.sequence(futures),
+            Duration(60, TimeUnit.SECONDS)
           )
-          shardIterators = shardIterators + (shard.shardId() -> iterator)
-        }
-        initialized = true
+        } else Seq.empty
 
-        // Remove closed shards that no longer appear
-        shardIterators = shardIterators.filter { case (id, _) => shardIds.contains(id) }
-
-        // Poll all shards
-        val allItems = scala.collection.mutable.Buffer.empty[Option[DynamoItem]]
+        // Process poll results
+        val allItems =
+          scala.collection.mutable.Buffer.empty[Option[DynamoItem]]
         val updatedIterators =
           scala.collection.mutable.Map.empty[String, String]
+        val updatedSeqNums =
+          scala.collection.mutable.Map[String, String](
+            shardSequenceNumbers.toSeq: _*
+          )
 
-        for ((shardId, iterator) <- shardIterators) {
-          val (records, nextIterator) =
-            DynamoStreamPoller.getRecords(streamsClient, iterator)
-
+        for ((shardId, records, nextIter) <- pollResults) {
           for (record <- records) {
-            val maybeItem = DynamoStreamPoller.recordToItem(
+            allItems += DynamoStreamPoller.recordToItem(
               record,
               operationTypeColumn,
               putOperation,
               deleteOperation
             )
-            allItems += maybeItem
+            // Track sequence number for checkpointing
+            val seqNum = record.dynamodb().sequenceNumber()
+            if (seqNum != null)
+              updatedSeqNums(shardId) = seqNum
           }
-
-          nextIterator match {
+          nextIter match {
             case Some(next) => updatedIterators(shardId) = next
-            case None       => // shard is closed, don't track it anymore
+            case None       => // shard closed or poll failed
           }
         }
+
         shardIterators = updatedIterators.toMap
+        shardSequenceNumbers = updatedSeqNums.toMap
+
+        // Step 2: Discover new shards and initialize their iterators.
+        // This happens after polling so that closing shards have already
+        // been read before they disappear from the shard list.
+        val shards =
+          DynamoStreamPoller.listShards(streamsClient, streamArn)
+        for {
+          shard <- shards
+          if !shardIterators.contains(shard.shardId())
+        } {
+          val iterator =
+            shardSequenceNumbers.get(shard.shardId()) match {
+              case Some(seqNum) =>
+                // Resume from checkpoint
+                try
+                  DynamoStreamPoller.getShardIteratorAfterSequence(
+                    streamsClient,
+                    streamArn,
+                    shard.shardId(),
+                    seqNum
+                  )
+                catch {
+                  case e: Exception =>
+                    log.warn(
+                      s"Failed to resume shard ${shard.shardId()} " +
+                        s"from checkpoint: ${e.getMessage}, " +
+                        "falling back to TRIM_HORIZON"
+                    )
+                    DynamoStreamPoller.getShardIterator(
+                      streamsClient,
+                      streamArn,
+                      shard.shardId(),
+                      ShardIteratorType.TRIM_HORIZON
+                    )
+                }
+              case None =>
+                val iterType =
+                  if (initialized) ShardIteratorType.LATEST
+                  else ShardIteratorType.TRIM_HORIZON
+                DynamoStreamPoller.getShardIterator(
+                  streamsClient,
+                  streamArn,
+                  shard.shardId(),
+                  iterType
+                )
+            }
+          shardIterators = shardIterators + (shard.shardId() -> iterator)
+        }
+        initialized = true
+
+        // Save checkpoint to DynamoDB table
+        saveCheckpoint(checkpointClient, checkpointTableName, shardSequenceNumbers)
+
+        // Reset error counter on success
+        if (consecutiveErrors > 0) {
+          log.info(
+            s"Recovered after $consecutiveErrors consecutive errors"
+          )
+          consecutiveErrors = 0
+        }
 
         if (allItems.nonEmpty)
           run(allItems, target, renamesMap, targetTableDesc)
       } catch {
         case e: Exception =>
-          log.error("Error polling DynamoDB stream", e)
+          consecutiveErrors += 1
+          if (consecutiveErrors >= maxConsecutiveErrors) {
+            log.error(
+              s"$maxConsecutiveErrors consecutive polling failures, " +
+                "stopping stream replication",
+              e
+            )
+            terminationLatch.countDown()
+          } else if (consecutiveErrors % 10 == 0)
+            log.error(
+              s"Sustained polling failures " +
+                s"($consecutiveErrors consecutive)",
+              e
+            )
+          else
+            log.warn(
+              s"Error polling DynamoDB stream " +
+                s"(failure $consecutiveErrors)",
+              e
+            )
       }
 
-    // Do an initial poll
+    // Initial poll
     pollAndProcess()
+
+    // Schedule periodic polling with fixed delay to prevent overlapping
+    val scheduler = Executors.newSingleThreadScheduledExecutor(
+      new ThreadFactory {
+        def newThread(r: Runnable): Thread = {
+          val t = new Thread(r, "dynamo-stream-poller")
+          t.setDaemon(true)
+          t
+        }
+      }
+    )
+    scheduler.scheduleWithFixedDelay(
+      () => pollAndProcess(),
+      batchIntervalSeconds.toLong,
+      batchIntervalSeconds.toLong,
+      TimeUnit.SECONDS
+    )
+
+    new StreamHandle(scheduler, pollingPool, terminationLatch)
   }
+
+  /** Poll a single shard with retry and exponential backoff for rate-limiting errors. DynamoDB
+    * Streams limits to 5 GetRecords calls/second/shard; this backoff ensures we respect that limit
+    * even under contention.
+    */
+  private def pollShard(
+    streamsClient: DynamoDbStreamsClient,
+    shardId: String,
+    iterator: String,
+    maxRetries: Int = 3
+  ): (String, Seq[Record], Option[String]) = {
+    var attempt = 0
+    while (true)
+      try {
+        val (records, nextIter) =
+          DynamoStreamPoller.getRecords(streamsClient, iterator)
+        return (shardId, records, nextIter)
+      } catch {
+        case e: DynamoDbException
+            if e.awsErrorDetails() != null &&
+              retryableErrorCodes.contains(
+                e.awsErrorDetails().errorCode()
+              ) =>
+          attempt += 1
+          if (attempt > maxRetries) throw e
+          val backoffMs =
+            math.min(200L * (1L << attempt), 5000L)
+          log.warn(
+            s"Retryable error on shard $shardId " +
+              s"(attempt $attempt/$maxRetries), " +
+              s"backing off ${backoffMs}ms"
+          )
+          Thread.sleep(backoffMs)
+      }
+    // Unreachable, but required for Scala return type inference
+    throw new RuntimeException("Unreachable")
+  }
+
+  /** Column names matching the KCL checkpoint table schema. */
+  private val leaseKeyColumn = "leaseKey"
+  private val checkpointColumn = "checkpoint"
+
+  /** Create the checkpoint table in DynamoDB if it doesn't already exist. Uses the same schema as
+    * KCL: `leaseKey` (String, HASH key) with a `checkpoint` attribute for the sequence number.
+    */
+  private def createCheckpointTable(
+    client: DynamoDbClient,
+    tableName: String
+  ): Unit =
+    try {
+      client.describeTable(
+        DescribeTableRequest.builder().tableName(tableName).build()
+      )
+      log.info(s"Checkpoint table $tableName already exists")
+    } catch {
+      case _: ResourceNotFoundException =>
+        client.createTable(
+          CreateTableRequest
+            .builder()
+            .tableName(tableName)
+            .keySchema(
+              KeySchemaElement
+                .builder()
+                .attributeName(leaseKeyColumn)
+                .keyType(KeyType.HASH)
+                .build()
+            )
+            .attributeDefinitions(
+              AttributeDefinition
+                .builder()
+                .attributeName(leaseKeyColumn)
+                .attributeType(ScalarAttributeType.S)
+                .build()
+            )
+            .billingMode(BillingMode.PAY_PER_REQUEST)
+            .build()
+        )
+        client
+          .waiter()
+          .waitUntilTableExists(
+            DescribeTableRequest.builder().tableName(tableName).build()
+          )
+        log.info(s"Created checkpoint table $tableName")
+    }
+
+  /** Save per-shard sequence numbers to the checkpoint DynamoDB table. Each shard gets its own item
+    * with `leaseKey` = shardId and `checkpoint` = sequenceNumber.
+    */
+  private def saveCheckpoint(
+    client: DynamoDbClient,
+    tableName: String,
+    sequenceNumbers: Map[String, String]
+  ): Unit =
+    try
+      sequenceNumbers.foreach { case (shardId, seqNum) =>
+        client.putItem(
+          PutItemRequest
+            .builder()
+            .tableName(tableName)
+            .item(
+              Map(
+                leaseKeyColumn   -> AttributeValue.fromS(shardId),
+                checkpointColumn -> AttributeValue.fromS(seqNum)
+              ).asJava
+            )
+            .build()
+        )
+      }
+    catch {
+      case e: Exception =>
+        log.warn("Failed to save checkpoint", e)
+    }
 }
