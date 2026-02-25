@@ -1,0 +1,43 @@
+source:
+  type: dynamodb
+  table: AlternatorSettingsTest
+  region: dummy
+  endpoint:
+    host: http://dynamodb
+    port: 8000
+  credentials:
+    accessKey: dummy
+    secretKey: dummy
+  alternator:
+    compression: false
+    optimizeHeaders: false
+
+target:
+  type: dynamodb
+  table: AlternatorSettingsTest
+  region: dummy
+  endpoint:
+    host: http://scylla
+    port: 8000
+  credentials:
+    accessKey: dummy
+    secretKey: dummy
+  streamChanges: false
+  removeConsumedCapacity: true
+  billingMode: PAY_PER_REQUEST
+  alternator:
+    compression: false
+    optimizeHeaders: false
+
+# Below are unused but mandatory settings
+savepoints:
+  path: /app/savepoints
+  intervalSeconds: 300
+
+validation:
+  compareTimestamps: true
+  ttlToleranceMillis: 60000
+  writetimeToleranceMillis: 1000
+  failuresToFetch: 100
+  floatingPointTolerance: 0.001
+  timestampMsTolerance: 0
