@@ -19,7 +19,7 @@ services:
       - 9043
 
   scylla-source:
-    image: scylladb/scylla:6.2
+    image: scylladb/scylla:latest
     volumes:
       - "./tests/docker/scylla-source:/var/lib/scylla"
     ports:
@@ -34,7 +34,7 @@ services:
       --alternator-write-isolation only_rmw_uses_lwt
       --tablets-mode-for-new-keyspaces disabled
   scylla:
-    image: scylladb/scylla:6.2
+    image: scylladb/scylla:latest
     volumes:
       - "./tests/docker/scylla:/var/lib/scylla"
     ports:
