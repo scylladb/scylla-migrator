@@ -1,7 +1,6 @@
 package com.scylladb.migrator
 
-import com.scylladb.alternator.internal.AlternatorLiveNodes
-import com.scylladb.alternator.queryplan.BasicQueryPlanInterceptor
+import com.scylladb.alternator.AlternatorDynamoDbClient
 import com.scylladb.migrator.config.{ DynamoDBEndpoint, SourceSettings, TargetSettings }
 import org.apache.hadoop.conf.{ Configurable, Configuration }
 import org.apache.hadoop.dynamodb.read.DynamoDBInputFormat
@@ -9,7 +8,14 @@ import org.apache.hadoop.dynamodb.write.DynamoDBOutputFormat
 import org.apache.hadoop.dynamodb.{ DynamoDBConstants, DynamoDbClientBuilderTransformer }
 import org.apache.hadoop.mapred.JobConf
 import org.apache.log4j.LogManager
-import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider
+import software.amazon.awssdk.auth.credentials.{
+  AwsBasicCredentials,
+  AwsCredentialsProvider,
+  AwsSessionCredentials,
+  DefaultCredentialsProvider,
+  StaticCredentialsProvider
+}
+import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.dynamodb.{ DynamoDbClient, DynamoDbClientBuilder }
 import software.amazon.awssdk.core.SdkRequest
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
@@ -250,8 +256,11 @@ object DynamoUtils {
     region: Option[String],
     interceptors: Seq[ExecutionInterceptor]
   ): DynamoDbClient = {
+    val baseBuilder: DynamoDbClientBuilder =
+      if (endpoint.isDefined) AlternatorDynamoDbClient.builder()
+      else DynamoDbClient.builder()
     val builder =
-      AwsUtils.configureClientBuilder(DynamoDbClient.builder(), endpoint, region, creds)
+      AwsUtils.configureClientBuilder(baseBuilder, endpoint, region, creds)
     val conf = ClientOverrideConfiguration.builder()
     interceptors.foreach(conf.addExecutionInterceptor)
     builder.overrideConfiguration(conf.build()).build()
@@ -367,15 +376,36 @@ object DynamoUtils {
     private var conf: Configuration = null
 
     override def apply(builder: DynamoDbClientBuilder): DynamoDbClientBuilder = {
+      val effectiveBuilder: DynamoDbClientBuilder =
+        Option(conf.get(DynamoDBConstants.ENDPOINT)) match {
+          case Some(customEndpoint) =>
+            val altBuilder = AlternatorDynamoDbClient.builder()
+            altBuilder.endpointOverride(URI.create(customEndpoint))
+            for (region <- Option(conf.get(DynamoDBConstants.REGION)))
+              altBuilder.region(Region.of(region))
+            val credentialsProvider =
+              (
+                Option(conf.get(DynamoDBConstants.DYNAMODB_ACCESS_KEY_CONF)),
+                Option(conf.get(DynamoDBConstants.DYNAMODB_SECRET_KEY_CONF))) match {
+                case (Some(accessKey), Some(secretKey)) =>
+                  val awsCreds =
+                    Option(conf.get(DynamoDBConstants.DYNAMODB_SESSION_TOKEN_CONF)) match {
+                      case Some(token) =>
+                        AwsSessionCredentials.create(accessKey, secretKey, token)
+                      case None =>
+                        AwsBasicCredentials.create(accessKey, secretKey)
+                    }
+                  StaticCredentialsProvider.create(awsCreds)
+                case _ => DefaultCredentialsProvider.create()
+              }
+            altBuilder.credentialsProvider(credentialsProvider)
+            altBuilder
+          case None => builder
+        }
       val overrideConf = ClientOverrideConfiguration.builder()
-      for (customEndpoint <- Option(conf.get(DynamoDBConstants.ENDPOINT))) {
-        val liveNodes = new AlternatorLiveNodes(URI.create(customEndpoint), null, null)
-        liveNodes.start()
-        overrideConf.addExecutionInterceptor(new BasicQueryPlanInterceptor(liveNodes))
-      }
       if (conf.get(RemoveConsumedCapacityConfig, "false").toBoolean)
         overrideConf.addExecutionInterceptor(new RemoveConsumedCapacityInterceptor)
-      builder.overrideConfiguration(overrideConf.build())
+      effectiveBuilder.overrideConfiguration(overrideConf.build())
     }
 
     override def setConf(configuration: Configuration): Unit =
