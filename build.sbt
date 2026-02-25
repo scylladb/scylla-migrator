@@ -2,7 +2,7 @@ import sbt.librarymanagement.InclExclRule
 
 // The AWS SDK version, the Spark version, and the Hadoop version must be compatible together
 val awsSdkVersion = "2.23.19"
-val sparkVersion = "3.5.1"
+val sparkVersion = "3.5.8"
 val hadoopVersion = "3.3.4"
 val dynamodbStreamsKinesisAdapterVersion = "1.5.4" // Note This version still depends on AWS SDK 1.x, but there is no more recent version that supports AWS SDK v2.
 
