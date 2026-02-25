@@ -1,7 +1,14 @@
 package com.scylladb.migrator
 
 import com.scylladb.alternator.AlternatorDynamoDbClient
-import com.scylladb.migrator.config.{ DynamoDBEndpoint, SourceSettings, TargetSettings }
+import com.scylladb.alternator.routing.{ ClusterScope, DatacenterScope, RackScope }
+import com.scylladb.alternator.RequestCompressionAlgorithm
+import com.scylladb.migrator.config.{
+  AlternatorSettings,
+  DynamoDBEndpoint,
+  SourceSettings,
+  TargetSettings
+}
 import org.apache.hadoop.conf.{ Configurable, Configuration }
 import org.apache.hadoop.dynamodb.read.DynamoDBInputFormat
 import org.apache.hadoop.dynamodb.write.DynamoDBOutputFormat
@@ -57,6 +64,13 @@ import scala.jdk.OptionConverters._
 object DynamoUtils {
   val log = LogManager.getLogger("com.scylladb.migrator.DynamoUtils")
   private val RemoveConsumedCapacityConfig = "scylla.migrator.remove_consumed_capacity"
+  private val AlternatorDatacenterConfig = "scylla.migrator.alternator.datacenter"
+  private val AlternatorRackConfig = "scylla.migrator.alternator.rack"
+  private val AlternatorActiveRefreshConfig =
+    "scylla.migrator.alternator.active_refresh_interval_ms"
+  private val AlternatorIdleRefreshConfig = "scylla.migrator.alternator.idle_refresh_interval_ms"
+  private val AlternatorCompressionConfig = "scylla.migrator.alternator.compression"
+  private val AlternatorOptimizeHeadersConfig = "scylla.migrator.alternator.optimize_headers"
 
   class RemoveConsumedCapacityInterceptor extends ExecutionInterceptor {
     override def modifyRequest(ctx: Context.ModifyRequest, attrs: ExecutionAttributes): SdkRequest =
@@ -89,7 +103,8 @@ object DynamoUtils {
         target.region,
         if (target.removeConsumedCapacity.getOrElse(false))
           Seq(new RemoveConsumedCapacityInterceptor)
-        else Nil
+        else Nil,
+        target.alternator
       )
 
     log.info("Checking for table existence at destination")
@@ -203,7 +218,8 @@ object DynamoUtils {
         source.region,
         if (source.removeConsumedCapacity.getOrElse(false))
           Seq(new RemoveConsumedCapacityInterceptor)
-        else Nil
+        else Nil,
+        source.alternator
       )
     val sourceStreamsClient =
       buildDynamoStreamsClient(
@@ -254,17 +270,45 @@ object DynamoUtils {
     endpoint: Option[DynamoDBEndpoint],
     creds: Option[AwsCredentialsProvider],
     region: Option[String],
-    interceptors: Seq[ExecutionInterceptor]
+    interceptors: Seq[ExecutionInterceptor],
+    alternatorSettings: Option[AlternatorSettings] = None
   ): DynamoDbClient = {
     val baseBuilder: DynamoDbClientBuilder =
-      if (endpoint.isDefined) AlternatorDynamoDbClient.builder()
-      else DynamoDbClient.builder()
+      if (endpoint.isDefined) {
+        val altBuilder = AlternatorDynamoDbClient.builder()
+        applyAlternatorSettings(altBuilder, alternatorSettings)
+        altBuilder
+      } else DynamoDbClient.builder()
     val builder =
       AwsUtils.configureClientBuilder(baseBuilder, endpoint, region, creds)
     val conf = ClientOverrideConfiguration.builder()
     interceptors.foreach(conf.addExecutionInterceptor)
     builder.overrideConfiguration(conf.build()).build()
   }
+
+  private def applyAlternatorSettings(
+    altBuilder: AlternatorDynamoDbClient.AlternatorDynamoDbClientBuilder,
+    alternatorSettings: Option[AlternatorSettings]
+  ): Unit =
+    for (settings <- alternatorSettings) {
+      val routingScope = (settings.datacenter, settings.rack) match {
+        case (Some(dc), Some(rack)) =>
+          RackScope.of(dc, rack, DatacenterScope.of(dc, ClusterScope.create()))
+        case (Some(dc), None) =>
+          DatacenterScope.of(dc, ClusterScope.create())
+        case _ => null
+      }
+      if (routingScope != null)
+        altBuilder.withRoutingScope(routingScope)
+      for (interval <- settings.activeRefreshIntervalMs)
+        altBuilder.withActiveRefreshIntervalMs(interval)
+      for (interval <- settings.idleRefreshIntervalMs)
+        altBuilder.withIdleRefreshIntervalMs(interval)
+      if (settings.compression.getOrElse(false))
+        altBuilder.withCompressionAlgorithm(RequestCompressionAlgorithm.GZIP)
+      if (settings.optimizeHeaders.getOrElse(false))
+        altBuilder.withOptimizeHeaders(true)
+    }
 
   def buildDynamoStreamsClient(
     endpoint: Option[DynamoDBEndpoint],
@@ -310,7 +354,8 @@ object DynamoUtils {
     maybeScanSegments: Option[Int],
     maybeMaxMapTasks: Option[Int],
     maybeAwsCredentials: Option[AWSCredentials],
-    removeConsumedCapacity: Boolean = false
+    removeConsumedCapacity: Boolean = false,
+    alternatorSettings: Option[AlternatorSettings] = None
   ): Unit = {
     for (region <- maybeRegion) {
       log.info(s"Using AWS region: ${region}")
@@ -342,6 +387,27 @@ object DynamoUtils {
 
     jobConf.set("mapred.output.format.class", classOf[DynamoDBOutputFormat].getName)
     jobConf.set("mapred.input.format.class", classOf[DynamoDBInputFormat].getName)
+
+    for (settings <- alternatorSettings) {
+      setOptionalConf(jobConf, AlternatorDatacenterConfig, settings.datacenter)
+      setOptionalConf(jobConf, AlternatorRackConfig, settings.rack)
+      setOptionalConf(
+        jobConf,
+        AlternatorActiveRefreshConfig,
+        settings.activeRefreshIntervalMs.map(_.toString)
+      )
+      setOptionalConf(
+        jobConf,
+        AlternatorIdleRefreshConfig,
+        settings.idleRefreshIntervalMs.map(_.toString)
+      )
+      setOptionalConf(jobConf, AlternatorCompressionConfig, settings.compression.map(_.toString))
+      setOptionalConf(
+        jobConf,
+        AlternatorOptimizeHeadersConfig,
+        settings.optimizeHeaders.map(_.toString)
+      )
+    }
   }
 
   /** @return
@@ -383,22 +449,37 @@ object DynamoUtils {
             altBuilder.endpointOverride(URI.create(customEndpoint))
             for (region <- Option(conf.get(DynamoDBConstants.REGION)))
               altBuilder.region(Region.of(region))
-            val credentialsProvider =
-              (
-                Option(conf.get(DynamoDBConstants.DYNAMODB_ACCESS_KEY_CONF)),
-                Option(conf.get(DynamoDBConstants.DYNAMODB_SECRET_KEY_CONF))) match {
-                case (Some(accessKey), Some(secretKey)) =>
-                  val awsCreds =
-                    Option(conf.get(DynamoDBConstants.DYNAMODB_SESSION_TOKEN_CONF)) match {
-                      case Some(token) =>
-                        AwsSessionCredentials.create(accessKey, secretKey, token)
-                      case None =>
-                        AwsBasicCredentials.create(accessKey, secretKey)
-                    }
-                  StaticCredentialsProvider.create(awsCreds)
-                case _ => DefaultCredentialsProvider.create()
-              }
-            altBuilder.credentialsProvider(credentialsProvider)
+            (
+              Option(conf.get(DynamoDBConstants.DYNAMODB_ACCESS_KEY_CONF)),
+              Option(conf.get(DynamoDBConstants.DYNAMODB_SECRET_KEY_CONF))
+            ) match {
+              case (Some(accessKey), Some(secretKey)) =>
+                val awsCreds =
+                  Option(conf.get(DynamoDBConstants.DYNAMODB_SESSION_TOKEN_CONF)) match {
+                    case Some(token) =>
+                      AwsSessionCredentials.create(accessKey, secretKey, token)
+                    case None =>
+                      AwsBasicCredentials.create(accessKey, secretKey)
+                  }
+                altBuilder.credentialsProvider(StaticCredentialsProvider.create(awsCreds))
+              case _ => // No credentials configured - use anonymous (Alternator default)
+            }
+            applyAlternatorSettings(
+              altBuilder,
+              Some(
+                AlternatorSettings(
+                  datacenter = Option(conf.get(AlternatorDatacenterConfig)),
+                  rack = Option(conf.get(AlternatorRackConfig)),
+                  activeRefreshIntervalMs =
+                    Option(conf.get(AlternatorActiveRefreshConfig)).map(_.toLong),
+                  idleRefreshIntervalMs =
+                    Option(conf.get(AlternatorIdleRefreshConfig)).map(_.toLong),
+                  compression = Option(conf.get(AlternatorCompressionConfig)).map(_.toBoolean),
+                  optimizeHeaders =
+                    Option(conf.get(AlternatorOptimizeHeadersConfig)).map(_.toBoolean)
+                )
+              )
+            )
             altBuilder
           case None => builder
         }
