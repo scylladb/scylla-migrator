@@ -48,7 +48,7 @@ lazy val migrator = (project in file("migrator")).enablePlugins(BuildInfoPlugin)
     "software.amazon.awssdk"    % "dynamodb" % awsSdkVersion,
     "software.amazon.awssdk"    % "s3"       % awsSdkVersion,
     "software.amazon.awssdk"    % "sts"      % awsSdkVersion,
-    "com.scylladb" %% "spark-scylladb-connector" % "4.0.0",
+    "com.scylladb" %% "spark-scylladb-connector" % "4.1.0",
     "com.github.jnr" % "jnr-posix" % "3.1.19", // Needed by the Spark ScyllaDB connector
     "com.scylladb.alternator" % "emr-dynamodb-hadoop" % "5.8.0",
     "com.scylladb.alternator" % "load-balancing" % "1.0.0",

@@ -1,12 +1,12 @@
 FROM alpine:3.20
 
-ENV SPARK_VERSION=3.5.1 \
+ENV SPARK_VERSION=3.5.8 \
     HADOOP_VERSION=3 \
     SCALA_VERSION=2.13 \
     SPARK_HOME="/spark"
 
 RUN set -ex; \
-    apk add --no-cache openjdk11-jre bash rsync procps openssh coreutils; \
+    apk add --no-cache openjdk17-jre bash rsync procps openssh coreutils; \
     wget https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}-scala${SCALA_VERSION}.tgz; \
     tar --directory / -xvzf spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}-scala${SCALA_VERSION}.tgz; \
     mv /spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}-scala${SCALA_VERSION} ${SPARK_HOME}; \
