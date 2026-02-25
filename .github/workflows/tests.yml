@@ -31,7 +31,7 @@ jobs:
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 8
+          java-version: 11
           cache: sbt
       - uses: sbt/setup-sbt@v1
       - name: Check formatting
@@ -50,7 +50,7 @@ jobs:
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 8
+          java-version: 11
           cache: sbt
       - uses: sbt/setup-sbt@v1
       - name: Download assembly JAR
@@ -70,7 +70,7 @@ jobs:
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 8
+          java-version: 11
           cache: sbt
       - uses: sbt/setup-sbt@v1
       - name: Download assembly JAR
