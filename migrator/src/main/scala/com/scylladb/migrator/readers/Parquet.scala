@@ -16,8 +16,7 @@ object Parquet {
     val useFileTracking = config.savepoints.enableParquetFileTracking
 
     if (useFileTracking) {
-      log.info(
-        "Starting Parquet migration with file-level savepoint tracking")
+      log.info("Starting Parquet migration with file-level savepoint tracking")
       migrateWithSavepoints(config, source, target)
     } else {
       log.info("Starting Parquet migration without savepoint tracking")

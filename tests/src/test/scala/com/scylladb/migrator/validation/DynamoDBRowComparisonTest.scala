@@ -2,6 +2,7 @@ package com.scylladb.migrator.validation
 
 import com.scylladb.migrator.alternator.DdbValue
 import com.scylladb.migrator.validation.RowComparisonFailure.{Item, dynamoDBRowComparisonFailure}
+import software.amazon.awssdk.core.SdkBytes
 
 class DynamoDBRowComparisonTest extends munit.FunSuite {
 
@@ -86,6 +87,111 @@ class DynamoDBRowComparisonTest extends munit.FunSuite {
           item,
           Some(otherItem),
           List(Item.DifferingFieldValues(List("foo")))))
+    assertEquals(result, expected)
+  }
+
+  test("String sets with different order are equal") {
+    val source = Map("foo" -> DdbValue.Ss(Seq("a", "b", "c")))
+    val target = Map("foo" -> DdbValue.Ss(Seq("c", "a", "b")))
+    val result = RowComparisonFailure.compareDynamoDBRows(
+      source,
+      Some(target),
+      sameColumns,
+      floatingPointTolerance
+    )
+    assertEquals(result, None)
+  }
+
+  test("Number sets with different order are equal") {
+    val source = Map("foo" -> DdbValue.Ns(Seq("1", "2", "3")))
+    val target = Map("foo" -> DdbValue.Ns(Seq("3", "1", "2")))
+    val result = RowComparisonFailure.compareDynamoDBRows(
+      source,
+      Some(target),
+      sameColumns,
+      floatingPointTolerance
+    )
+    assertEquals(result, None)
+  }
+
+  test("Number sets with different order are equal within tolerance") {
+    val source = Map("foo" -> DdbValue.Ns(Seq("1.001", "2.002")))
+    val target = Map("foo" -> DdbValue.Ns(Seq("2.003", "1.002")))
+    val result = RowComparisonFailure.compareDynamoDBRows(
+      source,
+      Some(target),
+      sameColumns,
+      floatingPointTolerance
+    )
+    assertEquals(result, None)
+  }
+
+  test("Binary sets with different order are equal") {
+    val b1 = SdkBytes.fromUtf8String("alpha")
+    val b2 = SdkBytes.fromUtf8String("beta")
+    val b3 = SdkBytes.fromUtf8String("gamma")
+    val source = Map("foo" -> DdbValue.Bs(Seq(b1, b2, b3)))
+    val target = Map("foo" -> DdbValue.Bs(Seq(b3, b1, b2)))
+    val result = RowComparisonFailure.compareDynamoDBRows(
+      source,
+      Some(target),
+      sameColumns,
+      floatingPointTolerance
+    )
+    assertEquals(result, None)
+  }
+
+  test("String sets with different elements are different") {
+    val source = Map("foo" -> DdbValue.Ss(Seq("a", "b", "c")))
+    val target = Map("foo" -> DdbValue.Ss(Seq("a", "b", "d")))
+    val result = RowComparisonFailure.compareDynamoDBRows(
+      source,
+      Some(target),
+      sameColumns,
+      floatingPointTolerance
+    )
+    val expected = Some(
+      dynamoDBRowComparisonFailure(
+        source,
+        Some(target),
+        List(Item.DifferingFieldValues(List("foo")))))
+    assertEquals(result, expected)
+  }
+
+  test("Number sets with different elements are different") {
+    val source = Map("foo" -> DdbValue.Ns(Seq("1", "2", "3")))
+    val target = Map("foo" -> DdbValue.Ns(Seq("1", "2", "4")))
+    val result = RowComparisonFailure.compareDynamoDBRows(
+      source,
+      Some(target),
+      sameColumns,
+      floatingPointTolerance
+    )
+    val expected = Some(
+      dynamoDBRowComparisonFailure(
+        source,
+        Some(target),
+        List(Item.DifferingFieldValues(List("foo")))))
+    assertEquals(result, expected)
+  }
+
+  test("Binary sets with different elements are different") {
+    val b1 = SdkBytes.fromUtf8String("alpha")
+    val b2 = SdkBytes.fromUtf8String("beta")
+    val b3 = SdkBytes.fromUtf8String("gamma")
+    val source = Map("foo" -> DdbValue.Bs(Seq(b1, b2)))
+    val target = Map("foo" -> DdbValue.Bs(Seq(b1, b3)))
+    val result = RowComparisonFailure.compareDynamoDBRows(
+      source,
+      Some(target),
+      sameColumns,
+      floatingPointTolerance
+    )
+    val expected = Some(
+      dynamoDBRowComparisonFailure(
+        source,
+        Some(target),
+        List(Item.DifferingFieldValues(List("foo")))))
     assertEquals(result, expected)
   }
 

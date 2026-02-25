@@ -22,10 +22,10 @@ object PartitionMetadataExtractor {
 
     val scanExecList = plan.collect {
       case exec: FileSourceScanExec => exec
-    } 
+    }
 
     val scanExec = scanExecList match {
-      case list if list.size == 1 => 
+      case list if list.size == 1 =>
         list.head
       case list if list.size > 1 =>
         val message = "Several FileSourceScanExec were found in plan"

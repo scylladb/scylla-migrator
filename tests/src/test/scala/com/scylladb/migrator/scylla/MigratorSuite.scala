@@ -6,6 +6,7 @@ import com.scylladb.migrator.CassandraUtils.dropAndRecreateTable
 
 import java.net.InetSocketAddress
 import scala.jdk.CollectionConverters._
+import scala.concurrent.duration._
 
 /**
   * Base class for implementing end-to-end tests.
@@ -16,6 +17,8 @@ import scala.jdk.CollectionConverters._
   * @param sourcePort TCP port of the source database. See docker-compose-test.yml.
   */
 abstract class MigratorSuite(sourcePort: Int) extends munit.FunSuite {
+
+  override val munitTimeout: Duration = 2.minutes
 
   val keyspace = "test"
 
