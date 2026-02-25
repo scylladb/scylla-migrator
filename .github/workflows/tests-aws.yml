@@ -41,15 +41,16 @@ jobs:
         with:
           name: migrator-jar
           path: migrator/target/scala-2.13/
+      - name: Start services
+        run: docker compose -f docker-compose-tests.yml up -d scylla spark-master spark-worker
       - name: configure aws credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           role-session-name: GitHub_to_AWS_via_FederatedOIDC
-      - name: Set up services
+      - name: Wait for services
         run: |
-          docker compose -f docker-compose-tests.yml up -d scylla spark-master spark-worker
           .github/wait-for-port.sh 8000 # ScyllaDB Alternator
           .github/wait-for-cql.sh scylla
           .github/wait-for-port.sh 8080 # Spark master

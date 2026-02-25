@@ -76,6 +76,9 @@ jobs:
           .github/wait-for-cql.sh scylla-source
           .github/wait-for-port.sh 8080 # Spark master
           .github/wait-for-port.sh 8081 # Spark worker
+      - name: Dump container logs on failure
+        if: failure()
+        run: docker compose -f docker-compose-tests.yml logs
       - name: Run tests locally
         run: |
           if [ "${{ github.event_name }}" = "push" ]; then
