@@ -1,7 +1,5 @@
 package com.scylladb.migrator.writers
 
-import com.amazonaws.services.dynamodbv2.model.{ AttributeValue => AttributeValueV1 }
-import com.scylladb.migrator.AttributeValueUtils
 import com.scylladb.migrator.config.{ AWSCredentials, DynamoDBEndpoint, TargetSettings }
 import org.apache.log4j.{ Level, Logger }
 import org.apache.spark.rdd.RDD
@@ -20,10 +18,13 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
 
   private val tableName = "DynamoStreamReplicationIntegrationTest"
   private val operationTypeColumn = "_dynamo_op_type"
-  private val putOperation = new AttributeValueV1().withBOOL(true)
-  private val deleteOperation = new AttributeValueV1().withBOOL(false)
+  private val putOperation = AttributeValue.fromBool(true)
+  private val deleteOperation = AttributeValue.fromBool(false)
 
-  def scanAll(client: DynamoDbClient, tableName: String): List[Map[String, AttributeValue]] =
+  def scanAll(
+    client: DynamoDbClient,
+    tableName: String
+  ): List[Map[String, AttributeValue]] =
     client
       .scanPaginator(ScanRequest.builder().tableName(tableName).build())
       .items()
@@ -82,47 +83,47 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
       val streamEvents = Seq(
         Some(
           Map(
-            "id"                -> new AttributeValueV1().withS("toDelete"),
+            "id"                -> AttributeValue.fromS("toDelete"),
             operationTypeColumn -> deleteOperation
           ).asJava
         ),
         Some(
           Map(
-            "id"                -> new AttributeValueV1().withS("toUpdate"),
-            "value"             -> new AttributeValueV1().withS("value2-updated"),
+            "id"                -> AttributeValue.fromS("toUpdate"),
+            "value"             -> AttributeValue.fromS("value2-updated"),
             operationTypeColumn -> putOperation
           ).asJava
         ),
         Some(
           Map(
-            "id"                -> new AttributeValueV1().withS("toInsert"),
-            "value"             -> new AttributeValueV1().withS("value3"),
+            "id"                -> AttributeValue.fromS("toInsert"),
+            "value"             -> AttributeValue.fromS("value3"),
             operationTypeColumn -> putOperation
           ).asJava
         ),
         Some(
           Map(
-            "id"                -> new AttributeValueV1().withS("keyPutDelete"),
-            "value"             -> new AttributeValueV1().withS("value4"),
+            "id"                -> AttributeValue.fromS("keyPutDelete"),
+            "value"             -> AttributeValue.fromS("value4"),
             operationTypeColumn -> putOperation
           ).asJava
         ),
         Some(
           Map(
-            "id"                -> new AttributeValueV1().withS("keyPutDelete"),
+            "id"                -> AttributeValue.fromS("keyPutDelete"),
             operationTypeColumn -> deleteOperation
           ).asJava
         ),
         Some(
           Map(
-            "id"                -> new AttributeValueV1().withS("keyDeletePut"),
+            "id"                -> AttributeValue.fromS("keyDeletePut"),
             operationTypeColumn -> deleteOperation
           ).asJava
         ),
         Some(
           Map(
-            "id"                -> new AttributeValueV1().withS("keyDeletePut"),
-            "value"             -> new AttributeValueV1().withS("value5"),
+            "id"                -> AttributeValue.fromS("keyDeletePut"),
+            "value"             -> AttributeValue.fromS("value5"),
             operationTypeColumn -> putOperation
           ).asJava
         )

@@ -204,8 +204,6 @@ object DynamoDBS3Export {
 
     lazy val attributeValueDecoder: Decoder[AttributeValue] = Decoder.decodeJsonObject.map {
       jsonObject =>
-        import com.scylladb.migrator.AttributeValueUtils._
-
         (jsonObject.toMap.head match {
           case ("S", value)    => value.as[String].map(AttributeValue.fromS)
           case ("N", value)    => value.as[String].map(AttributeValue.fromN)

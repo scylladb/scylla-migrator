@@ -1,42 +1,30 @@
 package com.scylladb.migrator.writers
 
-import com.amazonaws.services.dynamodbv2.streamsadapter.model.RecordAdapter
-import com.amazonaws.services.dynamodbv2.model.{ AttributeValue => AttributeValueV1 }
-import com.scylladb.migrator.AttributeValueUtils
-import com.scylladb.migrator.config.{ AWSCredentials, SourceSettings, TargetSettings }
+import com.scylladb.migrator.{ DynamoStreamPoller, DynamoUtils }
+import com.scylladb.migrator.config.{ SourceSettings, TargetSettings }
 import org.apache.log4j.LogManager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.streaming.StreamingContext
-import org.apache.spark.streaming.kinesis.{
-  KinesisDynamoDBInputDStream,
-  KinesisInitialPositions,
-  SparkAWSCredentials
-}
-import com.scylladb.migrator.DynamoUtils
 import software.amazon.awssdk.services.dynamodb.model.{
-  AttributeValue => AttributeValueV2,
+  AttributeValue,
   DeleteItemRequest,
   PutItemRequest,
+  ShardIteratorType,
   TableDescription
 }
 
 import java.util
-import java.util.stream.Collectors
 import scala.jdk.CollectionConverters._
 
 object DynamoStreamReplication {
   val log = LogManager.getLogger("com.scylladb.migrator.writers.DynamoStreamReplication")
 
-  type DynamoItem = util.Map[String, AttributeValueV1]
+  type DynamoItem = util.Map[String, AttributeValue]
 
-  // We enrich the table items with a column `operationTypeColumn` describing the type of change
-  // applied to the item.
-  // We have to deal with multiple representation of the data because `spark-kinesis-dynamodb`
-  // uses the AWS SDK V1, whereas `emr-dynamodb-hadoop` uses the AWS SDK V2
   private val operationTypeColumn = "_dynamo_op_type"
-  private val putOperation = new AttributeValueV1().withBOOL(true)
-  private val deleteOperation = new AttributeValueV1().withBOOL(false)
+  private val putOperation = AttributeValue.fromBool(true)
+  private val deleteOperation = AttributeValue.fromBool(false)
 
   private[writers] def run(
     msgs: RDD[Option[DynamoItem]],
@@ -64,7 +52,7 @@ object DynamoStreamReplication {
             val isPut = item.get(operationTypeColumn) == putOperation
 
             val itemWithoutOp = item.asScala.collect {
-              case (k, v) if k != operationTypeColumn => k -> AttributeValueUtils.fromV1(v)
+              case (k, v) if k != operationTypeColumn => k -> v
             }.asJava
 
             if (isPut) {
@@ -119,46 +107,113 @@ object DynamoStreamReplication {
     target: TargetSettings.DynamoDB,
     targetTableDesc: TableDescription,
     renamesMap: Map[String, String]
-  ): Unit =
-    new KinesisDynamoDBInputDStream(
-      streamingContext,
-      streamName        = src.table,
-      regionName        = src.region.orNull,
-      initialPosition   = new KinesisInitialPositions.TrimHorizon,
-      checkpointAppName = s"migrator_${src.table}_${System.currentTimeMillis()}",
-      messageHandler = {
-        case recAdapter: RecordAdapter =>
-          val rec = recAdapter.getInternalObject
-          val newMap: DynamoItem = new util.HashMap[String, AttributeValueV1]()
+  ): Unit = {
+    val sourceClient =
+      DynamoUtils.buildDynamoClient(
+        src.endpoint,
+        src.finalCredentials.map(_.toProvider),
+        src.region,
+        Seq.empty
+      )
+    val streamsClient =
+      DynamoUtils.buildDynamoStreamsClient(
+        src.endpoint,
+        src.finalCredentials.map(_.toProvider),
+        src.region
+      )
 
-          if (rec.getDynamodb.getNewImage ne null) {
-            newMap.putAll(rec.getDynamodb.getNewImage)
+    val streamArn = DynamoStreamPoller.getStreamArn(sourceClient, src.table)
+    log.info(s"Stream ARN: $streamArn")
+
+    // Track shard iterators across batches
+    var shardIterators = Map.empty[String, String]
+    var initialized = false
+
+    streamingContext.queueStream(
+      {
+        val queue =
+          new scala.collection.mutable.Queue[RDD[Option[DynamoItem]]]()
+
+        streamingContext.sparkContext.addSparkListener(
+          new org.apache.spark.scheduler.SparkListener {}
+        )
+
+        queue
+      },
+      oneAtATime = true
+    )
+
+    // Use a receiver-less approach: poll in the driver on each batch interval
+    streamingContext.addStreamingListener(
+      new org.apache.spark.streaming.scheduler.StreamingListener {
+        override def onBatchCompleted(
+          event: org.apache.spark.streaming.scheduler.StreamingListenerBatchCompleted
+        ): Unit =
+          pollAndProcess()
+      }
+    )
+
+    def pollAndProcess(): Unit =
+      try {
+        val shards = DynamoStreamPoller.listShards(streamsClient, streamArn)
+        val shardIds = shards.map(_.shardId()).toSet
+
+        // Initialize iterators for new shards
+        for {
+          shard <- shards
+          if !shardIterators.contains(shard.shardId())
+        } {
+          val iteratorType =
+            if (initialized) ShardIteratorType.LATEST else ShardIteratorType.TRIM_HORIZON
+          val iterator = DynamoStreamPoller.getShardIterator(
+            streamsClient,
+            streamArn,
+            shard.shardId(),
+            iteratorType
+          )
+          shardIterators = shardIterators + (shard.shardId() -> iterator)
+        }
+        initialized = true
+
+        // Remove closed shards that no longer appear
+        shardIterators = shardIterators.filter { case (id, _) => shardIds.contains(id) }
+
+        // Poll all shards
+        val allItems = scala.collection.mutable.Buffer.empty[Option[DynamoItem]]
+        val updatedIterators =
+          scala.collection.mutable.Map.empty[String, String]
+
+        for ((shardId, iterator) <- shardIterators) {
+          val (records, nextIterator) =
+            DynamoStreamPoller.getRecords(streamsClient, iterator)
+
+          for (record <- records) {
+            val maybeItem = DynamoStreamPoller.recordToItem(
+              record,
+              operationTypeColumn,
+              putOperation,
+              deleteOperation
+            )
+            allItems += maybeItem
           }
 
-          newMap.putAll(rec.getDynamodb.getKeys)
-
-          val operationType =
-            rec.getEventName match {
-              case "INSERT" | "MODIFY" => putOperation
-              case "REMOVE"            => deleteOperation
-            }
-          newMap.put(operationTypeColumn, operationType)
-          Some(newMap)
-
-        case _ => None
-      },
-      kinesisCreds = src.credentials
-        .map { case AWSCredentials(accessKey, secretKey, maybeAssumeRole) =>
-          val builder =
-            SparkAWSCredentials.builder
-              .basicCredentials(accessKey, secretKey)
-          for (assumeRole <- maybeAssumeRole)
-            builder.stsCredentials(assumeRole.arn, assumeRole.getSessionName)
-          builder.build()
+          nextIterator match {
+            case Some(next) => updatedIterators(shardId) = next
+            case None       => // shard is closed, don't track it anymore
+          }
         }
-        .getOrElse(SparkAWSCredentials.builder.build())
-    ).foreachRDD { msgs =>
-      run(msgs, target, renamesMap, targetTableDesc)(spark)
-    }
+        shardIterators = updatedIterators.toMap
 
+        if (allItems.nonEmpty) {
+          val rdd = spark.sparkContext.parallelize(allItems.toSeq)
+          run(rdd, target, renamesMap, targetTableDesc)(spark)
+        }
+      } catch {
+        case e: Exception =>
+          log.error("Error polling DynamoDB stream", e)
+      }
+
+    // Do an initial poll
+    pollAndProcess()
+  }
 }
