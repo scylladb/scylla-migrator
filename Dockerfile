@@ -1,4 +1,4 @@
-FROM openjdk:11-jdk-slim AS build
+FROM openjdk:17-jdk-slim AS build
 
 # Install sbt
 RUN apt-get update && apt-get install -y curl gnupg && \
@@ -14,7 +14,7 @@ WORKDIR /app
 COPY . /app
 
 # Set JAVA_HOME
-ENV JAVA_HOME=/usr/local/openjdk-11
+ENV JAVA_HOME=/usr/local/openjdk-17
 
 # Run build.sh to produce the jar
 RUN chmod +x build.sh && ./build.sh
