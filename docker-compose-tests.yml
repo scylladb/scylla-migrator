@@ -58,6 +58,7 @@ services:
       - "/var/run/docker.sock:/var/run/docker.sock"
 
   spark-master:
+    image: ${SPARK_IMAGE:-spark-migrator}
     build: dockerfiles/spark
     command: master
     environment:
@@ -76,6 +77,7 @@ services:
       - ./tests/docker/parquet:/app/parquet
 
   spark-worker:
+    image: ${SPARK_IMAGE:-spark-migrator}
     build: dockerfiles/spark
     command: worker
     environment:

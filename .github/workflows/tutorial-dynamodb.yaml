@@ -34,10 +34,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Cache Docker images
-        uses: ScribeMD/docker-cache@0.5.0
-        with:
-          key: docker-${{ runner.os }}-${{ hashFiles('docs/source/tutorials/dynamodb-to-scylladb-alternator/docker-compose.yaml') }}
+      - name: Pull or build Spark image
+        run: bash .github/spark-cache.sh
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Download assembly JAR
         uses: actions/download-artifact@v4
         with:
