@@ -149,22 +149,30 @@ object Parquet {
     spark: SparkSession,
     source: SourceSettings.Parquet
   ): Unit =
-    source.finalCredentials.foreach { credentials =>
+    // NOTE: When using AssumeRole, temporary STS credentials are resolved once here and
+    // written as static strings into the Hadoop configuration. These credentials expire
+    // (default: 1 hour). Long-running Parquet reads may fail with ExpiredTokenException.
+    // Workaround: increase the STS session duration (up to 12 hours) via the
+    // `durationSeconds` parameter in the AssumeRole configuration.
+    source.finalCredentials.foreach { provider =>
       log.info("Loaded AWS credentials from config file")
       source.region.foreach { region =>
         spark.sparkContext.hadoopConfiguration.set("fs.s3a.endpoint.region", region)
       }
-      spark.sparkContext.hadoopConfiguration.set("fs.s3a.access.key", credentials.accessKey)
-      spark.sparkContext.hadoopConfiguration.set("fs.s3a.secret.key", credentials.secretKey)
-      credentials.maybeSessionToken.foreach { sessionToken =>
-        spark.sparkContext.hadoopConfiguration.set(
-          "fs.s3a.aws.credentials.provider",
-          "org.apache.hadoop.fs.s3a.TemporaryAWSCredentialsProvider"
-        )
-        spark.sparkContext.hadoopConfiguration.set(
-          "fs.s3a.session.token",
-          sessionToken
-        )
+      val resolved = provider.resolveCredentials()
+      spark.sparkContext.hadoopConfiguration.set("fs.s3a.access.key", resolved.accessKeyId())
+      spark.sparkContext.hadoopConfiguration.set("fs.s3a.secret.key", resolved.secretAccessKey())
+      resolved match {
+        case session: software.amazon.awssdk.auth.credentials.AwsSessionCredentials =>
+          spark.sparkContext.hadoopConfiguration.set(
+            "fs.s3a.aws.credentials.provider",
+            "org.apache.hadoop.fs.s3a.TemporaryAWSCredentialsProvider"
+          )
+          spark.sparkContext.hadoopConfiguration.set(
+            "fs.s3a.session.token",
+            session.sessionToken()
+          )
+        case _ => ()
       }
     }
 }

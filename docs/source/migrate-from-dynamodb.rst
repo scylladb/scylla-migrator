@@ -38,7 +38,7 @@ To read from the Alternator, you need to provide an ``endpoint`` instead of a ``
     type: dynamodb
     table: <table>
     endpoint:
-      host: http://<host>
+      host: <host>
       port: <port>
 
 Where ``<host>`` and ``<port>`` should be replaced with the host name and TCP port of your Alternator instance.

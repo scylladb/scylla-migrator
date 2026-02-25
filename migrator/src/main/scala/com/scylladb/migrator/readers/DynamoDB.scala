@@ -1,6 +1,6 @@
 package com.scylladb.migrator.readers
 
-import com.scylladb.migrator.{ AWSCredentials, DynamoUtils }
+import com.scylladb.migrator.DynamoUtils
 import com.scylladb.migrator.DynamoUtils.{ setDynamoDBJobConf, setOptionalConf }
 import com.scylladb.migrator.config.{ DynamoDBEndpoint, SourceSettings }
 import org.apache.hadoop.dynamodb.read.DynamoDBInputFormat
@@ -46,7 +46,7 @@ object DynamoDB {
   def readRDD(
     spark: SparkSession,
     endpoint: Option[DynamoDBEndpoint],
-    credentials: Option[AWSCredentials],
+    credentials: Option[software.amazon.awssdk.auth.credentials.AwsCredentialsProvider],
     region: Option[String],
     table: String,
     scanSegments: Option[Int],
@@ -60,7 +60,7 @@ object DynamoDB {
     val dynamoDbClient =
       DynamoUtils.buildDynamoClient(
         endpoint,
-        credentials.map(_.toProvider),
+        credentials,
         region,
         if (removeConsumedCapacity)
           Seq(new DynamoUtils.RemoveConsumedCapacityInterceptor)
@@ -109,7 +109,7 @@ object DynamoDB {
   private[migrator] def makeJobConf(
     spark: SparkSession,
     endpoint: Option[DynamoDBEndpoint],
-    credentials: Option[AWSCredentials],
+    credentials: Option[software.amazon.awssdk.auth.credentials.AwsCredentialsProvider],
     region: Option[String],
     table: String,
     scanSegments: Option[Int],

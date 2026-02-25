@@ -37,7 +37,8 @@ object TargetSettings {
     removeConsumedCapacity: Option[Boolean] = Some(true),
     billingMode: Option[BillingMode] = None
   ) extends TargetSettings {
-    lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
+    lazy val finalCredentials
+      : Option[software.amazon.awssdk.auth.credentials.AwsCredentialsProvider] =
       AwsUtils.computeFinalCredentials(credentials, endpoint, region)
   }
 

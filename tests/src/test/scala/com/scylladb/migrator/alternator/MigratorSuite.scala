@@ -45,7 +45,7 @@ trait MigratorSuite extends munit.FunSuite {
     def apply(): DynamoDbClient = client
     override def beforeAll(): Unit =
       client = DynamoUtils.buildDynamoClient(
-        endpoint = Some(DynamoDBEndpoint("http://localhost", 8000)),
+        endpoint = Some(DynamoDBEndpoint("localhost", 8000)),
         creds =
           Some(StaticCredentialsProvider.create(AwsBasicCredentials.create("dummy", "dummy"))),
         region       = Some("dummy"),

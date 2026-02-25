@@ -179,3 +179,11 @@ claude.log
 claude_history.json
 claude_config.json
 CLAUDE.md
+
+# Docker test runtime data (written by Scylla containers)
+tests/docker/scylla/*
+!tests/docker/scylla/.gitkeep
+tests/docker/scylla-source/*
+!tests/docker/scylla-source/.gitkeep
+tests/docker/parquet/*
+!tests/docker/parquet/.gitkeep

@@ -1,6 +1,6 @@
 package com.scylladb.migrator
 
-import com.scylladb.migrator.config.DynamoDBEndpoint
+import com.scylladb.migrator.config.{ AWSAssumeRole, AWSCredentials, DynamoDBEndpoint }
 import software.amazon.awssdk.auth.credentials.{
   AwsBasicCredentials,
   AwsSessionCredentials,
@@ -16,7 +16,7 @@ class AwsUtilsTest extends munit.FunSuite {
     val builder = DynamoDbClient.builder()
     AwsUtils.configureClientBuilder(
       builder,
-      Some(DynamoDBEndpoint("http://localhost", 8000)),
+      Some(DynamoDBEndpoint("localhost", 8000)),
       None,
       None
     )
@@ -69,24 +69,39 @@ class AwsUtilsTest extends munit.FunSuite {
     assert(result eq builder)
   }
 
-  // --- Section 2: AWSCredentials.toProvider ---
+  // --- Section 2: computeFinalCredentials ---
 
-  test("Basic credentials (no session token) produce AwsBasicCredentials") {
-    val creds = AWSCredentials("myAccess", "mySecret", None)
-    val provider = creds.toProvider
-    val resolved = provider.resolveCredentials()
-    assert(resolved.isInstanceOf[AwsBasicCredentials])
-    assertEquals(resolved.accessKeyId(), "myAccess")
-    assertEquals(resolved.secretAccessKey(), "mySecret")
+  test("computeFinalCredentials returns None when no credentials configured") {
+    val result = AwsUtils.computeFinalCredentials(None, None, None)
+    assert(result.isEmpty)
   }
 
-  test("Session credentials (with session token) produce AwsSessionCredentials") {
-    val creds = AWSCredentials("myAccess", "mySecret", Some("myToken"))
-    val provider = creds.toProvider
-    val resolved = provider.resolveCredentials()
-    assert(resolved.isInstanceOf[AwsSessionCredentials])
-    assertEquals(resolved.accessKeyId(), "myAccess")
-    assertEquals(resolved.secretAccessKey(), "mySecret")
-    assertEquals(resolved.asInstanceOf[AwsSessionCredentials].sessionToken(), "myToken")
+  test("computeFinalCredentials returns StaticCredentialsProvider for basic creds") {
+    val creds = AWSCredentials("myAccessKey", "mySecretKey", None)
+    val result = AwsUtils.computeFinalCredentials(Some(creds), None, None)
+    assert(result.isDefined)
+    assert(result.get.isInstanceOf[StaticCredentialsProvider])
+    val resolved = result.get.resolveCredentials()
+    assertEquals(resolved.accessKeyId(), "myAccessKey")
+    assertEquals(resolved.secretAccessKey(), "mySecretKey")
   }
+
+  test("computeFinalCredentials returns CloseableStsCredentialsProvider for AssumeRole") {
+    val role = AWSAssumeRole("arn:aws:iam::123456789012:role/TestRole", Some("test-session"))
+    val creds = AWSCredentials("myAccessKey", "mySecretKey", Some(role))
+    // Use a local endpoint to avoid real AWS calls during STS client construction
+    val result = AwsUtils.computeFinalCredentials(
+      Some(creds),
+      Some(DynamoDBEndpoint("localhost", 8000)),
+      Some("us-east-1")
+    )
+    assert(result.isDefined)
+    assert(
+      result.get.isInstanceOf[CloseableStsCredentialsProvider],
+      s"Expected CloseableStsCredentialsProvider but got ${result.get.getClass.getName}"
+    )
+    // Clean up the STS client
+    result.get.asInstanceOf[AutoCloseable].close()
+  }
+
 }

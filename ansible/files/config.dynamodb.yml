@@ -4,7 +4,7 @@ source:
   # if using DynamoDB local - specify endpoint with http:// prefix
   # Otherwise, if using aws configure, leave commented out and it will use that
   #endpoint:
-  #  host: http://dynamo-local-db-source
+  #  host: dynamo-local-db-source
   #  port: 8000
   #credentials:
   #  accessKey: empty
@@ -36,7 +36,7 @@ target:
   # The easiest and least performant option is just point to a single nodes IP.
   # YOUR-SCYLLA-NODE0-IP scylla
   endpoint:
-    host: http://YOUR_ALTERNATOR_INSTANCE
+    host: YOUR_ALTERNATOR_INSTANCE
     port: 8000
   credentials:
     accessKey: empty

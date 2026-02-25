@@ -15,7 +15,6 @@ object Migrator {
       .appName("scylla-migrator")
       .config("spark.task.maxFailures", "1024")
       .config("spark.stage.maxConsecutiveAttempts", "60")
-      .config("spark.streaming.stopGracefullyOnShutdown", "true")
       .getOrCreate()
 
     Logger.getRootLogger.setLevel(Level.WARN)

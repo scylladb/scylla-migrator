@@ -4,8 +4,6 @@ import sbt.librarymanagement.InclExclRule
 val awsSdkVersion = "2.23.19"
 val sparkVersion = "3.5.8"
 val hadoopVersion = "3.3.4"
-val dynamodbStreamsKinesisAdapterVersion =
-  "1.5.4" // Note This version still depends on AWS SDK 1.x, but there is no more recent version that supports AWS SDK v2.
 
 inThisBuild(
   List(
@@ -14,20 +12,6 @@ inThisBuild(
     scalacOptions ++= Seq("-release:8", "-deprecation", "-unchecked", "-feature")
   )
 )
-
-// Augmentation of spark-streaming-kinesis-asl to also work with DynamoDB Streams
-lazy val `spark-kinesis-dynamodb` = project
-  .in(file("spark-kinesis-dynamodb"))
-  .settings(
-    libraryDependencies ++= Seq(
-      ("org.apache.spark" %% "spark-streaming-kinesis-asl" % sparkVersion)
-        .excludeAll(
-          InclExclRule("org.apache.spark", s"spark-streaming_${scalaBinaryVersion.value}")
-        ), // For some reason, the Spark dependency is not marked as provided in spark-streaming-kinesis-asl. We exclude it and then add it as provided.
-      "org.apache.spark" %% "spark-streaming" % sparkVersion % Provided,
-      "com.amazonaws" % "dynamodb-streams-kinesis-adapter" % dynamodbStreamsKinesisAdapterVersion
-    )
-  )
 
 lazy val migrator = (project in file("migrator"))
   .enablePlugins(BuildInfoPlugin)
@@ -43,8 +27,7 @@ lazy val migrator = (project in file("migrator"))
     Test / fork     := false,
     scalafmtOnCompile := true,
     libraryDependencies ++= Seq(
-      "org.apache.spark" %% "spark-streaming" % sparkVersion % "provided",
-      "org.apache.spark" %% "spark-sql"       % sparkVersion % "provided",
+      "org.apache.spark" %% "spark-sql" % sparkVersion % "provided",
       ("org.apache.hadoop" % "hadoop-aws" % hadoopVersion) // Note: this package still depends on the AWS SDK v1
         // Exclude the AWS bundle because it creates many conflicts when generating the assembly
         .excludeAll(
@@ -54,6 +37,7 @@ lazy val migrator = (project in file("migrator"))
       "software.amazon.awssdk" % "dynamodb"                 % awsSdkVersion,
       "software.amazon.awssdk" % "s3"                       % awsSdkVersion,
       "software.amazon.awssdk" % "sts"                      % awsSdkVersion,
+      "software.amazon.awssdk" % "cloudwatch"               % awsSdkVersion,
       "com.scylladb"          %% "spark-scylladb-connector" % "4.0.0",
       "com.github.jnr" % "jnr-posix" % "3.1.19", // Needed by the Spark ScyllaDB connector
       "com.scylladb.alternator" % "emr-dynamodb-hadoop"  % "5.8.0",
@@ -71,9 +55,9 @@ lazy val migrator = (project in file("migrator"))
       case "mime.types"                                         => MergeStrategy.first
       case PathList("META-INF", "io.netty.versions.properties") => MergeStrategy.concat
       case PathList("META-INF", "versions", _, "module-info.class") =>
-        MergeStrategy.discard // OK as long as we don’t rely on Java 9+ features such as SPI
+        MergeStrategy.discard // OK as long as we don't rely on Java 9+ features such as SPI
       case "module-info.class" =>
-        MergeStrategy.discard // OK as long as we don’t rely on Java 9+ features such as SPI
+        MergeStrategy.discard // OK as long as we don't rely on Java 9+ features such as SPI
       case x =>
         val oldStrategy = (assembly / assemblyMergeStrategy).value
         oldStrategy(x)
@@ -86,7 +70,6 @@ lazy val migrator = (project in file("migrator"))
       .runTask(Compile / fullClasspath, Compile / run / mainClass, Compile / run / runner)
       .evaluated
   )
-  .dependsOn(`spark-kinesis-dynamodb`)
 
 lazy val tests = project
   .in(file("tests"))
@@ -94,7 +77,6 @@ lazy val tests = project
     libraryDependencies ++= Seq(
       "software.amazon.awssdk"    % "dynamodb"                  % awsSdkVersion,
       "org.apache.spark"         %% "spark-sql"                 % sparkVersion,
-      "org.apache.spark"         %% "spark-streaming"           % sparkVersion,
       "org.apache.cassandra"      % "java-driver-query-builder" % "4.18.0",
       "com.github.mjakubowski84" %% "parquet4s-core"            % "1.9.4",
       "org.apache.hadoop"         % "hadoop-client"             % hadoopVersion,
@@ -118,4 +100,4 @@ lazy val tests = project
 
 lazy val root = project
   .in(file("."))
-  .aggregate(migrator, `spark-kinesis-dynamodb`, tests)
+  .aggregate(migrator, tests)

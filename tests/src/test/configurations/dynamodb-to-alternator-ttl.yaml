@@ -3,7 +3,7 @@ source:
   table: TtlTable
   region: dummy
   endpoint:
-    host: http://dynamodb
+    host: dynamodb
     port: 8000
   credentials:
     accessKey: dummy
@@ -14,7 +14,7 @@ target:
   table: TtlTable
   region: dummy
   endpoint:
-    host: http://scylla
+    host: scylla
     port: 8000
   credentials:
     accessKey: dummy

@@ -48,7 +48,7 @@ import scala.util.{ Failure, Success, Try }
 import scala.jdk.OptionConverters._
 
 object DynamoUtils {
-  val log = LogManager.getLogger("com.scylladb.migrator.DynamoUtils")
+  private val log = LogManager.getLogger("com.scylladb.migrator.DynamoUtils")
   private val RemoveConsumedCapacityConfig = "scylla.migrator.remove_consumed_capacity"
 
   class RemoveConsumedCapacityInterceptor extends ExecutionInterceptor {
@@ -78,121 +78,124 @@ object DynamoUtils {
     val targetClient =
       buildDynamoClient(
         target.endpoint,
-        target.finalCredentials.map(_.toProvider),
+        target.finalCredentials,
         target.region,
         if (target.removeConsumedCapacity.getOrElse(false))
           Seq(new RemoveConsumedCapacityInterceptor)
         else Nil
       )
 
-    log.info("Checking for table existence at destination")
-    val describeTargetTableRequest =
-      DescribeTableRequest.builder().tableName(target.table).build()
-    val targetDescription = Try(targetClient.describeTable(describeTargetTableRequest))
-    targetDescription match {
-      case Success(desc) =>
-        log.info(s"Table ${target.table} exists at destination")
-        desc.table()
+    try {
+      log.info("Checking for table existence at destination")
+      val describeTargetTableRequest =
+        DescribeTableRequest.builder().tableName(target.table).build()
+      val targetDescription = Try(targetClient.describeTable(describeTargetTableRequest))
+      targetDescription match {
+        case Success(desc) =>
+          log.info(s"Table ${target.table} exists at destination")
+          desc.table()
 
-      case Failure(e: ResourceNotFoundException) =>
-        val requestBuilder = CreateTableRequest
-          .builder()
-          .tableName(target.table)
-          .keySchema(sourceDescription.keySchema)
-          .attributeDefinitions(sourceDescription.attributeDefinitions)
+        case Failure(e: ResourceNotFoundException) =>
+          val requestBuilder = CreateTableRequest
+            .builder()
+            .tableName(target.table)
+            .keySchema(sourceDescription.keySchema)
+            .attributeDefinitions(sourceDescription.attributeDefinitions)
 
-        target.billingMode match {
-          case Some(BillingMode.PROVISIONED)
-              if (sourceDescription.provisionedThroughput.readCapacityUnits == 0L ||
-                sourceDescription.provisionedThroughput.writeCapacityUnits == 0) =>
-            throw new RuntimeException(
-              "readCapacityUnits and writeCapacityUnits must be set for PROVISIONED billing mode"
-            )
+          target.billingMode match {
+            case Some(BillingMode.PROVISIONED)
+                if (sourceDescription.provisionedThroughput.readCapacityUnits == 0L ||
+                  sourceDescription.provisionedThroughput.writeCapacityUnits == 0) =>
+              throw new RuntimeException(
+                "readCapacityUnits and writeCapacityUnits must be set for PROVISIONED billing mode"
+              )
 
-          case Some(BillingMode.PROVISIONED) | None
-              if (sourceDescription.provisionedThroughput.readCapacityUnits != 0L &&
-                sourceDescription.provisionedThroughput.writeCapacityUnits != 0) =>
-            log.info(
-              "BillingMode PROVISIONED will be used since writeCapacityUnits and readCapacityUnits are set"
-            )
-            requestBuilder.billingMode(BillingMode.PROVISIONED)
-            requestBuilder.provisionedThroughput(
-              ProvisionedThroughput
-                .builder()
-                .readCapacityUnits(sourceDescription.provisionedThroughput.readCapacityUnits)
-                .writeCapacityUnits(sourceDescription.provisionedThroughput.writeCapacityUnits)
-                .build()
-            )
-
-          // billing mode = PAY_PER_REQUEST or empty ( for backward compatibility )
-          case _ => requestBuilder.billingMode(BillingMode.PAY_PER_REQUEST)
-        }
-        if (sourceDescription.hasLocalSecondaryIndexes) {
-          requestBuilder.localSecondaryIndexes(
-            sourceDescription.localSecondaryIndexes.stream
-              .map(index =>
-                LocalSecondaryIndex
+            case Some(BillingMode.PROVISIONED) | None
+                if (sourceDescription.provisionedThroughput.readCapacityUnits != 0L &&
+                  sourceDescription.provisionedThroughput.writeCapacityUnits != 0) =>
+              log.info(
+                "BillingMode PROVISIONED will be used since writeCapacityUnits and readCapacityUnits are set"
+              )
+              requestBuilder.billingMode(BillingMode.PROVISIONED)
+              requestBuilder.provisionedThroughput(
+                ProvisionedThroughput
                   .builder()
-                  .indexName(index.indexName())
-                  .keySchema(index.keySchema())
-                  .projection(index.projection())
+                  .readCapacityUnits(sourceDescription.provisionedThroughput.readCapacityUnits)
+                  .writeCapacityUnits(sourceDescription.provisionedThroughput.writeCapacityUnits)
                   .build()
               )
-              .collect(Collectors.toList[LocalSecondaryIndex])
-          )
-        }
-        if (sourceDescription.hasGlobalSecondaryIndexes) {
-          requestBuilder.globalSecondaryIndexes(
-            sourceDescription.globalSecondaryIndexes.stream
-              .map { index =>
-                val builder =
-                  GlobalSecondaryIndex
+
+            // billing mode = PAY_PER_REQUEST or empty ( for backward compatibility )
+            case _ => requestBuilder.billingMode(BillingMode.PAY_PER_REQUEST)
+          }
+          if (sourceDescription.hasLocalSecondaryIndexes) {
+            requestBuilder.localSecondaryIndexes(
+              sourceDescription.localSecondaryIndexes.stream
+                .map(index =>
+                  LocalSecondaryIndex
                     .builder()
                     .indexName(index.indexName())
                     .keySchema(index.keySchema())
                     .projection(index.projection())
-                if (target.billingMode.forall(_ == BillingMode.PROVISIONED))
-                  builder.provisionedThroughput(
-                    ProvisionedThroughput
-                      .builder()
-                      .readCapacityUnits(index.provisionedThroughput.readCapacityUnits)
-                      .writeCapacityUnits(index.provisionedThroughput.writeCapacityUnits)
-                      .build()
-                  )
-                builder.build()
-              }
-              .collect(Collectors.toList[GlobalSecondaryIndex])
-          )
-        }
-
-        log.info(
-          s"Table ${target.table} does not exist at destination - creating it according to definition:"
-        )
-        log.info(sourceDescription.toString)
-        targetClient.createTable(requestBuilder.build())
-        log.info(s"Table ${target.table} created.")
-
-        val waiterResponse =
-          targetClient.waiter().waitUntilTableExists(describeTargetTableRequest).matched
-        waiterResponse.response.toScala match {
-          case Some(describeTableResponse) => describeTableResponse.table
-          case None =>
-            throw new RuntimeException(
-              "Unable to replicate table definition",
-              waiterResponse.exception.get
+                    .build()
+                )
+                .collect(Collectors.toList[LocalSecondaryIndex])
             )
-        }
+          }
+          if (sourceDescription.hasGlobalSecondaryIndexes) {
+            requestBuilder.globalSecondaryIndexes(
+              sourceDescription.globalSecondaryIndexes.stream
+                .map { index =>
+                  val builder =
+                    GlobalSecondaryIndex
+                      .builder()
+                      .indexName(index.indexName())
+                      .keySchema(index.keySchema())
+                      .projection(index.projection())
+                  if (target.billingMode.forall(_ == BillingMode.PROVISIONED))
+                    builder.provisionedThroughput(
+                      ProvisionedThroughput
+                        .builder()
+                        .readCapacityUnits(index.provisionedThroughput.readCapacityUnits)
+                        .writeCapacityUnits(index.provisionedThroughput.writeCapacityUnits)
+                        .build()
+                    )
+                  builder.build()
+                }
+                .collect(Collectors.toList[GlobalSecondaryIndex])
+            )
+          }
 
-      case Failure(otherwise) =>
-        throw new RuntimeException("Failed to check for table existence", otherwise)
-    }
+          log.info(
+            s"Table ${target.table} does not exist at destination - creating it according to definition:"
+          )
+          log.info(sourceDescription.toString)
+          targetClient.createTable(requestBuilder.build())
+          log.info(s"Table ${target.table} created.")
+
+          val waiterResponse =
+            targetClient.waiter().waitUntilTableExists(describeTargetTableRequest).matched
+          waiterResponse.response.toScala match {
+            case Some(describeTableResponse) => describeTableResponse.table
+            case None =>
+              throw new RuntimeException(
+                "Unable to replicate table definition",
+                waiterResponse.exception.get
+              )
+          }
+
+        case Failure(otherwise) =>
+          throw new RuntimeException("Failed to check for table existence", otherwise)
+      }
+    } finally
+      targetClient.close()
   }
 
   def enableDynamoStream(source: SourceSettings.DynamoDB): Unit = {
     val sourceClient =
       buildDynamoClient(
         source.endpoint,
-        source.finalCredentials.map(_.toProvider),
+        source.finalCredentials,
         source.region,
         if (source.removeConsumedCapacity.getOrElse(false))
           Seq(new RemoveConsumedCapacityInterceptor)
@@ -201,45 +204,112 @@ object DynamoUtils {
     val sourceStreamsClient =
       buildDynamoStreamsClient(
         source.endpoint,
-        source.finalCredentials.map(_.toProvider),
+        source.finalCredentials,
         source.region
       )
 
-    sourceClient
-      .updateTable(
-        UpdateTableRequest
-          .builder()
-          .tableName(source.table)
-          .streamSpecification(
-            StreamSpecification
+    try {
+      try
+        sourceClient
+          .updateTable(
+            UpdateTableRequest
               .builder()
-              .streamEnabled(true)
-              .streamViewType(StreamViewType.NEW_IMAGE)
+              .tableName(source.table)
+              .streamSpecification(
+                StreamSpecification
+                  .builder()
+                  .streamEnabled(true)
+                  .streamViewType(StreamViewType.NEW_IMAGE)
+                  .build()
+              )
               .build()
           )
-          .build()
-      )
-
-    var done = false
-    while (!done) {
-      val tableDesc =
-        sourceClient.describeTable(DescribeTableRequest.builder().tableName(source.table).build())
-      val latestStreamArn = tableDesc.table.latestStreamArn
-      val describeStream =
-        sourceStreamsClient.describeStream(
-          DescribeStreamRequest.builder().streamArn(latestStreamArn).build()
-        )
-
-      val streamStatus = describeStream.streamDescription.streamStatus
-      if (streamStatus == StreamStatus.ENABLED) {
-        log.info("Stream enabled successfully")
-        done = true
-      } else {
-        log.info(
-          s"Stream not yet enabled (status ${streamStatus}); waiting for 5 seconds and retrying"
-        )
-        Thread.sleep(5000)
+      catch {
+        case e: software.amazon.awssdk.services.dynamodb.model.DynamoDbException
+            if e.awsErrorDetails() != null &&
+              e.awsErrorDetails().errorCode() == "ValidationException" =>
+          log.info(
+            s"ValidationException when enabling stream on table ${source.table}, " +
+              s"assuming stream is already enabled: ${e.getMessage}"
+          )
       }
+
+      val maxAttempts = 60 // 5 minutes at 5-second intervals
+      var done = false
+      var attempt = 0
+      while (!done) {
+        if (Thread.interrupted())
+          throw new InterruptedException(
+            s"Interrupted while waiting for stream on table ${source.table} to become ENABLED"
+          )
+        attempt += 1
+        if (attempt > maxAttempts)
+          throw new RuntimeException(
+            s"Stream on table ${source.table} did not reach ENABLED status after $maxAttempts attempts"
+          )
+        try {
+          val tableDesc =
+            sourceClient.describeTable(
+              DescribeTableRequest.builder().tableName(source.table).build()
+            )
+          val latestStreamArn = tableDesc.table.latestStreamArn
+          if (latestStreamArn == null) {
+            log.info(
+              s"Stream ARN not yet available for table ${source.table}; " +
+                s"waiting for 5 seconds and retrying (attempt $attempt/$maxAttempts)"
+            )
+            Thread.sleep(5000)
+          } else {
+            val describeStream =
+              sourceStreamsClient.describeStream(
+                DescribeStreamRequest.builder().streamArn(latestStreamArn).build()
+              )
+
+            val streamStatus = describeStream.streamDescription.streamStatus
+            if (streamStatus == StreamStatus.ENABLED) {
+              val viewType = describeStream.streamDescription.streamViewType
+              if (viewType != StreamViewType.NEW_IMAGE) {
+                throw new RuntimeException(
+                  s"Stream on table ${source.table} has view type $viewType, " +
+                    s"but NEW_IMAGE is required. Please disable the existing stream " +
+                    s"and re-run, or manually update the stream view type."
+                )
+              }
+              log.info("Stream enabled successfully")
+              done = true
+            } else {
+              log.info(
+                s"Stream not yet enabled (status ${streamStatus}); waiting for 5 seconds and retrying (attempt $attempt/$maxAttempts)"
+              )
+              Thread.sleep(5000)
+            }
+          }
+        } catch {
+          case _: ResourceNotFoundException =>
+            throw new RuntimeException(
+              s"Table ${source.table} not found while waiting for stream to become ENABLED"
+            )
+          case e: software.amazon.awssdk.services.dynamodb.model.DynamoDbException
+              if e.awsErrorDetails() != null && !e.retryable() &&
+                e.awsErrorDetails().errorCode() != "ThrottlingException" &&
+                e.awsErrorDetails().errorCode() != "InternalServerError" =>
+            throw new RuntimeException(
+              s"Permanent error checking stream status on table ${source.table}: " +
+                s"${e.awsErrorDetails().errorCode()} - ${e.getMessage}",
+              e
+            )
+          case e: Exception =>
+            val backoffMs = math.min(5000L * (1L << math.min(attempt, 4)), 30000L)
+            log.warn(
+              s"Error checking stream status (attempt $attempt/$maxAttempts), " +
+                s"retrying in ${backoffMs}ms: ${e.getMessage}"
+            )
+            Thread.sleep(backoffMs)
+        }
+      }
+    } finally {
+      sourceClient.close()
+      sourceStreamsClient.close()
     }
   }
 
@@ -256,14 +326,33 @@ object DynamoUtils {
     builder.overrideConfiguration(conf.build()).build()
   }
 
+  private val defaultApiCallTimeoutSeconds = 30
+  private val defaultApiCallAttemptTimeoutSeconds = 10
+
   def buildDynamoStreamsClient(
     endpoint: Option[DynamoDBEndpoint],
     creds: Option[AwsCredentialsProvider],
-    region: Option[String]
-  ): DynamoDbStreamsClient =
-    AwsUtils
-      .configureClientBuilder(DynamoDbStreamsClient.builder(), endpoint, region, creds)
+    region: Option[String],
+    apiCallTimeoutSeconds: Option[Int] = None,
+    apiCallAttemptTimeoutSeconds: Option[Int] = None
+  ): DynamoDbStreamsClient = {
+    val builder =
+      AwsUtils.configureClientBuilder(DynamoDbStreamsClient.builder(), endpoint, region, creds)
+    val conf = ClientOverrideConfiguration
+      .builder()
+      .apiCallTimeout(
+        java.time.Duration.ofSeconds(
+          apiCallTimeoutSeconds.getOrElse(defaultApiCallTimeoutSeconds).toLong
+        )
+      )
+      .apiCallAttemptTimeout(
+        java.time.Duration.ofSeconds(
+          apiCallAttemptTimeoutSeconds.getOrElse(defaultApiCallAttemptTimeoutSeconds).toLong
+        )
+      )
       .build()
+    builder.overrideConfiguration(conf).build()
+  }
 
   /** Optionally set a configuration. If `maybeValue` is empty, nothing is done. Otherwise, its
     * value is set to the `name` property on the `jobConf`.
@@ -299,7 +388,7 @@ object DynamoUtils {
     maybeEndpoint: Option[DynamoDBEndpoint],
     maybeScanSegments: Option[Int],
     maybeMaxMapTasks: Option[Int],
-    maybeAwsCredentials: Option[AWSCredentials],
+    maybeAwsCredentialsProvider: Option[AwsCredentialsProvider],
     removeConsumedCapacity: Boolean = false
   ): Unit = {
     for (region <- maybeRegion) {
@@ -312,11 +401,21 @@ object DynamoUtils {
     }
     setOptionalConf(jobConf, DynamoDBConstants.SCAN_SEGMENTS, maybeScanSegments.map(_.toString))
     setOptionalConf(jobConf, DynamoDBConstants.MAX_MAP_TASKS, maybeMaxMapTasks.map(_.toString))
-    for (credentials <- maybeAwsCredentials) {
-      jobConf.set(DynamoDBConstants.DYNAMODB_ACCESS_KEY_CONF, credentials.accessKey)
-      jobConf.set(DynamoDBConstants.DYNAMODB_SECRET_KEY_CONF, credentials.secretKey)
-      for (sessionToken <- credentials.maybeSessionToken)
-        jobConf.set(DynamoDBConstants.DYNAMODB_SESSION_TOKEN_CONF, sessionToken)
+    // NOTE: When using AssumeRole, temporary STS credentials are resolved once here and
+    // written as static strings into the Hadoop JobConf. These credentials expire (default:
+    // 1 hour). Long-running scan/write operations may fail with ExpiredTokenException.
+    // This is an inherent limitation of the Hadoop connector's credential model.
+    // Workaround: increase the STS session duration (up to 12 hours) via the
+    // `durationSeconds` parameter in the AssumeRole configuration.
+    for (provider <- maybeAwsCredentialsProvider) {
+      val resolved = provider.resolveCredentials()
+      jobConf.set(DynamoDBConstants.DYNAMODB_ACCESS_KEY_CONF, resolved.accessKeyId())
+      jobConf.set(DynamoDBConstants.DYNAMODB_SECRET_KEY_CONF, resolved.secretAccessKey())
+      resolved match {
+        case session: software.amazon.awssdk.auth.credentials.AwsSessionCredentials =>
+          jobConf.set(DynamoDBConstants.DYNAMODB_SESSION_TOKEN_CONF, session.sessionToken())
+        case _ => ()
+      }
     }
 
     // The default way to compute the available resources (memory/cpu per worker) requires a
