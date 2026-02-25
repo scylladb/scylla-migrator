@@ -1,20 +1,13 @@
 package com.scylladb.migrator.writers
 
 import com.scylladb.migrator.config.{ AWSCredentials, DynamoDBEndpoint, TargetSettings }
-import org.apache.log4j.{ Level, Logger }
-import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.SparkSession
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
 import software.amazon.awssdk.services.dynamodb.model._
 
-import java.net.URI
-import java.util
 import scala.jdk.CollectionConverters._
 import com.scylladb.migrator.alternator.MigratorSuiteWithDynamoDBLocal
 
 class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLocal {
-  implicit val spark: SparkSession =
-    SparkSession.builder().appName("test").master("local[*]").getOrCreate()
 
   private val tableName = "DynamoStreamReplicationIntegrationTest"
   private val operationTypeColumn = "_dynamo_op_type"
@@ -80,7 +73,7 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
           .build()
       )
 
-      val streamEvents = Seq(
+      val streamEvents: Seq[Option[DynamoStreamReplication.DynamoItem]] = Seq(
         Some(
           Map(
             "id"                -> AttributeValue.fromS("toDelete"),
@@ -129,10 +122,6 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
         )
       )
 
-      val rdd = spark.sparkContext
-        .parallelize(streamEvents, 1)
-        .asInstanceOf[RDD[Option[DynamoStreamReplication.DynamoItem]]]
-
       val targetSettings = TargetSettings.DynamoDB(
         table                       = tableName,
         region                      = Some("eu-central-1"),
@@ -154,7 +143,7 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
         .table()
 
       DynamoStreamReplication.run(
-        rdd,
+        streamEvents,
         targetSettings,
         Map.empty[String, String],
         tableDesc

@@ -3,7 +3,6 @@ package com.scylladb.migrator.writers
 import com.scylladb.migrator.{ DynamoStreamPoller, DynamoUtils }
 import com.scylladb.migrator.config.{ SourceSettings, TargetSettings }
 import org.apache.log4j.LogManager
-import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.streaming.StreamingContext
 import software.amazon.awssdk.services.dynamodb.model.{
@@ -27,77 +26,73 @@ object DynamoStreamReplication {
   private val deleteOperation = AttributeValue.fromBool(false)
 
   private[writers] def run(
-    msgs: RDD[Option[DynamoItem]],
+    items: Iterable[Option[DynamoItem]],
     target: TargetSettings.DynamoDB,
     renamesMap: Map[String, String],
     targetTableDesc: TableDescription
-  )(implicit spark: SparkSession): Unit = {
-    val rdd = msgs.flatMap(_.toSeq)
-
-    val putCount = spark.sparkContext.longAccumulator("putCount")
-    val deleteCount = spark.sparkContext.longAccumulator("deleteCount")
-    val keyAttributeNames = targetTableDesc.keySchema.asScala.map(_.attributeName).toSet
-
-    rdd.foreachPartition { partition =>
-      if (partition.nonEmpty) {
-        val client =
-          DynamoUtils.buildDynamoClient(
-            target.endpoint,
-            target.finalCredentials.map(_.toProvider),
-            target.region,
-            Seq.empty
-          )
-        try
-          partition.foreach { item =>
-            val isPut = item.get(operationTypeColumn) == putOperation
-
-            val itemWithoutOp = item.asScala.collect {
-              case (k, v) if k != operationTypeColumn => k -> v
-            }.asJava
-
-            if (isPut) {
-              putCount.add(1)
-              val finalItem = itemWithoutOp.asScala.map { case (key, value) =>
-                renamesMap.getOrElse(key, key) -> value
-              }.asJava
-              try
-                client.putItem(
-                  PutItemRequest.builder().tableName(target.table).item(finalItem).build()
-                )
-              catch {
-                case e: Exception =>
-                  log.error(s"Failed to put item into ${target.table}", e)
-              }
-            } else {
-              deleteCount.add(1)
-              val keyToDelete = itemWithoutOp.asScala
-                .filter { case (key, _) => keyAttributeNames.contains(key) }
-                .map { case (key, value) => renamesMap.getOrElse(key, key) -> value }
-                .asJava
-              try
-                client.deleteItem(
-                  DeleteItemRequest.builder().tableName(target.table).key(keyToDelete).build()
-                )
-              catch {
-                case e: Exception =>
-                  log.error(s"Failed to delete item from ${target.table}", e)
-              }
-            }
-          }
-        finally
-          client.close()
-      }
-    }
-
-    if (putCount.value > 0 || deleteCount.value > 0) {
-      log.info(s"""
-                  |Changes to be applied:
-                  |  - ${putCount.value} items to UPSERT
-                  |  - ${deleteCount.value} items to DELETE
-                  |""".stripMargin)
-    } else {
+  ): Unit = {
+    val msgs = items.flatten
+    if (msgs.isEmpty) {
       log.info("No changes to apply")
+      return
     }
+
+    val keyAttributeNames = targetTableDesc.keySchema.asScala.map(_.attributeName).toSet
+    var putCount = 0L
+    var deleteCount = 0L
+
+    val client =
+      DynamoUtils.buildDynamoClient(
+        target.endpoint,
+        target.finalCredentials.map(_.toProvider),
+        target.region,
+        Seq.empty
+      )
+    try
+      msgs.foreach { item =>
+        val isPut = item.get(operationTypeColumn) == putOperation
+
+        val itemWithoutOp = item.asScala.collect {
+          case (k, v) if k != operationTypeColumn => k -> v
+        }.asJava
+
+        if (isPut) {
+          putCount += 1
+          val finalItem = itemWithoutOp.asScala.map { case (key, value) =>
+            renamesMap.getOrElse(key, key) -> value
+          }.asJava
+          try
+            client.putItem(
+              PutItemRequest.builder().tableName(target.table).item(finalItem).build()
+            )
+          catch {
+            case e: Exception =>
+              log.error(s"Failed to put item into ${target.table}", e)
+          }
+        } else {
+          deleteCount += 1
+          val keyToDelete = itemWithoutOp.asScala
+            .filter { case (key, _) => keyAttributeNames.contains(key) }
+            .map { case (key, value) => renamesMap.getOrElse(key, key) -> value }
+            .asJava
+          try
+            client.deleteItem(
+              DeleteItemRequest.builder().tableName(target.table).key(keyToDelete).build()
+            )
+          catch {
+            case e: Exception =>
+              log.error(s"Failed to delete item from ${target.table}", e)
+          }
+        }
+      }
+    finally
+      client.close()
+
+    log.info(s"""
+                |Changes applied:
+                |  - $putCount items UPSERTED
+                |  - $deleteCount items DELETED
+                |""".stripMargin)
   }
 
   def createDStream(
@@ -132,11 +127,7 @@ object DynamoStreamReplication {
     streamingContext.queueStream(
       {
         val queue =
-          new scala.collection.mutable.Queue[RDD[Option[DynamoItem]]]()
-
-        streamingContext.sparkContext.addSparkListener(
-          new org.apache.spark.scheduler.SparkListener {}
-        )
+          new scala.collection.mutable.Queue[org.apache.spark.rdd.RDD[Unit]]()
 
         queue
       },
@@ -204,10 +195,8 @@ object DynamoStreamReplication {
         }
         shardIterators = updatedIterators.toMap
 
-        if (allItems.nonEmpty) {
-          val rdd = spark.sparkContext.parallelize(allItems.toSeq)
-          run(rdd, target, renamesMap, targetTableDesc)(spark)
-        }
+        if (allItems.nonEmpty)
+          run(allItems, target, renamesMap, targetTableDesc)
       } catch {
         case e: Exception =>
           log.error("Error polling DynamoDB stream", e)
