@@ -2,7 +2,7 @@ services:
 
   dynamodb:
     command: "-jar DynamoDBLocal.jar -sharedDb -inMemory"
-    image: "amazon/dynamodb-local:latest"
+    image: "amazon/dynamodb-local:2.5.3"
     expose:
       - 8001
     ports:
@@ -10,7 +10,7 @@ services:
     working_dir: /home/dynamodblocal
 
   cassandra:
-    image: cassandra:latest
+    image: cassandra:4.1
     volumes:
       - ./tests/docker/cassandra:/var/lib/cassandra
     ports:
@@ -19,7 +19,7 @@ services:
       - 9043
 
   scylla-source:
-    image: scylladb/scylla:latest
+    image: scylladb/scylla:6.2
     volumes:
       - "./tests/docker/scylla-source:/var/lib/scylla"
     ports:
@@ -34,7 +34,7 @@ services:
       --alternator-write-isolation only_rmw_uses_lwt
       --tablets-mode-for-new-keyspaces disabled
   scylla:
-    image: scylladb/scylla:latest
+    image: scylladb/scylla:6.2
     volumes:
       - "./tests/docker/scylla:/var/lib/scylla"
     ports:
@@ -48,7 +48,7 @@ services:
       --tablets-mode-for-new-keyspaces disabled
 
   s3:
-    image: localstack/localstack:s3-latest
+    image: localstack/localstack:s3-4.3
     ports:
       - "127.0.0.1:4566:4566"            # LocalStack Gateway
     environment:
@@ -58,6 +58,7 @@ services:
       - "/var/run/docker.sock:/var/run/docker.sock"
 
   spark-master:
+    image: ghcr.io/scylladb/scylla-migrator/spark:latest
     build: dockerfiles/spark
     command: master
     environment:
@@ -76,6 +77,7 @@ services:
       - ./tests/docker/parquet:/app/parquet
 
   spark-worker:
+    image: ghcr.io/scylladb/scylla-migrator/spark:latest
     build: dockerfiles/spark
     command: worker
     environment:

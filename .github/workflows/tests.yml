@@ -23,16 +23,12 @@ on:
       - '.github/*.sh'
 
 jobs:
-  test:
-    name: Test
+  check-format:
+    name: Check formatting
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - name: Cache Docker images
-        uses: ScribeMD/docker-cache@0.5.0
-        with:
-          key: docker-${{ runner.os }}-${{ hashFiles('docker-compose-tests.yml') }}
-      - uses: actions/setup-java@v3
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 8
@@ -40,12 +36,38 @@ jobs:
       - uses: sbt/setup-sbt@v1
       - name: Check formatting
         run: sbt scalafmtCheckAll
-      - name: Build migrator
-        run: ./build.sh
-      - name: Set up services
+
+  build:
+    name: Build
+    uses: ./.github/workflows/build.yml
+
+  test:
+    name: Test
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache Docker images
+        uses: ScribeMD/docker-cache@0.5.0
+        with:
+          key: docker-${{ runner.os }}-${{ hashFiles('docker-compose-tests.yml') }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 8
+          cache: sbt
+      - uses: sbt/setup-sbt@v1
+      - name: Download assembly JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: migrator-jar
+          path: migrator/target/scala-2.13/
+      - name: Start services
         run: |
           sudo chmod -R 777 ./tests/docker/scylla ./tests/docker/scylla-source
           docker compose -f docker-compose-tests.yml up -d
+      - name: Wait for services
+        run: |
           .github/wait-for-port.sh 8000 # ScyllaDB Alternator
           .github/wait-for-port.sh 8001 # DynamoDB
           .github/wait-for-port.sh 4566 # S3
@@ -55,12 +77,19 @@ jobs:
           .github/wait-for-port.sh 8080 # Spark master
           .github/wait-for-port.sh 8081 # Spark worker
       - name: Run tests locally
-        run: sbt coverage "testOnly -- --exclude-categories=com.scylladb.migrator.AWS"
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            sbt coverage "testOnly -- --exclude-categories=com.scylladb.migrator.AWS"
+          else
+            sbt "testOnly -- --exclude-categories=com.scylladb.migrator.AWS"
+          fi
       - name: Stop services
         run: docker compose -f docker-compose-tests.yml down
       - name: Generate coverage report
+        if: github.event_name == 'push'
         run: sbt coverageReport
       - name: Upload coverage report
+        if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report

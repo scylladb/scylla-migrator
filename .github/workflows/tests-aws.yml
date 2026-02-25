@@ -2,7 +2,7 @@ name: Tests with AWS
 on:
   push:
     branches:
-      - master      
+      - master
     paths:
       - '**.scala'
       - '**.sbt'
@@ -16,8 +16,13 @@ permissions:
   contents: read
 
 jobs:
+  build:
+    name: Build
+    uses: ./.github/workflows/build.yml
+
   test:
     name: Test
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,15 +35,18 @@ jobs:
           distribution: temurin
           java-version: 8
           cache: sbt
-      - uses: sbt/setup-sbt@v1            
+      - uses: sbt/setup-sbt@v1
+      - name: Download assembly JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: migrator-jar
+          path: migrator/target/scala-2.13/
       - name: configure aws credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           role-session-name: GitHub_to_AWS_via_FederatedOIDC
-      - name: Build migrator
-        run: ./build.sh
       - name: Set up services
         run: |
           docker compose -f docker-compose-tests.yml up -d scylla spark-master spark-worker
