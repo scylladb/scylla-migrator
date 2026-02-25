@@ -31,7 +31,7 @@ class DynamoDBSourceSettingParserTest extends munit.FunSuite {
         |""".stripMargin
 
     val expectedSettings = SourceSettings.DynamoDBS3Export(
-      bucket = "foobar",
+      bucket      = "foobar",
       manifestKey = "my-export/AWSDynamoDB/01715094384115-f0e55399/manifest-summary.json",
       tableDescription = SourceSettings.DynamoDBS3Export.TableDescription(
         attributeDefinitions = Seq(
@@ -44,9 +44,9 @@ class DynamoDBSourceSettingParserTest extends munit.FunSuite {
           KeySchema("foo", KeyType.Range)
         )
       ),
-      endpoint = None,
-      region = None,
-      credentials = None,
+      endpoint           = None,
+      region             = None,
+      credentials        = None,
       usePathStyleAccess = None
     )
 

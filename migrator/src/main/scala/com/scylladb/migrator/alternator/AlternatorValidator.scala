@@ -45,7 +45,7 @@ object AlternatorValidator {
       sourceSettings.maxMapTasks,
       sourceSettings.readThroughput,
       sourceSettings.throughputReadPercent,
-      skipSegments = None,
+      skipSegments           = None,
       removeConsumedCapacity = targetSettings.removeConsumedCapacity.getOrElse(false)
     )
 

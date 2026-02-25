@@ -8,29 +8,29 @@ class ParquetConfigSerializationTest extends munit.FunSuite {
   test("skipParquetFiles serialization to YAML") {
     val config = MigratorConfig(
       source = SourceSettings.Parquet(
-        path = "s3a://test-bucket/data/",
+        path        = "s3a://test-bucket/data/",
         credentials = None,
-        region = None,
-        endpoint = None
+        region      = None,
+        endpoint    = None
       ),
       target = TargetSettings.Scylla(
-        host = "scylla-server",
-        port = 9042,
-        localDC = Some("datacenter1"),
-        credentials = None,
-        sslOptions = None,
-        keyspace = "test_keyspace",
-        table = "test_table",
-        connections = Some(16),
+        host                          = "scylla-server",
+        port                          = 9042,
+        localDC                       = Some("datacenter1"),
+        credentials                   = None,
+        sslOptions                    = None,
+        keyspace                      = "test_keyspace",
+        table                         = "test_table",
+        connections                   = Some(16),
         stripTrailingZerosForDecimals = false,
-        writeTTLInS = None,
-        writeWritetimestampInuS = None,
-        consistencyLevel = "LOCAL_QUORUM"
+        writeTTLInS                   = None,
+        writeWritetimestampInuS       = None,
+        consistencyLevel              = "LOCAL_QUORUM"
       ),
-      renames = None,
-      savepoints = Savepoints(300, "/app/savepoints"),
+      renames         = None,
+      savepoints      = Savepoints(300, "/app/savepoints"),
       skipTokenRanges = None,
-      skipSegments = None,
+      skipSegments    = None,
       skipParquetFiles = Some(
         Set(
           "s3a://test-bucket/data/part-00001.parquet",
@@ -107,25 +107,25 @@ validation: null
     val config1 = MigratorConfig(
       source = SourceSettings.Parquet("s3a://bucket/", None, None, None),
       target = TargetSettings.Scylla(
-        host = "localhost",
-        port = 9042,
-        localDC = Some("dc1"),
-        credentials = None,
-        sslOptions = None,
-        keyspace = "ks",
-        table = "tbl",
-        connections = Some(8),
+        host                          = "localhost",
+        port                          = 9042,
+        localDC                       = Some("dc1"),
+        credentials                   = None,
+        sslOptions                    = None,
+        keyspace                      = "ks",
+        table                         = "tbl",
+        connections                   = Some(8),
         stripTrailingZerosForDecimals = false,
-        writeTTLInS = None,
-        writeWritetimestampInuS = None,
-        consistencyLevel = "LOCAL_QUORUM"
+        writeTTLInS                   = None,
+        writeWritetimestampInuS       = None,
+        consistencyLevel              = "LOCAL_QUORUM"
       ),
-      renames = None,
-      savepoints = Savepoints(300, "/tmp"),
-      skipTokenRanges = None,
-      skipSegments = None,
+      renames          = None,
+      savepoints       = Savepoints(300, "/tmp"),
+      skipTokenRanges  = None,
+      skipSegments     = None,
       skipParquetFiles = Some(originalFiles),
-      validation = None
+      validation       = None
     )
 
     val yaml = config1.render

@@ -24,26 +24,29 @@ env:
   TUTORIAL_DIR: docs/source/tutorials/dynamodb-to-scylladb-alternator
 
 jobs:
+  build:
+    name: Build
+    uses: ./.github/workflows/build.yml
+
   test:
     name: DynamoDB migration
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Cache Docker images
-        uses: ScribeMD/docker-cache@0.5.0
+      - name: Pull or build Spark image
+        run: bash .github/spark-cache.sh
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Download assembly JAR
+        uses: actions/download-artifact@v4
         with:
-          key: docker-${{ runner.os }}-${{ hashFiles('docs/source/tutorials/dynamodb-to-scylladb-alternator/docker-compose.yaml') }}
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 8
-          cache: sbt
-      - uses: sbt/setup-sbt@v1            
-      - name: Build migrator
-        run: |
-          ./build.sh
-          mv migrator/target/scala-2.13/scylla-migrator-assembly.jar "$TUTORIAL_DIR/spark-data"
-      - name: Set up services
+          name: migrator-jar
+          path: migrator/target/scala-2.13/
+      - name: Place JAR for tutorial
+        run: cp migrator/target/scala-2.13/scylla-migrator-assembly.jar "$TUTORIAL_DIR/spark-data"
+      - name: Start services
         run: |
           cd $TUTORIAL_DIR
           docker compose up -d

@@ -124,33 +124,33 @@ savepoints:
 
   test("savepoints configuration round-trip with enableParquetFileTracking") {
     val savepoints1 = Savepoints(
-      intervalSeconds = 60,
-      path = "/tmp/savepoints",
+      intervalSeconds           = 60,
+      path                      = "/tmp/savepoints",
       enableParquetFileTracking = false
     )
 
     val config1 = MigratorConfig(
       source = SourceSettings.Parquet("s3a://bucket/", None, None, None),
       target = TargetSettings.Scylla(
-        host = "localhost",
-        port = 9042,
-        localDC = Some("dc1"),
-        credentials = None,
-        sslOptions = None,
-        keyspace = "ks",
-        table = "tbl",
-        connections = Some(8),
+        host                          = "localhost",
+        port                          = 9042,
+        localDC                       = Some("dc1"),
+        credentials                   = None,
+        sslOptions                    = None,
+        keyspace                      = "ks",
+        table                         = "tbl",
+        connections                   = Some(8),
         stripTrailingZerosForDecimals = false,
-        writeTTLInS = None,
-        writeWritetimestampInuS = None,
-        consistencyLevel = "LOCAL_QUORUM"
+        writeTTLInS                   = None,
+        writeWritetimestampInuS       = None,
+        consistencyLevel              = "LOCAL_QUORUM"
       ),
-      renames = None,
-      savepoints = savepoints1,
-      skipTokenRanges = None,
-      skipSegments = None,
+      renames          = None,
+      savepoints       = savepoints1,
+      skipTokenRanges  = None,
+      skipSegments     = None,
       skipParquetFiles = None,
-      validation = None
+      validation       = None
     )
 
     val yaml = config1.render

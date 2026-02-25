@@ -1,0 +1,22 @@
+name: Build Spark image
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'dockerfiles/spark/**'
+      - '.github/workflows/spark-image.yml'
+      - '.github/spark-cache.sh'
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    name: Build and push Spark image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and push Spark image to cache
+        run: bash .github/spark-cache.sh
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}

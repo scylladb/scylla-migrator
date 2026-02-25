@@ -246,8 +246,8 @@ object Cassandra {
     val readConf = ReadConf
       .fromSparkConf(spark.sparkContext.getConf)
       .copy(
-        splitCount = source.splitCount,
-        fetchSizeInRows = source.fetchSize,
+        splitCount       = source.splitCount,
+        fetchSizeInRows  = source.fetchSize,
         consistencyLevel = consistencyLevel
       )
 

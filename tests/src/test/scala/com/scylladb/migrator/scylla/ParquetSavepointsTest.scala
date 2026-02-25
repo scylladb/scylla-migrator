@@ -70,14 +70,14 @@ class ParquetSavepointsTest extends munit.FunSuite {
 
     try {
       val config = MigratorConfig(
-        source = SourceSettings.Parquet("dummy", None, None, None),
-        target = null,
-        renames = None,
-        savepoints = com.scylladb.migrator.config.Savepoints(300, tempDir.toString),
-        skipTokenRanges = None,
-        skipSegments = None,
+        source           = SourceSettings.Parquet("dummy", None, None, None),
+        target           = null,
+        renames          = None,
+        savepoints       = com.scylladb.migrator.config.Savepoints(300, tempDir.toString),
+        skipTokenRanges  = None,
+        skipSegments     = None,
         skipParquetFiles = Some(Set("file1.parquet")),
-        validation = None
+        validation       = None
       )
 
       val manager = ParquetSavepointsManager(config, spark.sparkContext)
@@ -157,14 +157,14 @@ class ParquetSavepointsTest extends munit.FunSuite {
       val allFiles = Parquet.listParquetFiles(spark, tempDir.toString)
 
       val config = MigratorConfig(
-        source = parquetSource,
-        target = null,
-        renames = None,
-        savepoints = com.scylladb.migrator.config.Savepoints(300, savepointsDir.toString),
-        skipTokenRanges = None,
-        skipSegments = None,
+        source           = parquetSource,
+        target           = null,
+        renames          = None,
+        savepoints       = com.scylladb.migrator.config.Savepoints(300, savepointsDir.toString),
+        skipTokenRanges  = None,
+        skipSegments     = None,
         skipParquetFiles = None,
-        validation = None
+        validation       = None
       )
 
       val manager = ParquetSavepointsManager(config, spark.sparkContext)

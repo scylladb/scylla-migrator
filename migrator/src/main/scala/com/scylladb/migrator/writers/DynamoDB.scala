@@ -89,7 +89,7 @@ object DynamoDB {
       target.region,
       target.endpoint,
       maybeScanSegments = None,
-      maybeMaxMapTasks = None,
+      maybeMaxMapTasks  = None,
       target.finalCredentials,
       target.removeConsumedCapacity.getOrElse(false)
     )

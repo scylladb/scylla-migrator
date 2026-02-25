@@ -122,9 +122,9 @@ object DynamoStreamReplication {
   ): Unit =
     new KinesisDynamoDBInputDStream(
       streamingContext,
-      streamName = src.table,
-      regionName = src.region.orNull,
-      initialPosition = new KinesisInitialPositions.TrimHorizon,
+      streamName        = src.table,
+      regionName        = src.region.orNull,
+      initialPosition   = new KinesisInitialPositions.TrimHorizon,
       checkpointAppName = s"migrator_${src.table}_${System.currentTimeMillis()}",
       messageHandler = {
         case recAdapter: RecordAdapter =>
