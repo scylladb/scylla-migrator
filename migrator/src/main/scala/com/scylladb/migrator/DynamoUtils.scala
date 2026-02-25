@@ -15,13 +15,7 @@ import org.apache.hadoop.dynamodb.write.DynamoDBOutputFormat
 import org.apache.hadoop.dynamodb.{ DynamoDBConstants, DynamoDbClientBuilderTransformer }
 import org.apache.hadoop.mapred.JobConf
 import org.apache.log4j.LogManager
-import software.amazon.awssdk.auth.credentials.{
-  AwsBasicCredentials,
-  AwsCredentialsProvider,
-  AwsSessionCredentials,
-  DefaultCredentialsProvider,
-  StaticCredentialsProvider
-}
+import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.dynamodb.{ DynamoDbClient, DynamoDbClientBuilder }
 import software.amazon.awssdk.core.SdkRequest
@@ -293,13 +287,13 @@ object DynamoUtils {
     for (settings <- alternatorSettings) {
       val routingScope = (settings.datacenter, settings.rack) match {
         case (Some(dc), Some(rack)) =>
-          RackScope.of(dc, rack, DatacenterScope.of(dc, ClusterScope.create()))
+          Some(RackScope.of(dc, rack, DatacenterScope.of(dc, ClusterScope.create())))
         case (Some(dc), None) =>
-          DatacenterScope.of(dc, ClusterScope.create())
-        case _ => null
+          Some(DatacenterScope.of(dc, ClusterScope.create()))
+        case _ => None
       }
-      if (routingScope != null)
-        altBuilder.withRoutingScope(routingScope)
+      for (scope <- routingScope)
+        altBuilder.withRoutingScope(scope)
       for (interval <- settings.activeRefreshIntervalMs)
         altBuilder.withActiveRefreshIntervalMs(interval)
       for (interval <- settings.idleRefreshIntervalMs)
@@ -442,47 +436,44 @@ object DynamoUtils {
     private var conf: Configuration = null
 
     override def apply(builder: DynamoDbClientBuilder): DynamoDbClientBuilder = {
+      val maybeEndpoint =
+        Option(conf.get(DynamoDBConstants.ENDPOINT)).map(DynamoDBEndpoint.fromRendered)
+      val maybeRegion = Option(conf.get(DynamoDBConstants.REGION))
+      val maybeCreds: Option[AwsCredentialsProvider] =
+        (
+          Option(conf.get(DynamoDBConstants.DYNAMODB_ACCESS_KEY_CONF)),
+          Option(conf.get(DynamoDBConstants.DYNAMODB_SECRET_KEY_CONF))
+        ) match {
+          case (Some(accessKey), Some(secretKey)) =>
+            Some(
+              AWSCredentials(
+                accessKey,
+                secretKey,
+                Option(conf.get(DynamoDBConstants.DYNAMODB_SESSION_TOKEN_CONF))
+              ).toProvider
+            )
+          case _ => None
+        }
       val effectiveBuilder: DynamoDbClientBuilder =
-        Option(conf.get(DynamoDBConstants.ENDPOINT)) match {
-          case Some(customEndpoint) =>
-            val altBuilder = AlternatorDynamoDbClient.builder()
-            altBuilder.endpointOverride(URI.create(customEndpoint))
-            for (region <- Option(conf.get(DynamoDBConstants.REGION)))
-              altBuilder.region(Region.of(region))
-            (
-              Option(conf.get(DynamoDBConstants.DYNAMODB_ACCESS_KEY_CONF)),
-              Option(conf.get(DynamoDBConstants.DYNAMODB_SECRET_KEY_CONF))
-            ) match {
-              case (Some(accessKey), Some(secretKey)) =>
-                val awsCreds =
-                  Option(conf.get(DynamoDBConstants.DYNAMODB_SESSION_TOKEN_CONF)) match {
-                    case Some(token) =>
-                      AwsSessionCredentials.create(accessKey, secretKey, token)
-                    case None =>
-                      AwsBasicCredentials.create(accessKey, secretKey)
-                  }
-                altBuilder.credentialsProvider(StaticCredentialsProvider.create(awsCreds))
-              case _ => // No credentials configured - use anonymous (Alternator default)
-            }
-            applyAlternatorSettings(
-              altBuilder,
-              Some(
-                AlternatorSettings(
-                  datacenter = Option(conf.get(AlternatorDatacenterConfig)),
-                  rack = Option(conf.get(AlternatorRackConfig)),
-                  activeRefreshIntervalMs =
-                    Option(conf.get(AlternatorActiveRefreshConfig)).map(_.toLong),
-                  idleRefreshIntervalMs =
-                    Option(conf.get(AlternatorIdleRefreshConfig)).map(_.toLong),
-                  compression = Option(conf.get(AlternatorCompressionConfig)).map(_.toBoolean),
-                  optimizeHeaders =
-                    Option(conf.get(AlternatorOptimizeHeadersConfig)).map(_.toBoolean)
-                )
+        if (maybeEndpoint.isDefined) {
+          val altBuilder = AlternatorDynamoDbClient.builder()
+          AwsUtils.configureClientBuilder(altBuilder, maybeEndpoint, maybeRegion, maybeCreds)
+          applyAlternatorSettings(
+            altBuilder,
+            Some(
+              AlternatorSettings(
+                datacenter = Option(conf.get(AlternatorDatacenterConfig)),
+                rack       = Option(conf.get(AlternatorRackConfig)),
+                activeRefreshIntervalMs =
+                  Option(conf.get(AlternatorActiveRefreshConfig)).map(_.toLong),
+                idleRefreshIntervalMs = Option(conf.get(AlternatorIdleRefreshConfig)).map(_.toLong),
+                compression     = Option(conf.get(AlternatorCompressionConfig)).map(_.toBoolean),
+                optimizeHeaders = Option(conf.get(AlternatorOptimizeHeadersConfig)).map(_.toBoolean)
               )
             )
-            altBuilder
-          case None => builder
-        }
+          )
+          altBuilder
+        } else builder
       val overrideConf = ClientOverrideConfiguration.builder()
       if (conf.get(RemoveConsumedCapacityConfig, "false").toBoolean)
         overrideConf.addExecutionInterceptor(new RemoveConsumedCapacityInterceptor)

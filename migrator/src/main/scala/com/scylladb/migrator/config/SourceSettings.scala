@@ -14,6 +14,14 @@ case class DynamoDBEndpoint(host: String, port: Int) {
 object DynamoDBEndpoint {
   implicit val encoder: Encoder[DynamoDBEndpoint] = deriveEncoder[DynamoDBEndpoint]
   implicit val decoder: Decoder[DynamoDBEndpoint] = deriveDecoder[DynamoDBEndpoint]
+
+  /** Parse a string produced by [[DynamoDBEndpoint.renderEndpoint]] back into a
+    * [[DynamoDBEndpoint]].
+    */
+  def fromRendered(rendered: String): DynamoDBEndpoint = {
+    val colonIdx = rendered.lastIndexOf(':')
+    DynamoDBEndpoint(rendered.substring(0, colonIdx), rendered.substring(colonIdx + 1).toInt)
+  }
 }
 
 sealed trait SourceSettings
