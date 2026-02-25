@@ -6,10 +6,19 @@ on:
     paths:
       - '**.scala'
       - '**.sbt'
+      - 'Dockerfile'
+      - 'dockerfiles/**'
+      - '.github/workflows/**'
+      - '.github/*.sh'
+
   pull_request:
     paths:
       - '**.scala'
       - '**.sbt'
+      - 'Dockerfile'
+      - 'dockerfiles/**'
+      - '.github/workflows/**'
+      - '.github/*.sh'
 
 env:
   TUTORIAL_DIR: docs/source/tutorials/dynamodb-to-scylladb-alternator
