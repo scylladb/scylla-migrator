@@ -10,10 +10,11 @@ import scala.util.chaining._
 
 class ParquetSavepointsIntegrationTest extends ParquetMigratorSuite {
 
-
   private val configFileName: String = "parquet-to-scylla-savepoints.yaml"
 
-  withTableAndSavepoints("savepointstest", "savepoints", "parquet-savepoints-test").test("Parquet savepoints include all processed files") { case (tableName, (parquetRoot, savepointsDir)) =>
+  withTableAndSavepoints("savepointstest", "savepoints", "parquet-savepoints-test").test(
+    "Parquet savepoints include all processed files"
+  ) { case (tableName, (parquetRoot, savepointsDir)) =>
 
     val parquetDir = parquetRoot.resolve("savepoints")
     Files.createDirectories(parquetDir)
@@ -57,7 +58,8 @@ class ParquetSavepointsIntegrationTest extends ParquetMigratorSuite {
       .getOrElse(fail("Savepoint file was not created"))
 
     val savepointConfig = MigratorConfig.loadFrom(savepointFile.toString)
-    val skipFiles = savepointConfig.skipParquetFiles.getOrElse(fail("skipParquetFiles were not written"))
+    val skipFiles =
+      savepointConfig.skipParquetFiles.getOrElse(fail("skipParquetFiles were not written"))
 
     assertEquals(skipFiles, expectedProcessedFiles)
   }

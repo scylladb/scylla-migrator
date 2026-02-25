@@ -3,7 +3,12 @@ package com.scylladb.migrator.alternator
 import com.scylladb.migrator.readers.DynamoDB
 import org.apache.hadoop.dynamodb.read.DynamoDBInputFormat
 import org.apache.spark.sql.SparkSession
-import software.amazon.awssdk.services.dynamodb.model.{BillingMode, BillingModeSummary, ProvisionedThroughputDescription, TableDescription}
+import software.amazon.awssdk.services.dynamodb.model.{
+  BillingMode,
+  BillingModeSummary,
+  ProvisionedThroughputDescription,
+  TableDescription
+}
 
 class DynamoDBInputFormatTest extends munit.FunSuite {
 
@@ -20,8 +25,14 @@ class DynamoDBInputFormatTest extends munit.FunSuite {
     checkPartitions(200)(tableSizeBytes = 100 * GB, tableProvisionedThroughput = None)
   }
 
-  test("no configured scanSegments in on-demand billing mode, table size is 100 GB, and read throughput is 1,000,000") {
-    checkPartitions(1024)(tableSizeBytes = 100 * GB, tableProvisionedThroughput = None, configuredReadThroughput = Some(1000000))
+  test(
+    "no configured scanSegments in on-demand billing mode, table size is 100 GB, and read throughput is 1,000,000"
+  ) {
+    checkPartitions(1024)(
+      tableSizeBytes = 100 * GB,
+      tableProvisionedThroughput = None,
+      configuredReadThroughput = Some(1000000)
+    )
   }
 
   test("no configured scanSegments in provisioned billing mode") {
@@ -61,7 +72,9 @@ class DynamoDBInputFormatTest extends munit.FunSuite {
       case None =>
         tableDescriptionBuilder
           .provisionedThroughput(ProvisionedThroughputDescription.builder().build())
-          .billingModeSummary(BillingModeSummary.builder().billingMode(BillingMode.PAY_PER_REQUEST).build())
+          .billingModeSummary(
+            BillingModeSummary.builder().billingMode(BillingMode.PAY_PER_REQUEST).build()
+          )
     }
 
     val jobConf = DynamoDB.makeJobConf(
@@ -85,8 +98,7 @@ class DynamoDBInputFormatTest extends munit.FunSuite {
     assertEquals(partitions, expectedPartitions)
   }
 
-  override def afterAll(): Unit = {
+  override def afterAll(): Unit =
     spark.stop()
-  }
 
 }

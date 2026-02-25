@@ -37,22 +37,23 @@ object Migrator {
             spark,
             cassandraSource,
             cassandraSource.preserveTimestamps,
-            migratorConfig.getSkipTokenRangesOrEmptySet)
+            migratorConfig.getSkipTokenRangesOrEmptySet
+          )
           ScyllaMigrator.migrate(migratorConfig, scyllaTarget, sourceDF)
         case (parquetSource: SourceSettings.Parquet, scyllaTarget: TargetSettings.Scylla) =>
           readers.Parquet.migrateToScylla(migratorConfig, parquetSource, scyllaTarget)(spark)
         case (dynamoSource: SourceSettings.DynamoDB, alternatorTarget: TargetSettings.DynamoDB) =>
           AlternatorMigrator.migrateFromDynamoDB(dynamoSource, alternatorTarget, migratorConfig)
         case (
-            s3Source: SourceSettings.DynamoDBS3Export,
-            alternatorTarget: TargetSettings.DynamoDB) =>
+              s3Source: SourceSettings.DynamoDBS3Export,
+              alternatorTarget: TargetSettings.DynamoDB
+            ) =>
           AlternatorMigrator.migrateFromS3Export(s3Source, alternatorTarget, migratorConfig)
         case _ =>
           sys.error("Unsupported combination of source and target.")
       }
-    } finally {
+    } finally
       spark.stop()
-    }
   }
 
 }

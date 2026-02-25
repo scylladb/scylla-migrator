@@ -22,9 +22,11 @@ object DynamoDB {
 
   val log = LogManager.getLogger("com.scylladb.migrator.writers.DynamoDB")
 
-  def deleteRDD(target: TargetSettings.DynamoDB,
-                targetTableDesc: TableDescription,
-                rdd: RDD[util.Map[String, AttributeValue]])(implicit spark: SparkSession): Unit = {
+  def deleteRDD(
+    target: TargetSettings.DynamoDB,
+    targetTableDesc: TableDescription,
+    rdd: RDD[util.Map[String, AttributeValue]]
+  )(implicit spark: SparkSession): Unit = {
 
     val keySchema = targetTableDesc.keySchema()
 
@@ -37,7 +39,7 @@ object DynamoDB {
           Seq.empty
         )
 
-        try {
+        try
           partition.foreach { item =>
             val keyToDelete =
               new util.HashMap[String, AttributeValue]()
@@ -50,7 +52,7 @@ object DynamoDB {
             }
 
             if (!keyToDelete.isEmpty) {
-              try {
+              try
                 dynamoDB.deleteItem(
                   DeleteItemRequest
                     .builder()
@@ -58,25 +60,27 @@ object DynamoDB {
                     .key(keyToDelete)
                     .build()
                 )
-              } catch {
+              catch {
                 case e: Exception =>
                   log.error(
                     s"Failed to delete item with key ${keyToDelete} from table ${target.table}",
-                    e)
+                    e
+                  )
               }
             }
           }
-        } finally {
+        finally
           dynamoDB.close()
-        }
       }
     }
   }
 
-  def writeRDD(target: TargetSettings.DynamoDB,
-               renamesMap: Map[String, String],
-               rdd: RDD[(Text, DynamoDBItemWritable)],
-               targetTableDesc: TableDescription)(implicit spark: SparkSession): Unit = {
+  def writeRDD(
+    target: TargetSettings.DynamoDB,
+    renamesMap: Map[String, String],
+    rdd: RDD[(Text, DynamoDBItemWritable)],
+    targetTableDesc: TableDescription
+  )(implicit spark: SparkSession): Unit = {
 
     val jobConf = new JobConf(spark.sparkContext.hadoopConfiguration)
 
@@ -85,7 +89,7 @@ object DynamoDB {
       target.region,
       target.endpoint,
       maybeScanSegments = None,
-      maybeMaxMapTasks  = None,
+      maybeMaxMapTasks = None,
       target.finalCredentials,
       target.removeConsumedCapacity.getOrElse(false)
     )
@@ -94,19 +98,22 @@ object DynamoDB {
       target.writeThroughput match {
         case Some(value) =>
           log.info(
-            s"Setting up Hadoop job to write table using a configured throughput of ${value} WCU(s)")
+            s"Setting up Hadoop job to write table using a configured throughput of ${value} WCU(s)"
+          )
           value
         case None =>
           val value = DynamoUtils.tableWriteThroughput(targetTableDesc)
           log.info(
-            s"Setting up Hadoop job to write table using a calculated throughput of ${value} WCU(s)")
+            s"Setting up Hadoop job to write table using a calculated throughput of ${value} WCU(s)"
+          )
           value
       }
     jobConf.set(DynamoDBConstants.WRITE_THROUGHPUT, writeThroughput.toString)
     setOptionalConf(
       jobConf,
       DynamoDBConstants.THROUGHPUT_WRITE_PERCENT,
-      target.throughputWritePercent.map(_.toString))
+      target.throughputWritePercent.map(_.toString)
+    )
 
     val finalRdd =
       if (renamesMap.isEmpty) rdd

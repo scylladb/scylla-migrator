@@ -10,31 +10,33 @@ import com.scylladb.migrator.config.BillingModeCodec._
 
 sealed trait TargetSettings
 object TargetSettings {
-  case class Scylla(host: String,
-                    port: Int,
-                    localDC: Option[String],
-                    credentials: Option[Credentials],
-                    sslOptions: Option[SSLOptions],
-                    keyspace: String,
-                    table: String,
-                    connections: Option[Int],
-                    stripTrailingZerosForDecimals: Boolean,
-                    writeTTLInS: Option[Int],
-                    writeWritetimestampInuS: Option[Long],
-                    consistencyLevel: String)
-      extends TargetSettings
+  case class Scylla(
+    host: String,
+    port: Int,
+    localDC: Option[String],
+    credentials: Option[Credentials],
+    sslOptions: Option[SSLOptions],
+    keyspace: String,
+    table: String,
+    connections: Option[Int],
+    stripTrailingZerosForDecimals: Boolean,
+    writeTTLInS: Option[Int],
+    writeWritetimestampInuS: Option[Long],
+    consistencyLevel: String
+  ) extends TargetSettings
 
-  case class DynamoDB(endpoint: Option[DynamoDBEndpoint],
-                      region: Option[String],
-                      credentials: Option[AWSCredentials],
-                      table: String,
-                      writeThroughput: Option[Int],
-                      throughputWritePercent: Option[Float],
-                      streamChanges: Boolean,
-                      skipInitialSnapshotTransfer: Option[Boolean],
-                      removeConsumedCapacity: Option[Boolean] = Some(true),
-                      billingMode: Option[BillingMode] = None)
-      extends TargetSettings {
+  case class DynamoDB(
+    endpoint: Option[DynamoDBEndpoint],
+    region: Option[String],
+    credentials: Option[AWSCredentials],
+    table: String,
+    writeThroughput: Option[Int],
+    throughputWritePercent: Option[Float],
+    streamChanges: Boolean,
+    skipInitialSnapshotTransfer: Option[Boolean],
+    removeConsumedCapacity: Option[Boolean] = Some(true),
+    billingMode: Option[BillingMode] = None
+  ) extends TargetSettings {
     lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
       AwsUtils.computeFinalCredentials(credentials, endpoint, region)
   }

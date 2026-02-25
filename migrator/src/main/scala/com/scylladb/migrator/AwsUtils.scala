@@ -21,26 +21,27 @@ object AwsUtils {
     builder: AwsClientBuilder[Builder, Client],
     maybeEndpoint: Option[DynamoDBEndpoint],
     maybeRegion: Option[String],
-    maybeCredentialsProvider: Option[AwsCredentialsProvider]): builder.type = {
+    maybeCredentialsProvider: Option[AwsCredentialsProvider]
+  ): builder.type = {
 
-    for (endpoint <- maybeEndpoint) {
+    for (endpoint <- maybeEndpoint)
       builder.endpointOverride(new URI(endpoint.renderEndpoint))
-    }
     maybeCredentialsProvider.foreach(builder.credentialsProvider)
     maybeRegion.map(Region.of).foreach(builder.region)
 
     builder
   }
 
-  /**
-    * Compute the final AWS credentials to use to call any AWS API.
+  /** Compute the final AWS credentials to use to call any AWS API.
     *
     * The credentials provided in the configuration may require acquiring temporary credentials by
     * delegation (“AssumeRole” in AWS jargon).
     */
-  def computeFinalCredentials(maybeConfiguredCredentials: Option[config.AWSCredentials],
-                              endpoint: Option[DynamoDBEndpoint],
-                              region: Option[String]): Option[AWSCredentials] =
+  def computeFinalCredentials(
+    maybeConfiguredCredentials: Option[config.AWSCredentials],
+    endpoint: Option[DynamoDBEndpoint],
+    region: Option[String]
+  ): Option[AWSCredentials] =
     maybeConfiguredCredentials.map { configuredCredentials =>
       val baseCredentials =
         AWSCredentials(configuredCredentials.accessKey, configuredCredentials.secretKey, None)
@@ -53,8 +54,11 @@ object AwsUtils {
               endpoint,
               region,
               Some(
-                StaticCredentialsProvider.create(AwsBasicCredentials
-                  .create(configuredCredentials.accessKey, configuredCredentials.secretKey)))
+                StaticCredentialsProvider.create(
+                  AwsBasicCredentials
+                    .create(configuredCredentials.accessKey, configuredCredentials.secretKey)
+                )
+              )
             ).build()
           val response =
             stsClient.assumeRole(

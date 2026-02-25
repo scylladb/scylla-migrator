@@ -6,16 +6,18 @@ import org.apache.spark.Success
 
 import scala.collection.concurrent.TrieMap
 
-/**
-  * SparkListener that tracks partition completion and aggregates it to file-level completion.
+/** SparkListener that tracks partition completion and aggregates it to file-level completion.
   *
-  * This listener monitors Spark task completion events and maintains mappings between
-  * partitions and files. When all partitions belonging to a file have been successfully
-  * completed, it marks the file as processed via the ParquetSavepointsManager.
+  * This listener monitors Spark task completion events and maintains mappings between partitions
+  * and files. When all partitions belonging to a file have been successfully completed, it marks
+  * the file as processed via the ParquetSavepointsManager.
   *
-  * @param partitionToFiles Mapping from Spark partition ID to source file paths
-  * @param fileToPartitions Mapping from file path to the set of partition IDs reading from it
-  * @param savepointsManager Manager to notify when files are completed
+  * @param partitionToFiles
+  *   Mapping from Spark partition ID to source file paths
+  * @param fileToPartitions
+  *   Mapping from file path to the set of partition IDs reading from it
+  * @param savepointsManager
+  *   Manager to notify when files are completed
   */
 class FileCompletionListener(
   partitionToFiles: Map[Int, Set[String]],
@@ -31,7 +33,8 @@ class FileCompletionListener(
 
   log.info(
     s"FileCompletionListener initialized: tracking ${fileToPartitions.size} files " +
-      s"across ${partitionToFiles.size} partitions")
+      s"across ${partitionToFiles.size} partitions"
+  )
 
   override def onTaskEnd(taskEnd: SparkListenerTaskEnd): Unit =
     if (taskEnd.reason == Success) {
@@ -51,7 +54,8 @@ class FileCompletionListener(
       }
     } else {
       log.debug(
-        s"Task for partition ${taskEnd.taskInfo.partitionId} did not complete successfully: ${taskEnd.reason}")
+        s"Task for partition ${taskEnd.taskInfo.partitionId} did not complete successfully: ${taskEnd.reason}"
+      )
     }
 
   private def checkFileCompletion(filename: String): Unit = {

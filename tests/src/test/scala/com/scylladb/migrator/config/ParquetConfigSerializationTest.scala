@@ -1,6 +1,6 @@
 package com.scylladb.migrator.config
 
-import java.nio.file.{Files, Paths}
+import java.nio.file.{ Files, Paths }
 import java.nio.charset.StandardCharsets
 
 class ParquetConfigSerializationTest extends munit.FunSuite {
@@ -31,16 +31,18 @@ class ParquetConfigSerializationTest extends munit.FunSuite {
       savepoints = Savepoints(300, "/app/savepoints"),
       skipTokenRanges = None,
       skipSegments = None,
-      skipParquetFiles = Some(Set(
-        "s3a://test-bucket/data/part-00001.parquet",
-        "s3a://test-bucket/data/part-00002.parquet",
-        "s3a://test-bucket/data/part-00003.parquet"
-      )),
+      skipParquetFiles = Some(
+        Set(
+          "s3a://test-bucket/data/part-00001.parquet",
+          "s3a://test-bucket/data/part-00002.parquet",
+          "s3a://test-bucket/data/part-00003.parquet"
+        )
+      ),
       validation = None
     )
 
     val yaml = config.render
-    
+
     assert(yaml.contains("skipParquetFiles"))
     assert(yaml.contains("part-00001.parquet"))
     assert(yaml.contains("part-00002.parquet"))
@@ -81,19 +83,18 @@ validation: null
     val tempFile = Files.createTempFile("test-config", ".yaml")
     try {
       Files.write(tempFile, yamlContent.getBytes(StandardCharsets.UTF_8))
-      
+
       val config = MigratorConfig.loadFrom(tempFile.toString)
-      
+
       assertEquals(config.skipParquetFiles.isDefined, true)
       assertEquals(config.skipParquetFiles.get.size, 2)
       assert(config.skipParquetFiles.get.contains("s3a://test-bucket/data/part-00001.parquet"))
       assert(config.skipParquetFiles.get.contains("s3a://test-bucket/data/part-00002.parquet"))
-      
+
       assertEquals(config.getSkipParquetFilesOrEmptySet.size, 2)
-      
-    } finally {
+
+    } finally
       Files.delete(tempFile)
-    }
   }
 
   test("skipParquetFiles round-trip serialization") {
@@ -128,16 +129,15 @@ validation: null
     )
 
     val yaml = config1.render
-    
+
     val tempFile = Files.createTempFile("roundtrip-config", ".yaml")
     try {
       Files.write(tempFile, yaml.getBytes(StandardCharsets.UTF_8))
       val config2 = MigratorConfig.loadFrom(tempFile.toString)
-      
+
       assertEquals(config2.skipParquetFiles.get, originalFiles)
-    } finally {
+    } finally
       Files.delete(tempFile)
-    }
   }
 
 }

@@ -4,11 +4,10 @@ import org.apache.spark.util.AccumulatorV2
 
 import java.util.concurrent.atomic.AtomicReference
 
-/**
-  * A Spark Accumulator that accumulates `Int` values into a `Set[Int]`.
+/** A Spark Accumulator that accumulates `Int` values into a `Set[Int]`.
   *
-  * We use it to track the indexes of the DynamoDB scan segments that have been
-  * migrated to the target database.
+  * We use it to track the indexes of the DynamoDB scan segments that have been migrated to the
+  * target database.
   */
 class IntSetAccumulator(init: Set[Int]) extends AccumulatorV2[Int, Set[Int]] {
 

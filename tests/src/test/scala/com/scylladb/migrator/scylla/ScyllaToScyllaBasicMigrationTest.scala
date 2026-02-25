@@ -18,7 +18,8 @@ class ScyllaToScyllaBasicMigrationTest extends MigratorSuite(sourcePort = 9044) 
           Map[String, Term](
             "id"  -> literal("12345"),
             "foo" -> literal("bar")
-          ).asJava)
+          ).asJava
+        )
         .build()
 
     // Insert some items

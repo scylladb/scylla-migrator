@@ -5,8 +5,7 @@ import com.scylladb.migrator.scylla.SourceDataFrame
 import org.apache.log4j.LogManager
 import org.apache.spark.sql.SparkSession
 
-/**
-  * Parquet reader implementation without savepoint tracking.
+/** Parquet reader implementation without savepoint tracking.
   *
   * This implementation provides simple Parquet file reading without file-level savepoint tracking.
   * Enable via configuration: `savepoints.enableParquetFileTracking = false`

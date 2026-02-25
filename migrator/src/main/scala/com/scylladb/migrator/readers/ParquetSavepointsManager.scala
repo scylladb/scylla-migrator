@@ -5,9 +5,10 @@ import com.scylladb.migrator.config.MigratorConfig
 import com.scylladb.migrator.alternator.StringSetAccumulator
 import org.apache.spark.SparkContext
 
-class ParquetSavepointsManager(migratorConfig: MigratorConfig,
-                               filesAccumulator: StringSetAccumulator)
-    extends SavepointsManager(migratorConfig) {
+class ParquetSavepointsManager(
+  migratorConfig: MigratorConfig,
+  filesAccumulator: StringSetAccumulator
+) extends SavepointsManager(migratorConfig) {
 
   def describeMigrationState(): String = {
     val processedCount = filesAccumulator.value.size

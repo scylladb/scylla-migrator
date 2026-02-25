@@ -1,8 +1,8 @@
 package com.scylladb.migrator.readers
 
-import com.scylladb.migrator.config.{MigratorConfig, SourceSettings}
-import org.apache.spark.scheduler.{SparkListenerTaskEnd, TaskInfo}
-import org.apache.spark.{Success, TaskEndReason}
+import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings }
+import org.apache.spark.scheduler.{ SparkListenerTaskEnd, TaskInfo }
+import org.apache.spark.{ Success, TaskEndReason }
 import org.apache.spark.sql.SparkSession
 import java.nio.file.Files
 
@@ -20,7 +20,11 @@ class FileCompletionListenerTest extends munit.FunSuite {
     super.afterAll()
   }
 
-  def createMockTaskEnd(partitionId: Int, stageId: Int = 0, success: Boolean = true): SparkListenerTaskEnd = {
+  def createMockTaskEnd(
+    partitionId: Int,
+    stageId: Int = 0,
+    success: Boolean = true
+  ): SparkListenerTaskEnd = {
     val taskInfo = new TaskInfo(
       taskId = partitionId.toLong,
       index = partitionId,
@@ -98,15 +102,14 @@ class FileCompletionListenerTest extends munit.FunSuite {
 
         assertEquals(listener.getCompletedFilesCount, 3)
 
-      } finally {
+      } finally
         manager.close()
-      }
 
-    } finally {
-      Files.walk(tempDir)
+    } finally
+      Files
+        .walk(tempDir)
         .sorted(java.util.Comparator.reverseOrder())
         .forEach(Files.delete)
-    }
   }
 
   test("FileCompletionListener tracks multi-partition files") {
@@ -163,15 +166,14 @@ class FileCompletionListenerTest extends munit.FunSuite {
         listener.onTaskEnd(createMockTaskEnd(4))
         assertEquals(listener.getCompletedFilesCount, 2, "Both files should be complete")
 
-      } finally {
+      } finally
         manager.close()
-      }
 
-    } finally {
-      Files.walk(tempDir)
+    } finally
+      Files
+        .walk(tempDir)
         .sorted(java.util.Comparator.reverseOrder())
         .forEach(Files.delete)
-    }
   }
 
   test("FileCompletionListener handles failed tasks correctly") {
@@ -216,15 +218,14 @@ class FileCompletionListenerTest extends munit.FunSuite {
 
         assertEquals(listener.getCompletedFilesCount, 1)
 
-      } finally {
+      } finally
         manager.close()
-      }
 
-    } finally {
-      Files.walk(tempDir)
+    } finally
+      Files
+        .walk(tempDir)
         .sorted(java.util.Comparator.reverseOrder())
         .forEach(Files.delete)
-    }
   }
 
   test("FileCompletionListener is idempotent for duplicate task completions") {
@@ -260,15 +261,14 @@ class FileCompletionListenerTest extends munit.FunSuite {
 
         assertEquals(listener.getCompletedFilesCount, 1)
 
-      } finally {
+      } finally
         manager.close()
-      }
 
-    } finally {
-      Files.walk(tempDir)
+    } finally
+      Files
+        .walk(tempDir)
         .sorted(java.util.Comparator.reverseOrder())
         .forEach(Files.delete)
-    }
   }
 
   test("FileCompletionListener provides accurate progress report") {
@@ -317,15 +317,14 @@ class FileCompletionListenerTest extends munit.FunSuite {
         val file1CompleteReport = listener.getProgressReport
         assert(file1CompleteReport.contains("1/2 files"))
 
-      } finally {
+      } finally
         manager.close()
-      }
 
-    } finally {
-      Files.walk(tempDir)
+    } finally
+      Files
+        .walk(tempDir)
         .sorted(java.util.Comparator.reverseOrder())
         .forEach(Files.delete)
-    }
   }
 
   test("FileCompletionListener handles multiple files per partition") {
@@ -361,14 +360,13 @@ class FileCompletionListenerTest extends munit.FunSuite {
         listener.onTaskEnd(createMockTaskEnd(0))
 
         assertEquals(listener.getCompletedFilesCount, 2)
-      } finally {
+      } finally
         manager.close()
-      }
 
-    } finally {
-      Files.walk(tempDir)
+    } finally
+      Files
+        .walk(tempDir)
         .sorted(java.util.Comparator.reverseOrder())
         .forEach(Files.delete)
-    }
   }
 }

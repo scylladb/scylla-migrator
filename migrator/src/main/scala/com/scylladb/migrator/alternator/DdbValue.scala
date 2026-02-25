@@ -5,12 +5,10 @@ import software.amazon.awssdk.services.dynamodb.model.AttributeValue
 
 import scala.jdk.CollectionConverters._
 
-/**
-  * A data type isomorphic to AWS’ `AttributeValue`, but effectively serializable.
-  * See https://github.com/aws/aws-sdk-java-v2/issues/3143
-  * The fact that `AttributeValue` is not serializable anymore prevents us to use
-  * it in RDD operations that may perform shuffles.
-  * As a workaround, we convert values of type `AttributeValue` to `DdbValue`.
+/** A data type isomorphic to AWS’ `AttributeValue`, but effectively serializable. See
+  * https://github.com/aws/aws-sdk-java-v2/issues/3143 The fact that `AttributeValue` is not
+  * serializable anymore prevents us to use it in RDD operations that may perform shuffles. As a
+  * workaround, we convert values of type `AttributeValue` to `DdbValue`.
   */
 @SerialVersionUID(1L)
 sealed trait DdbValue extends Serializable

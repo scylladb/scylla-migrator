@@ -12,9 +12,11 @@ import org.apache.spark.sql.{ DataFrame, SparkSession }
 
 import scala.util.control.NonFatal
 
-case class SourceDataFrame(dataFrame: DataFrame,
-                           timestampColumns: Option[TimestampColumns],
-                           savepointsSupported: Boolean)
+case class SourceDataFrame(
+  dataFrame: DataFrame,
+  timestampColumns: Option[TimestampColumns],
+  savepointsSupported: Boolean
+)
 
 trait ScyllaMigratorBase {
   protected val log = LogManager.getLogger("com.scylladb.migrator.scylla")
@@ -42,31 +44,30 @@ trait ScyllaMigratorBase {
     )
 
     log.info(
-      "We need to transfer: " + sourceDF.dataFrame.rdd.getNumPartitions + " partitions in total")
+      "We need to transfer: " + sourceDF.dataFrame.rdd.getNumPartitions + " partitions in total"
+    )
 
     if (migratorConfig.source.isInstanceOf[SourceSettings.Cassandra]) {
       val partitions = sourceDF.dataFrame.rdd.partitions
-      val cassandraPartitions = partitions.map(p => {
-        p.asInstanceOf[CassandraPartition[_, _]]
-      })
+      val cassandraPartitions = partitions.map(p => p.asInstanceOf[CassandraPartition[_, _]])
       val allTokenRangesBuilder = Set.newBuilder[(Token[_], Token[_])]
-      cassandraPartitions.foreach(p => {
+      cassandraPartitions.foreach(p =>
         p.tokenRanges
           .asInstanceOf[Vector[CqlTokenRange[_, _]]]
-          .foreach(tr => {
+          .foreach { tr =>
             val range: (Token[_], Token[_]) =
               (tr.range.start.asInstanceOf[Token[_]], tr.range.end.asInstanceOf[Token[_]])
             allTokenRangesBuilder += range
-          })
-
-      })
+          }
+      )
       val allTokenRanges = allTokenRangesBuilder.result()
 
       log.info("All token ranges extracted from partitions size:" + allTokenRanges.size)
 
       if (migratorConfig.skipTokenRanges.isDefined) {
         log.info(
-          "Savepoints array defined, size of the array: " + migratorConfig.skipTokenRanges.size)
+          "Savepoints array defined, size of the array: " + migratorConfig.skipTokenRanges.size
+        )
 
         val diff = allTokenRanges.diff(migratorConfig.getSkipTokenRangesOrEmptySet)
         log.info("Diff ... total diff of full ranges to savepoints is: " + diff.size)
@@ -87,20 +88,21 @@ trait ScyllaMigratorBase {
         migratorConfig.getRenamesOrNil,
         sourceDF.dataFrame,
         sourceDF.timestampColumns,
-        tokenRangeAccumulator)
+        tokenRangeAccumulator
+      )
     } catch {
       case NonFatal(e) => // Catching everything on purpose to try and dump the accumulator state
         log.error(
           "Caught error while writing the DataFrame. Will create a savepoint before exiting",
-          e)
-    } finally {
+          e
+        )
+    } finally
       for (savePointsManger <- maybeSavepointsManager) {
         savePointsManger.dumpMigrationState("final")
         if (shouldCloseManager(savePointsManger)) {
           savePointsManger.close()
         }
       }
-    }
   }
 }
 

@@ -1,7 +1,7 @@
 package com.scylladb.migrator.alternator
 
 import com.scylladb.migrator.SparkUtils.successfullyPerformMigration
-import software.amazon.awssdk.services.dynamodb.model.{AttributeValue, PutItemRequest}
+import software.amazon.awssdk.services.dynamodb.model.{ AttributeValue, PutItemRequest }
 
 import scala.jdk.CollectionConverters._
 
@@ -9,7 +9,7 @@ class RenamedItemsTest extends MigratorSuiteWithDynamoDBLocal {
 
   withTable("RenamedItems").test("Rename items along the migration") { tableName =>
     // Insert several items
-    val keys1 = Map("id"   -> AttributeValue.fromS("12345"))
+    val keys1 = Map("id" -> AttributeValue.fromS("12345"))
     val attrs1 = Map("foo" -> AttributeValue.fromS("bar"))
     val item1Data = keys1 ++ attrs1
 
@@ -20,8 +20,12 @@ class RenamedItemsTest extends MigratorSuiteWithDynamoDBLocal {
     )
     val item2Data = keys2 ++ attrs2
 
-    sourceDDb().putItem(PutItemRequest.builder().tableName(tableName).item(item1Data.asJava).build())
-    sourceDDb().putItem(PutItemRequest.builder().tableName(tableName).item(item2Data.asJava).build())
+    sourceDDb().putItem(
+      PutItemRequest.builder().tableName(tableName).item(item1Data.asJava).build()
+    )
+    sourceDDb().putItem(
+      PutItemRequest.builder().tableName(tableName).item(item2Data.asJava).build()
+    )
 
     // Perform the migration
     successfullyPerformMigration("dynamodb-to-alternator-renames.yaml")

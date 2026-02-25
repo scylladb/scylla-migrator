@@ -8,21 +8,23 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{ Files, Paths }
 import java.util.concurrent.{ ScheduledThreadPoolExecutor, TimeUnit }
 
-/**
-  * A component that manages savepoints. Savepoints provide a way to resume an interrupted migration.
+/** A component that manages savepoints. Savepoints provide a way to resume an interrupted
+  * migration.
   *
-  * This component periodically stores savepoints according to the schedule defined in the configuration.
-  * It also automatically stores a savepoint in case of early termination (e.g. due to a SIGTERM signal).
+  * This component periodically stores savepoints according to the schedule defined in the
+  * configuration. It also automatically stores a savepoint in case of early termination (e.g. due
+  * to a SIGTERM signal).
   *
-  * Internally, it works by writing modified copies of the original migration configuration. These copies
-  * specify which parts of the source dataset have already been migrated and can safely be skipped when
-  * restarting the migration.
+  * Internally, it works by writing modified copies of the original migration configuration. These
+  * copies specify which parts of the source dataset have already been migrated and can safely be
+  * skipped when restarting the migration.
   *
-  * Make sure to call the method `close` when you don’t need the savepoints manager anymore so that it
-  * releases the resources it was using.
+  * Make sure to call the method `close` when you don’t need the savepoints manager anymore so that
+  * it releases the resources it was using.
   *
-  * This class is abstract. Subclasses are responsible for implementing how to track the migration progress,
-  * and for communicating the updated state of the migration via the method `updateConfigWithMigrationState`.
+  * This class is abstract. Subclasses are responsible for implementing how to track the migration
+  * progress, and for communicating the updated state of the migration via the method
+  * `updateConfigWithMigrationState`.
   */
 abstract class SavepointsManager(migratorConfig: MigratorConfig) extends AutoCloseable {
 
@@ -40,7 +42,8 @@ abstract class SavepointsManager(migratorConfig: MigratorConfig) extends AutoClo
     val savepointsDirectory = Paths.get(migratorConfig.savepoints.path)
     if (!Files.exists(savepointsDirectory)) {
       log.debug(
-        s"Directory ${savepointsDirectory.normalize().toString} does not exist. Creating it...")
+        s"Directory ${savepointsDirectory.normalize().toString} does not exist. Creating it..."
+      )
       Files.createDirectories(savepointsDirectory)
     }
   }
@@ -50,7 +53,8 @@ abstract class SavepointsManager(migratorConfig: MigratorConfig) extends AutoClo
 
   private def addUSR2Handler(): Unit = {
     log.info(
-      "Installing SIGINT/TERM/USR2 handler. Send this to dump the current progress to a savepoint.")
+      "Installing SIGINT/TERM/USR2 handler. Send this to dump the current progress to a savepoint."
+    )
 
     val handler = new SignalHandler {
       override def handle(signal: Signal): Unit = {
@@ -75,19 +79,21 @@ abstract class SavepointsManager(migratorConfig: MigratorConfig) extends AutoClo
     }
 
     log.info(
-      s"Starting savepoint schedule; will write a savepoint every ${migratorConfig.savepoints.intervalSeconds} seconds")
+      s"Starting savepoint schedule; will write a savepoint every ${migratorConfig.savepoints.intervalSeconds} seconds"
+    )
 
     scheduler.scheduleAtFixedRate(
       runnable,
       migratorConfig.savepoints.intervalSeconds,
       migratorConfig.savepoints.intervalSeconds,
-      TimeUnit.SECONDS)
+      TimeUnit.SECONDS
+    )
   }
 
-  /**
-    * Dump the current state of the migration into a configuration file that can be
-    * used to resume the migration.
-    * @param reason Human-readable, informal, event that caused the dump.
+  /** Dump the current state of the migration into a configuration file that can be used to resume
+    * the migration.
+    * @param reason
+    *   Human-readable, informal, event that caused the dump.
     */
   final def dumpMigrationState(reason: String): Unit = {
     val filename =
@@ -98,11 +104,11 @@ abstract class SavepointsManager(migratorConfig: MigratorConfig) extends AutoClo
     Files.write(filename, modifiedConfig.render.getBytes(StandardCharsets.UTF_8))
 
     log.info(
-      s"Created a savepoint config at ${filename} due to ${reason}. ${describeMigrationState()}")
+      s"Created a savepoint config at ${filename} due to ${reason}. ${describeMigrationState()}"
+    )
   }
 
-  /**
-    * Stop the periodic creation of savepoints and release the associated resources.
+  /** Stop the periodic creation of savepoints and release the associated resources.
     */
   def close(): Unit = {
     scheduler.shutdown()
@@ -111,14 +117,12 @@ abstract class SavepointsManager(migratorConfig: MigratorConfig) extends AutoClo
     Signal.handle(new Signal("INT"), oldIntHandler)
   }
 
-  /**
-    * Provide readable logs by describing which parts of the migration have been completed already.
+  /** Provide readable logs by describing which parts of the migration have been completed already.
     */
   def describeMigrationState(): String
 
-  /**
-    * A copy of the original migration configuration, updated to describe which parts of the migration
-    * have been completed already.
+  /** A copy of the original migration configuration, updated to describe which parts of the
+    * migration have been completed already.
     */
   def updateConfigWithMigrationState(): MigratorConfig
 

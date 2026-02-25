@@ -18,18 +18,22 @@ import scala.util.Using
 object AlternatorMigrator {
   private val log = LogManager.getLogger("com.scylladb.migrator.alternator")
 
-  def migrateFromDynamoDB(source: SourceSettings.DynamoDB,
-                          target: TargetSettings.DynamoDB,
-                          migratorConfig: MigratorConfig)(implicit spark: SparkSession): Unit = {
+  def migrateFromDynamoDB(
+    source: SourceSettings.DynamoDB,
+    target: TargetSettings.DynamoDB,
+    migratorConfig: MigratorConfig
+  )(implicit spark: SparkSession): Unit = {
     val (sourceRDD, sourceTableDesc) =
       readers.DynamoDB.readRDD(spark, source, migratorConfig.skipSegments)
     val maybeStreamedSource = if (target.streamChanges) Some(source) else None
     migrate(sourceRDD, sourceTableDesc, maybeStreamedSource, target, migratorConfig)
   }
 
-  def migrateFromS3Export(source: SourceSettings.DynamoDBS3Export,
-                          target: TargetSettings.DynamoDB,
-                          migratorConfig: MigratorConfig)(implicit spark: SparkSession): Unit = {
+  def migrateFromS3Export(
+    source: SourceSettings.DynamoDBS3Export,
+    target: TargetSettings.DynamoDB,
+    migratorConfig: MigratorConfig
+  )(implicit spark: SparkSession): Unit = {
     val (sourceRDD, sourceTableDesc) = readers.DynamoDBS3Export.readRDD(source)(spark.sparkContext)
     // Adapt the decoded items to the format expected by the EMR Hadoop connector
     val normalizedRDD =
@@ -42,19 +46,26 @@ object AlternatorMigrator {
     migrate(normalizedRDD, sourceTableDesc, None, target, migratorConfig)
   }
 
-  /**
-    * @param sourceRDD           Data to migrate
-    * @param sourceTableDesc     Description of the table to replicate on the target database
-    * @param maybeStreamedSource Settings of the source table in case `streamChanges` was `true`
-    * @param target              Target table settings
-    * @param migratorConfig      The complete original configuration
-    * @param spark               Spark session
+  /** @param sourceRDD
+    *   Data to migrate
+    * @param sourceTableDesc
+    *   Description of the table to replicate on the target database
+    * @param maybeStreamedSource
+    *   Settings of the source table in case `streamChanges` was `true`
+    * @param target
+    *   Target table settings
+    * @param migratorConfig
+    *   The complete original configuration
+    * @param spark
+    *   Spark session
     */
-  def migrate(sourceRDD: RDD[(Text, DynamoDBItemWritable)],
-              sourceTableDesc: TableDescription,
-              maybeStreamedSource: Option[SourceSettings.DynamoDB],
-              target: TargetSettings.DynamoDB,
-              migratorConfig: MigratorConfig)(implicit spark: SparkSession): Unit = {
+  def migrate(
+    sourceRDD: RDD[(Text, DynamoDBItemWritable)],
+    sourceTableDesc: TableDescription,
+    maybeStreamedSource: Option[SourceSettings.DynamoDB],
+    target: TargetSettings.DynamoDB,
+    migratorConfig: MigratorConfig
+  )(implicit spark: SparkSession): Unit = {
 
     log.info("We need to transfer: " + sourceRDD.getNumPartitions + " partitions in total")
 
@@ -62,7 +73,8 @@ object AlternatorMigrator {
       val targetTableDesc = {
         for (streamedSource <- maybeStreamedSource) {
           log.info(
-            "Source is a Dynamo table and change streaming requested; enabling Dynamo Stream")
+            "Source is a Dynamo table and change streaming requested; enabling Dynamo Stream"
+          )
           DynamoUtils.enableDynamoStream(streamedSource)
         }
 
@@ -93,7 +105,8 @@ object AlternatorMigrator {
           streamedSource,
           target,
           targetTableDesc,
-          migratorConfig.renamesMap)
+          migratorConfig.renamesMap
+        )
 
         streamingContext.start()
         streamingContext.awaitTermination()

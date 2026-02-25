@@ -18,50 +18,54 @@ object DynamoDBEndpoint {
 
 sealed trait SourceSettings
 object SourceSettings {
-  case class Cassandra(host: String,
-                       port: Int,
-                       localDC: Option[String],
-                       credentials: Option[Credentials],
-                       sslOptions: Option[SSLOptions],
-                       keyspace: String,
-                       table: String,
-                       splitCount: Option[Int],
-                       connections: Option[Int],
-                       fetchSize: Int,
-                       preserveTimestamps: Boolean,
-                       where: Option[String],
-                       consistencyLevel: String)
-      extends SourceSettings
-  case class DynamoDB(endpoint: Option[DynamoDBEndpoint],
-                      region: Option[String],
-                      credentials: Option[AWSCredentials],
-                      table: String,
-                      scanSegments: Option[Int],
-                      readThroughput: Option[Int],
-                      throughputReadPercent: Option[Float],
-                      maxMapTasks: Option[Int],
-                      removeConsumedCapacity: Option[Boolean] = None)
-      extends SourceSettings {
+  case class Cassandra(
+    host: String,
+    port: Int,
+    localDC: Option[String],
+    credentials: Option[Credentials],
+    sslOptions: Option[SSLOptions],
+    keyspace: String,
+    table: String,
+    splitCount: Option[Int],
+    connections: Option[Int],
+    fetchSize: Int,
+    preserveTimestamps: Boolean,
+    where: Option[String],
+    consistencyLevel: String
+  ) extends SourceSettings
+  case class DynamoDB(
+    endpoint: Option[DynamoDBEndpoint],
+    region: Option[String],
+    credentials: Option[AWSCredentials],
+    table: String,
+    scanSegments: Option[Int],
+    readThroughput: Option[Int],
+    throughputReadPercent: Option[Float],
+    maxMapTasks: Option[Int],
+    removeConsumedCapacity: Option[Boolean] = None
+  ) extends SourceSettings {
     lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
       AwsUtils.computeFinalCredentials(credentials, endpoint, region)
   }
-  case class Parquet(path: String,
-                     credentials: Option[AWSCredentials],
-                     endpoint: Option[DynamoDBEndpoint],
-                     region: Option[String])
-      extends SourceSettings {
+  case class Parquet(
+    path: String,
+    credentials: Option[AWSCredentials],
+    endpoint: Option[DynamoDBEndpoint],
+    region: Option[String]
+  ) extends SourceSettings {
     lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
       AwsUtils.computeFinalCredentials(credentials, endpoint, region)
   }
 
-  case class DynamoDBS3Export(bucket: String,
-                              manifestKey: String,
-                              tableDescription: DynamoDBS3Export.TableDescription,
-                              endpoint: Option[DynamoDBEndpoint],
-                              region: Option[String],
-                              credentials: Option[AWSCredentials],
-                              usePathStyleAccess: Option[Boolean])
-      extends SourceSettings {
+  case class DynamoDBS3Export(
+    bucket: String,
+    manifestKey: String,
+    tableDescription: DynamoDBS3Export.TableDescription,
+    endpoint: Option[DynamoDBEndpoint],
+    region: Option[String],
+    credentials: Option[AWSCredentials],
+    usePathStyleAccess: Option[Boolean]
+  ) extends SourceSettings {
     lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
       AwsUtils.computeFinalCredentials(credentials, endpoint, region)
   }
@@ -69,7 +73,8 @@ object SourceSettings {
   object DynamoDBS3Export {
 
     /** Model the required fields of the “TableCreationParameters” object from the AWS API.
-      * @see https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_TableCreationParameters.html
+      * @see
+      *   https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_TableCreationParameters.html
       */
     case class TableDescription(
       attributeDefinitions: Seq[AttributeDefinition],

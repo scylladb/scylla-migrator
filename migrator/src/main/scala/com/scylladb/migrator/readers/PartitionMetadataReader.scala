@@ -9,10 +9,9 @@ case class PartitionMetadata(
   filename: String
 )
 
-/**
-  * This reader uses Spark's internal partition information to build mappings
-  * between partition IDs and file paths. This allows us to track when all
-  * partitions of a file have been processed, enabling file-level savepoints.
+/** This reader uses Spark's internal partition information to build mappings between partition IDs
+  * and file paths. This allows us to track when all partitions of a file have been processed,
+  * enabling file-level savepoints.
   */
 object PartitionMetadataReader {
   private val logger = LogManager.getLogger("com.scylladb.migrator.readers.PartitionMetadataReader")
@@ -29,9 +28,8 @@ object PartitionMetadataReader {
 
       val fileMap: Map[Int, Seq[String]] = PartitionMetadataExtractor.getPartitionFiles(df)
 
-      val metadata = fileMap.flatMap {
-        case (partId, files) =>
-          files.map(f => PartitionMetadata(partId, f))
+      val metadata = fileMap.flatMap { case (partId, files) =>
+        files.map(f => PartitionMetadata(partId, f))
       }.toSeq
 
       logger.info(s"Discovered ${metadata.size} partition-to-file mappings")
@@ -39,9 +37,8 @@ object PartitionMetadataReader {
       if (logger.isDebugEnabled) {
         val fileStats = metadata.groupBy(_.filename).view.mapValues(_.size)
         logger.debug(s"Files distribution: ${fileStats.size} unique files")
-        fileStats.foreach {
-          case (file, partCount) =>
-            logger.debug(s"  File: $file -> $partCount partition(s)")
+        fileStats.foreach { case (file, partCount) =>
+          logger.debug(s"  File: $file -> $partCount partition(s)")
         }
       }
 

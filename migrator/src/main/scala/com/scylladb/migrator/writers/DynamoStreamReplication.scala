@@ -42,7 +42,8 @@ object DynamoStreamReplication {
     msgs: RDD[Option[DynamoItem]],
     target: TargetSettings.DynamoDB,
     renamesMap: Map[String, String],
-    targetTableDesc: TableDescription)(implicit spark: SparkSession): Unit = {
+    targetTableDesc: TableDescription
+  )(implicit spark: SparkSession): Unit = {
     val rdd = msgs.flatMap(_.toSeq)
 
     val putCount = spark.sparkContext.longAccumulator("putCount")
@@ -58,7 +59,7 @@ object DynamoStreamReplication {
             target.region,
             Seq.empty
           )
-        try {
+        try
           partition.foreach { item =>
             val isPut = item.get(operationTypeColumn) == putOperation
 
@@ -68,13 +69,14 @@ object DynamoStreamReplication {
 
             if (isPut) {
               putCount.add(1)
-              val finalItem = itemWithoutOp.asScala.map {
-                case (key, value) => renamesMap.getOrElse(key, key) -> value
+              val finalItem = itemWithoutOp.asScala.map { case (key, value) =>
+                renamesMap.getOrElse(key, key) -> value
               }.asJava
-              try {
+              try
                 client.putItem(
-                  PutItemRequest.builder().tableName(target.table).item(finalItem).build())
-              } catch {
+                  PutItemRequest.builder().tableName(target.table).item(finalItem).build()
+                )
+              catch {
                 case e: Exception =>
                   log.error(s"Failed to put item into ${target.table}", e)
               }
@@ -84,18 +86,18 @@ object DynamoStreamReplication {
                 .filter { case (key, _) => keyAttributeNames.contains(key) }
                 .map { case (key, value) => renamesMap.getOrElse(key, key) -> value }
                 .asJava
-              try {
+              try
                 client.deleteItem(
-                  DeleteItemRequest.builder().tableName(target.table).key(keyToDelete).build())
-              } catch {
+                  DeleteItemRequest.builder().tableName(target.table).key(keyToDelete).build()
+                )
+              catch {
                 case e: Exception =>
                   log.error(s"Failed to delete item from ${target.table}", e)
               }
             }
           }
-        } finally {
+        finally
           client.close()
-        }
       }
     }
 
@@ -110,17 +112,19 @@ object DynamoStreamReplication {
     }
   }
 
-  def createDStream(spark: SparkSession,
-                    streamingContext: StreamingContext,
-                    src: SourceSettings.DynamoDB,
-                    target: TargetSettings.DynamoDB,
-                    targetTableDesc: TableDescription,
-                    renamesMap: Map[String, String]): Unit =
+  def createDStream(
+    spark: SparkSession,
+    streamingContext: StreamingContext,
+    src: SourceSettings.DynamoDB,
+    target: TargetSettings.DynamoDB,
+    targetTableDesc: TableDescription,
+    renamesMap: Map[String, String]
+  ): Unit =
     new KinesisDynamoDBInputDStream(
       streamingContext,
-      streamName        = src.table,
-      regionName        = src.region.orNull,
-      initialPosition   = new KinesisInitialPositions.TrimHorizon,
+      streamName = src.table,
+      regionName = src.region.orNull,
+      initialPosition = new KinesisInitialPositions.TrimHorizon,
       checkpointAppName = s"migrator_${src.table}_${System.currentTimeMillis()}",
       messageHandler = {
         case recAdapter: RecordAdapter =>
@@ -144,15 +148,13 @@ object DynamoStreamReplication {
         case _ => None
       },
       kinesisCreds = src.credentials
-        .map {
-          case AWSCredentials(accessKey, secretKey, maybeAssumeRole) =>
-            val builder =
-              SparkAWSCredentials.builder
-                .basicCredentials(accessKey, secretKey)
-            for (assumeRole <- maybeAssumeRole) {
-              builder.stsCredentials(assumeRole.arn, assumeRole.getSessionName)
-            }
-            builder.build()
+        .map { case AWSCredentials(accessKey, secretKey, maybeAssumeRole) =>
+          val builder =
+            SparkAWSCredentials.builder
+              .basicCredentials(accessKey, secretKey)
+          for (assumeRole <- maybeAssumeRole)
+            builder.stsCredentials(assumeRole.arn, assumeRole.getSessionName)
+          builder.build()
         }
         .getOrElse(SparkAWSCredentials.builder.build())
     ).foreachRDD { msgs =>

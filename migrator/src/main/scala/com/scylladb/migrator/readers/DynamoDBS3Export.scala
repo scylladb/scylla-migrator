@@ -16,10 +16,10 @@ import software.amazon.awssdk.services.dynamodb.model.{
   BillingMode,
   BillingModeSummary,
   KeySchemaElement,
+  KeyType => DdbKeyType,
   ProvisionedThroughputDescription,
   ScalarAttributeType,
-  TableDescription,
-  KeyType => DdbKeyType
+  TableDescription
 }
 import software.amazon.awssdk.services.s3.S3Client
 import software.amazon.awssdk.services.s3.model.GetObjectRequest
@@ -42,18 +42,17 @@ object DynamoDBS3Export {
           source.region,
           source.finalCredentials.map(_.toProvider)
         )
-    for (usePathStyleAccess <- source.usePathStyleAccess) {
+    for (usePathStyleAccess <- source.usePathStyleAccess)
       s3ClientBuilder.forcePathStyle(usePathStyleAccess)
-    }
     s3ClientBuilder.build()
   }
 
-  /**
-    * Read the DynamoDB S3 Export data as described here:
+  /** Read the DynamoDB S3 Export data as described here:
     * [[https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/S3DataExport.Output.html]]
     */
-  def readRDD(source: SourceSettings.DynamoDBS3Export)(
-    implicit spark: SparkContext): (RDD[Map[String, AttributeValue]], TableDescription) = {
+  def readRDD(
+    source: SourceSettings.DynamoDBS3Export
+  )(implicit spark: SparkContext): (RDD[Map[String, AttributeValue]], TableDescription) = {
 
     val s3Client = buildS3Client(source)
 
@@ -64,17 +63,17 @@ object DynamoDBS3Export {
           .fromInputStream(
             s3Client
               .getObjectAsBytes(
-                GetObjectRequest.builder().bucket(source.bucket).key(source.manifestKey).build())
+                GetObjectRequest.builder().bucket(source.bucket).key(source.manifestKey).build()
+              )
               .asInputStream()
           )
           .mkString
       ).fold(error => sys.error(s"Unable to read the export manifest summary: ${error}"), identity)
 
-    for (exportType <- summary.exportType) {
+    for (exportType <- summary.exportType)
       if (exportType != fullExportType) {
         sys.error(s"Unsupported export type: ${summary.exportType.get}")
       }
-    }
 
     if (summary.outputFormat != dynamoDBJsonFormat) {
       sys.error(s"Unsupported export format: ${summary.outputFormat}")
@@ -94,7 +93,8 @@ object DynamoDBS3Export {
                 .builder()
                 .bucket(source.bucket)
                 .key(summary.manifestFilesS3Key)
-                .build())
+                .build()
+            )
             .asInputStream()
         )
         .getLines()
@@ -104,7 +104,8 @@ object DynamoDBS3Export {
           decode[ManifestFile](manifestFileJson).fold(
             error =>
               sys.error(
-                s"Unable to parse the manifest file ${summary.manifestFilesS3Key}: ${error}"),
+                s"Unable to parse the manifest file ${summary.manifestFilesS3Key}: ${error}"
+              ),
             identity
           )
         }
@@ -126,60 +127,66 @@ object DynamoDBS3Export {
                         .builder()
                         .bucket(source.bucket)
                         .key(manifestFile.dataFileS3Key)
-                        .build())
+                        .build()
+                    )
                     .asInputStream()
-                ))
+                )
+              )
               .getLines()
           }
         }
-        .map(decode(_)(itemDecoder)
-          .fold(error => sys.error(s"Error while decoding item data: ${error}"), identity))
+        .map(
+          decode(_)(itemDecoder)
+            .fold(error => sys.error(s"Error while decoding item data: ${error}"), identity)
+        )
 
     // Make up a table description although we don’t have an actual table as a source but a data export
     val tableDescription =
       TableDescription
         .builder()
         .keySchema(
-          source.tableDescription.keySchema.map(
-            key =>
-              KeySchemaElement
-                .builder()
-                .attributeName(key.name)
-                .keyType(key.`type` match {
-                  case KeyType.Hash  => DdbKeyType.HASH
-                  case KeyType.Range => DdbKeyType.RANGE
-                })
-                .build()
+          source.tableDescription.keySchema.map(key =>
+            KeySchemaElement
+              .builder()
+              .attributeName(key.name)
+              .keyType(key.`type` match {
+                case KeyType.Hash  => DdbKeyType.HASH
+                case KeyType.Range => DdbKeyType.RANGE
+              })
+              .build()
           ): _*
         )
         .attributeDefinitions(
-          source.tableDescription.attributeDefinitions.map(
-            attr =>
-              AttributeDefinition
-                .builder()
-                .attributeName(attr.name)
-                .attributeType(attr.`type` match {
-                  case AttributeType.S => ScalarAttributeType.S
-                  case AttributeType.N => ScalarAttributeType.N
-                  case AttributeType.B => ScalarAttributeType.B
-                })
-                .build()
+          source.tableDescription.attributeDefinitions.map(attr =>
+            AttributeDefinition
+              .builder()
+              .attributeName(attr.name)
+              .attributeType(attr.`type` match {
+                case AttributeType.S => ScalarAttributeType.S
+                case AttributeType.N => ScalarAttributeType.N
+                case AttributeType.B => ScalarAttributeType.B
+              })
+              .build()
           ): _*
         )
         .provisionedThroughput(ProvisionedThroughputDescription.builder().build())
-        .billingModeSummary(BillingModeSummary
-          .builder()
-          .billingMode(source.tableDescription.billingMode.getOrElse(BillingMode.PAY_PER_REQUEST))
-          .build())
+        .billingModeSummary(
+          BillingModeSummary
+            .builder()
+            .billingMode(source.tableDescription.billingMode.getOrElse(BillingMode.PAY_PER_REQUEST))
+            .build()
+        )
         .build()
 
     (rdd, tableDescription)
   }
 
-  case class ManifestSummary(manifestFilesS3Key: String,
-                             itemCount: Long,
-                             exportType: Option[String],
-                             outputFormat: String)
+  case class ManifestSummary(
+    manifestFilesS3Key: String,
+    itemCount: Long,
+    exportType: Option[String],
+    outputFormat: String
+  )
   object ManifestSummary {
     implicit val jsonDecoder: Decoder[ManifestSummary] = deriveDecoder[ManifestSummary]
   }
