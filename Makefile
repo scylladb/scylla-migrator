@@ -94,7 +94,8 @@ start-services: spark-image ## Start all Docker Compose test services
 	docker compose -f $(COMPOSE_FILE) up -d
 
 start-services-aws: spark-image ## Start only services needed for AWS tests
-	$(Q)docker compose -f $(COMPOSE_FILE) up -d scylla spark-master spark-worker
+	$(Q)sudo chmod -R 777 ./tests/docker/scylla
+	docker compose -f $(COMPOSE_FILE) up -d scylla spark-master spark-worker
 
 wait-for-services: ## Wait for all test services to become ready
 	$(Q)$(call wait-for-port,8000)
