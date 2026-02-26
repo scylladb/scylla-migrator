@@ -56,6 +56,9 @@ jobs:
           .github/wait-for-cql.sh scylla
           .github/wait-for-port.sh 8080 # Spark master
           .github/wait-for-port.sh 8081 # Spark worker
+      - name: Dump container logs on failure
+        if: failure()
+        run: docker compose -f docker-compose-tests.yml logs
       - name: Run tests accessing AWS
         run: sbt "testOnly -- --include-categories=com.scylladb.migrator.AWS"
       - name: Stop services
