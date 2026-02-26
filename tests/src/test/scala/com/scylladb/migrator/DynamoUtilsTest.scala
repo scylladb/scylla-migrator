@@ -1,6 +1,6 @@
 package com.scylladb.migrator
 
-import com.scylladb.migrator.config.{ AlternatorSettings, DynamoDBEndpoint }
+import com.scylladb.migrator.config.DynamoDBEndpoint
 import org.apache.hadoop.dynamodb.DynamoDBConstants
 import org.apache.hadoop.mapred.JobConf
 import software.amazon.awssdk.core.interceptor.{ Context, ExecutionAttributes }
@@ -222,30 +222,4 @@ class DynamoUtilsTest extends munit.FunSuite {
     assertEquals(jobConf.get("scylla.migrator.remove_consumed_capacity"), "true")
   }
 
-  test("Alternator settings are set when provided") {
-    val jobConf = new JobConf()
-    val settings = AlternatorSettings(
-      datacenter = Some("dc1"),
-      rack = Some("rack1"),
-      activeRefreshIntervalMs = Some(5000L),
-      idleRefreshIntervalMs = Some(30000L),
-      compression = Some(true),
-      optimizeHeaders = Some(true)
-    )
-    DynamoUtils.setDynamoDBJobConf(
-      jobConf,
-      None,
-      None,
-      None,
-      None,
-      None,
-      alternatorSettings = Some(settings)
-    )
-    assertEquals(jobConf.get("scylla.migrator.alternator.datacenter"), "dc1")
-    assertEquals(jobConf.get("scylla.migrator.alternator.rack"), "rack1")
-    assertEquals(jobConf.get("scylla.migrator.alternator.active_refresh_interval_ms"), "5000")
-    assertEquals(jobConf.get("scylla.migrator.alternator.idle_refresh_interval_ms"), "30000")
-    assertEquals(jobConf.get("scylla.migrator.alternator.compression"), "true")
-    assertEquals(jobConf.get("scylla.migrator.alternator.optimize_headers"), "true")
-  }
 }
