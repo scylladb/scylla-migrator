@@ -6,7 +6,7 @@ on:
     paths:
       - 'dockerfiles/spark/**'
       - '.github/workflows/spark-image.yml'
-      - '.github/spark-cache.sh'
+      - 'Makefile'
   workflow_dispatch:
 
 jobs:
@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build and push Spark image to cache
-        run: bash .github/spark-cache.sh
+        run: make spark-image
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}

@@ -9,7 +9,7 @@ on:
       - 'Dockerfile'
       - 'dockerfiles/**'
       - '.github/workflows/**'
-      - '.github/*.sh'
+      - 'Makefile'
 
   pull_request:
     paths:
@@ -18,7 +18,7 @@ on:
       - 'Dockerfile'
       - 'dockerfiles/**'
       - '.github/workflows/**'
-      - '.github/*.sh'
+      - 'Makefile'
 
 env:
   TUTORIAL_DIR: docs/source/tutorials/dynamodb-to-scylladb-alternator
@@ -35,7 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Pull or build Spark image
-        run: bash .github/spark-cache.sh
+        run: make spark-image
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -52,10 +52,24 @@ jobs:
           docker compose up -d
       - name: Wait for the services to be up
         run: |
-          .github/wait-for-port.sh 8000 # DynamoDB
-          .github/wait-for-port.sh 8001 # ScyllaDB Alternator
-          .github/wait-for-port.sh 8080 # Spark master
-          .github/wait-for-port.sh 8081 # Spark worker
+          wait_for_port() {
+            local port=$1 attempts=0 max=480
+            echo "Waiting for port $port..."
+            while ! curl -s "http://127.0.0.1:$port" > /dev/null; do
+              [[ $attempts -ge $max ]] && echo "Failed!" && exit 1
+              attempts=$((attempts+1))
+              sleep 1
+            done
+          }
+          wait_for_port 8000  # DynamoDB
+          wait_for_port 8001  # ScyllaDB Alternator
+          wait_for_port 8080  # Spark master
+          wait_for_port 8081  # Spark worker
+      - name: Dump container logs on failure
+        if: failure()
+        run: |
+          cd $TUTORIAL_DIR
+          docker compose logs
       - name: Run tutorial
         run: |
           cd $TUTORIAL_DIR

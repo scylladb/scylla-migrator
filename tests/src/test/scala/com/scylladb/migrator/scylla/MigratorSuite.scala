@@ -4,6 +4,9 @@ import com.datastax.oss.driver.api.core.CqlSession
 import com.datastax.oss.driver.api.querybuilder.SchemaBuilder
 import com.scylladb.migrator.CassandraUtils.dropAndRecreateTable
 
+import com.scylladb.migrator.Integration
+import org.junit.experimental.categories.Category
+
 import java.net.InetSocketAddress
 import scala.jdk.CollectionConverters._
 
@@ -15,6 +18,7 @@ import scala.jdk.CollectionConverters._
   * @param sourcePort
   *   TCP port of the source database. See docker-compose-test.yml.
   */
+@Category(Array(classOf[Integration]))
 abstract class MigratorSuite(sourcePort: Int) extends munit.FunSuite {
 
   val keyspace = "test"
