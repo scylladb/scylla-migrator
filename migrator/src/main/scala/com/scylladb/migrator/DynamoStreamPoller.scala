@@ -18,8 +18,36 @@ import software.amazon.awssdk.services.dynamodb.streams.DynamoDbStreamsClient
 import java.util
 import scala.jdk.CollectionConverters._
 
+/** Trait for stream polling operations, enabling test stubbing. */
+trait StreamPollerOps {
+  def getStreamArn(client: DynamoDbClient, tableName: String): String
+  def listShards(streamsClient: DynamoDbStreamsClient, streamArn: String): Seq[Shard]
+  def getShardIterator(
+    streamsClient: DynamoDbStreamsClient,
+    streamArn: String,
+    shardId: String,
+    iteratorType: ShardIteratorType
+  ): String
+  def getShardIteratorAfterSequence(
+    streamsClient: DynamoDbStreamsClient,
+    streamArn: String,
+    shardId: String,
+    sequenceNumber: String
+  ): String
+  def getRecords(
+    streamsClient: DynamoDbStreamsClient,
+    shardIterator: String
+  ): (Seq[Record], Option[String])
+  def recordToItem(
+    record: Record,
+    operationTypeColumn: String,
+    putMarker: AttributeValue,
+    deleteMarker: AttributeValue
+  ): Option[util.Map[String, AttributeValue]]
+}
+
 /** Polls DynamoDB Streams using the v2 SDK directly, replacing the KCL-based approach. */
-object DynamoStreamPoller {
+object DynamoStreamPoller extends StreamPollerOps {
   private val log = LogManager.getLogger("com.scylladb.migrator.DynamoStreamPoller")
 
   /** Discover the stream ARN for the given table. */

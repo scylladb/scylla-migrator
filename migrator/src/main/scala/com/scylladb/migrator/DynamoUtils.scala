@@ -260,10 +260,16 @@ object DynamoUtils {
     endpoint: Option[DynamoDBEndpoint],
     creds: Option[AwsCredentialsProvider],
     region: Option[String]
-  ): DynamoDbStreamsClient =
-    AwsUtils
-      .configureClientBuilder(DynamoDbStreamsClient.builder(), endpoint, region, creds)
+  ): DynamoDbStreamsClient = {
+    val builder =
+      AwsUtils.configureClientBuilder(DynamoDbStreamsClient.builder(), endpoint, region, creds)
+    val conf = ClientOverrideConfiguration
+      .builder()
+      .apiCallTimeout(java.time.Duration.ofSeconds(30))
+      .apiCallAttemptTimeout(java.time.Duration.ofSeconds(10))
       .build()
+    builder.overrideConfiguration(conf).build()
+  }
 
   /** Optionally set a configuration. If `maybeValue` is empty, nothing is done. Otherwise, its
     * value is set to the `name` property on the `jobConf`.
