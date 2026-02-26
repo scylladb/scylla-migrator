@@ -17,7 +17,7 @@ jobs:
           cache: sbt
       - uses: sbt/setup-sbt@v1            
       - name: Build
-        run: ./build.sh
+        run: make build
       - name: Publish
         uses: actions/upload-release-asset@v1
         env:

@@ -6,24 +6,24 @@ on:
     paths:
       - '**.scala'
       - '**.sbt'
+      - 'Makefile'
       - 'Dockerfile'
       - 'dockerfiles/**'
       - 'docker-compose-tests.yml'
       - '.github/workflows/**'
-      - '.github/*.sh'
 
   pull_request:
     paths:
       - '**.scala'
       - '**.sbt'
+      - 'Makefile'
       - 'Dockerfile'
       - 'dockerfiles/**'
       - 'docker-compose-tests.yml'
       - '.github/workflows/**'
-      - '.github/*.sh'
 
 jobs:
-  check-format:
+  lint:
     name: Check formatting
     runs-on: ubuntu-latest
     steps:
@@ -35,23 +35,38 @@ jobs:
           cache: sbt
       - uses: sbt/setup-sbt@v1
       - name: Check formatting
-        run: sbt scalafmtCheckAll
+        run: make lint
 
   build:
     name: Build
     uses: ./.github/workflows/build.yml
 
-  test:
-    name: Test
+  test-unit:
+    name: Unit tests
     needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Pull or build Spark image
-        run: bash .github/spark-cache.sh
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 8
+          cache: sbt
+      - uses: sbt/setup-sbt@v1
+      - name: Download assembly JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: migrator-jar
+          path: migrator/target/scala-2.13/
+      - name: Run unit tests
+        run: make test-unit
+
+  test-integration:
+    name: Integration tests
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -64,34 +79,21 @@ jobs:
           name: migrator-jar
           path: migrator/target/scala-2.13/
       - name: Start services
-        run: |
-          sudo chmod -R 777 ./tests/docker/scylla ./tests/docker/scylla-source
-          docker compose -f docker-compose-tests.yml up -d
+        run: make start-services
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Wait for services
-        run: |
-          .github/wait-for-port.sh 8000 # ScyllaDB Alternator
-          .github/wait-for-port.sh 8001 # DynamoDB
-          .github/wait-for-port.sh 4566 # S3
-          .github/wait-for-cql.sh scylla
-          .github/wait-for-cql.sh cassandra
-          .github/wait-for-cql.sh scylla-source
-          .github/wait-for-port.sh 8080 # Spark master
-          .github/wait-for-port.sh 8081 # Spark worker
+        run: make wait-for-services
       - name: Dump container logs on failure
         if: failure()
-        run: docker compose -f docker-compose-tests.yml logs
-      - name: Run tests locally
-        run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            sbt coverage "testOnly -- --exclude-categories=com.scylladb.migrator.AWS"
-          else
-            sbt "testOnly -- --exclude-categories=com.scylladb.migrator.AWS"
-          fi
+        run: make dump-logs
+      - name: Run integration tests
+        run: make test-integration
+        env:
+          COVERAGE: ${{ github.event_name == 'push' && 'true' || 'false' }}
       - name: Stop services
-        run: docker compose -f docker-compose-tests.yml down
-      - name: Generate coverage report
-        if: github.event_name == 'push'
-        run: sbt coverageReport
+        run: make stop-services
       - name: Upload coverage report
         if: github.event_name == 'push'
         uses: actions/upload-artifact@v4

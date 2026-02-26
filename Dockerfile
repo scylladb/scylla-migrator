@@ -16,8 +16,8 @@ COPY . /app
 # Set JAVA_HOME
 ENV JAVA_HOME=/usr/local/openjdk-11
 
-# Run build.sh to produce the jar
-RUN chmod +x build.sh && ./build.sh
+# Build the assembly JAR
+RUN export TERM=xterm-color && sbt -mem 8192 migrator/assembly
 
 FROM scratch AS final
 COPY --from=build /app/migrator/target/scala-2.13/scylla-migrator-assembly.jar .

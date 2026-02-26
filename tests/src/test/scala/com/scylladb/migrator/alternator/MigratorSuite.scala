@@ -1,6 +1,6 @@
 package com.scylladb.migrator.alternator
 
-import com.scylladb.migrator.AWS
+import com.scylladb.migrator.{ AWS, Integration }
 import org.junit.experimental.categories.Category
 import software.amazon.awssdk.auth.credentials.{ AwsBasicCredentials, StaticCredentialsProvider }
 import software.amazon.awssdk.regions.Region
@@ -202,7 +202,8 @@ trait MigratorSuite extends munit.FunSuite {
   override def munitFixtures: Seq[Fixture[_]] = Seq(sourceDDb, targetAlternator)
 }
 
-trait MigratorSuiteWithDynamoDBLocal extends MigratorSuite {
+@Category(Array(classOf[Integration]))
+abstract class MigratorSuiteWithDynamoDBLocal extends MigratorSuite {
 
   lazy val sourceDDb: Fixture[DynamoDbClient] = new Fixture[DynamoDbClient]("sourceDDb") {
     private var client: DynamoDbClient = null
@@ -221,7 +222,7 @@ trait MigratorSuiteWithDynamoDBLocal extends MigratorSuite {
 
 }
 
-@Category(Array(classOf[AWS]))
+@Category(Array(classOf[Integration], classOf[AWS]))
 abstract class MigratorSuiteWithAWS extends MigratorSuite {
 
   lazy val sourceDDb: Fixture[DynamoDbClient] = new Fixture[DynamoDbClient]("sourceDDb") {

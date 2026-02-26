@@ -20,17 +20,12 @@ jobs:
     name: Build
     uses: ./.github/workflows/build.yml
 
-  test:
-    name: Test
+  test-aws:
+    name: AWS integration tests
     needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Pull or build Spark image
-        run: bash .github/spark-cache.sh
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -43,7 +38,10 @@ jobs:
           name: migrator-jar
           path: migrator/target/scala-2.13/
       - name: Start services
-        run: docker compose -f docker-compose-tests.yml up -d scylla spark-master spark-worker
+        run: make start-services-aws
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: configure aws credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -51,15 +49,11 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           role-session-name: GitHub_to_AWS_via_FederatedOIDC
       - name: Wait for services
-        run: |
-          .github/wait-for-port.sh 8000 # ScyllaDB Alternator
-          .github/wait-for-cql.sh scylla
-          .github/wait-for-port.sh 8080 # Spark master
-          .github/wait-for-port.sh 8081 # Spark worker
+        run: make wait-for-services-aws
       - name: Dump container logs on failure
         if: failure()
-        run: docker compose -f docker-compose-tests.yml logs
-      - name: Run tests accessing AWS
-        run: sbt "testOnly -- --include-categories=com.scylladb.migrator.AWS"
+        run: make dump-logs
+      - name: Run AWS integration tests
+        run: make test-integration-aws
       - name: Stop services
-        run: docker compose -f docker-compose-tests.yml down
+        run: make stop-services
