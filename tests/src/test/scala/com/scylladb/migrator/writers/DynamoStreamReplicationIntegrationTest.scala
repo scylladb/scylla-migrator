@@ -170,4 +170,69 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
         assert(!item.contains(operationTypeColumn))
       }
   }
+
+  withTable(tableName + "Renames").test(
+    "should correctly apply renames when renamesMap is provided"
+  ) { _ =>
+    val renamedTable = tableName + "Renames"
+    targetAlternator().createTable(
+      CreateTableRequest
+        .builder()
+        .tableName(renamedTable)
+        .keySchema(KeySchemaElement.builder().attributeName("id").keyType(KeyType.HASH).build())
+        .attributeDefinitions(
+          AttributeDefinition
+            .builder()
+            .attributeName("id")
+            .attributeType(ScalarAttributeType.S)
+            .build()
+        )
+        .provisionedThroughput(
+          ProvisionedThroughput.builder().readCapacityUnits(25L).writeCapacityUnits(25L).build()
+        )
+        .build()
+    )
+    targetAlternator()
+      .waiter()
+      .waitUntilTableExists(DescribeTableRequest.builder().tableName(renamedTable).build())
+
+    val streamEvents: Seq[Option[DynamoStreamReplication.DynamoItem]] = Seq(
+      Some(
+        Map(
+          "id"                -> AttributeValue.fromS("k1"),
+          "oldName"           -> AttributeValue.fromS("val1"),
+          operationTypeColumn -> putOperation
+        ).asJava
+      )
+    )
+
+    val targetSettings = TargetSettings.DynamoDB(
+      table                       = renamedTable,
+      region                      = Some("eu-central-1"),
+      endpoint                    = Some(DynamoDBEndpoint("http://localhost", 8000)),
+      credentials                 = Some(AWSCredentials("dummy", "dummy", None)),
+      streamChanges               = false,
+      skipInitialSnapshotTransfer = Some(true),
+      writeThroughput             = None,
+      throughputWritePercent      = None
+    )
+
+    val tableDesc = targetAlternator()
+      .describeTable(DescribeTableRequest.builder().tableName(renamedTable).build())
+      .table()
+
+    DynamoStreamReplication.run(
+      streamEvents,
+      targetSettings,
+      Map("oldName" -> "newName"),
+      tableDesc
+    )
+
+    val finalItems = scanAll(targetAlternator(), renamedTable)
+    assertEquals(finalItems.size, 1)
+    val item = finalItems.head
+    assertEquals(item("id").s, "k1")
+    assertEquals(item("newName").s, "val1")
+    assert(!item.contains("oldName"))
+  }
 }
