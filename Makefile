@@ -7,13 +7,22 @@ SHELL := bash
         start-services-scylla wait-for-services-scylla \
         start-services-alternator wait-for-services-alternator \
         test test-unit test-integration test-integration-scylla test-integration-alternator \
-        test-integration-aws dump-logs
+        test-integration-aws \
+        test-benchmark test-benchmark-jmh test-benchmark-jmh-quick \
+        test-benchmark-e2e test-benchmark-e2e-sanity test-benchmark-e2e-sanity-scylla \
+        test-benchmark-e2e-cassandra-scylla test-benchmark-e2e-scylla-scylla test-benchmark-e2e-dynamodb-alternator \
+        test-benchmark-e2e-scylla-parquet test-benchmark-e2e-parquet-scylla \
+        test-benchmark-e2e-cassandra-parquet \
+        test-benchmark-e2e-dynamodb-s3export test-benchmark-e2e-s3export-alternator \
+        dump-logs
 
 COMPOSE_FILE := docker-compose-tests.yml
 CACHE_REPO ?= scylladb/migrator-cache
 MAX_ATTEMPTS ?= 480
 COVERAGE ?= false
 VERBOSE ?= false
+E2E_CQL_ROWS ?= 5000000
+E2E_DDB_ROWS ?= 500000
 
 ifeq ($(COVERAGE),true)
 SBT_COVERAGE_PREFIX := coverage
@@ -149,14 +158,14 @@ dump-logs: ## Dump Docker Compose container logs
 test-unit: ## Run unit tests (no services required)
 	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly -- --exclude-categories=com.scylladb.migrator.Integration" $(SBT_COVERAGE_SUFFIX)
 
-test-integration: ## Run integration tests (requires services, excludes AWS)
-	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.AWS" $(SBT_COVERAGE_SUFFIX)
+test-integration: ## Run integration tests (requires services, excludes AWS, benchmarks, and E2E)
+	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.AWS,com.scylladb.migrator.E2E" $(SBT_COVERAGE_SUFFIX)
 
-test-integration-scylla: ## Run Scylla integration tests only
-	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.scylla.* -- --include-categories=com.scylladb.migrator.Integration" $(SBT_COVERAGE_SUFFIX)
+test-integration-scylla: ## Run Scylla integration tests only (excludes E2E benchmarks)
+	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.scylla.* -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.E2E" $(SBT_COVERAGE_SUFFIX)
 
-test-integration-alternator: ## Run Alternator integration tests only (excludes AWS)
-	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.alternator.* com.scylladb.migrator.writers.* -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.AWS" $(SBT_COVERAGE_SUFFIX)
+test-integration-alternator: ## Run Alternator integration tests only (excludes AWS and E2E benchmarks)
+	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.alternator.* com.scylladb.migrator.writers.* -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.AWS,com.scylladb.migrator.E2E" $(SBT_COVERAGE_SUFFIX)
 
 test-integration-aws: ## Run AWS integration tests (requires services + AWS credentials)
 	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly -- --include-categories=com.scylladb.migrator.AWS" $(SBT_COVERAGE_SUFFIX)
@@ -166,3 +175,63 @@ test: start-services ## Run all local tests (unit + integration, excludes AWS)
 	$(MAKE) wait-for-services
 	$(MAKE) test-unit
 	$(MAKE) test-integration
+
+test-benchmark-jmh: ## Run all JMH microbenchmarks with JSON output
+	$(Q)mkdir -p benchmarks/results
+	$(Q)sbt "benchmarks/Jmh/run -rf json -rff benchmarks/results/jmh-results.json"
+
+test-benchmark-jmh-quick: ## Smoke run JMH benchmarks (1 iteration, no warmup)
+	$(Q)mkdir -p benchmarks/results
+	$(Q)sbt "benchmarks/Jmh/run -i 1 -wi 0 -f 1 -rf json -rff benchmarks/results/jmh-results-quick.json"
+
+test-benchmark: start-services ## Start services and run all benchmarks (JMH + E2E)
+	$(Q)trap '$(MAKE) dump-logs || true; $(MAKE) stop-services' EXIT
+	$(MAKE) wait-for-services
+	$(MAKE) test-benchmark-jmh
+	$(MAKE) test-benchmark-e2e
+
+test-benchmark-e2e-sanity: ## Run E2E sanity suite (small row counts, ~2min, for CI)
+	$(Q)$(MAKE) test-benchmark-e2e E2E_CQL_ROWS=1000 E2E_DDB_ROWS=100
+
+test-benchmark-e2e-sanity-scylla: ## Run Scylla-only E2E sanity (no DynamoDB services needed)
+	$(Q)$(MAKE) test-benchmark-e2e-cassandra-scylla E2E_CQL_ROWS=1000
+	$(Q)$(MAKE) test-benchmark-e2e-scylla-scylla E2E_CQL_ROWS=1000
+	$(Q)$(MAKE) test-benchmark-e2e-scylla-parquet E2E_CQL_ROWS=1000
+	$(Q)$(MAKE) test-benchmark-e2e-parquet-scylla E2E_CQL_ROWS=1000
+	$(Q)$(MAKE) test-benchmark-e2e-cassandra-parquet E2E_CQL_ROWS=1000
+
+test-benchmark-e2e: ## Run all E2E throughput benchmarks (requires services)
+	# Sequential execution is required: parquet-scylla depends on scylla-parquet output,
+	# and s3export-alternator depends on dynamodb-s3export output.
+	$(Q)$(MAKE) test-benchmark-e2e-cassandra-scylla
+	$(Q)$(MAKE) test-benchmark-e2e-scylla-scylla
+	$(Q)$(MAKE) test-benchmark-e2e-dynamodb-alternator
+	$(Q)$(MAKE) test-benchmark-e2e-scylla-parquet
+	$(Q)$(MAKE) test-benchmark-e2e-parquet-scylla
+	$(Q)$(MAKE) test-benchmark-e2e-cassandra-parquet
+	$(Q)$(MAKE) test-benchmark-e2e-dynamodb-s3export
+	$(Q)$(MAKE) test-benchmark-e2e-s3export-alternator
+
+test-benchmark-e2e-cassandra-scylla: ## Run Cassandra->Scylla E2E benchmarks
+	$(Q)sbt -De2e.cql.rows=$(E2E_CQL_ROWS) "testOnly com.scylladb.migrator.scylla.CassandraToScyllaE2EBenchmark"
+
+test-benchmark-e2e-scylla-scylla: ## Run Scylla->Scylla E2E benchmarks
+	$(Q)sbt -De2e.cql.rows=$(E2E_CQL_ROWS) "testOnly com.scylladb.migrator.scylla.ScyllaToScyllaE2EBenchmark"
+
+test-benchmark-e2e-dynamodb-alternator: ## Run DynamoDB->Alternator E2E benchmarks
+	$(Q)sbt -De2e.ddb.rows=$(E2E_DDB_ROWS) "testOnly com.scylladb.migrator.alternator.DynamoDBToAlternatorE2EBenchmark"
+
+test-benchmark-e2e-scylla-parquet: ## Run Scylla->Parquet E2E benchmark
+	$(Q)sbt -De2e.cql.rows=$(E2E_CQL_ROWS) "testOnly com.scylladb.migrator.scylla.ScyllaToParquetE2EBenchmark"
+
+test-benchmark-e2e-parquet-scylla: ## Run Parquet->Scylla E2E benchmark (requires scylla-parquet to have run first)
+	$(Q)sbt -De2e.cql.rows=$(E2E_CQL_ROWS) "testOnly com.scylladb.migrator.scylla.ParquetToScyllaE2EBenchmark"
+
+test-benchmark-e2e-cassandra-parquet: ## Run Cassandra->Parquet E2E benchmark
+	$(Q)sbt -De2e.cql.rows=$(E2E_CQL_ROWS) "testOnly com.scylladb.migrator.scylla.CassandraToParquetE2EBenchmark"
+
+test-benchmark-e2e-dynamodb-s3export: ## Run DynamoDB->S3Export E2E benchmark
+	$(Q)sbt -De2e.ddb.rows=$(E2E_DDB_ROWS) "testOnly com.scylladb.migrator.alternator.DynamoDBToS3ExportE2EBenchmark"
+
+test-benchmark-e2e-s3export-alternator: ## Run S3Export->Alternator E2E benchmark (requires dynamodb-s3export to have run first)
+	$(Q)sbt -De2e.ddb.rows=$(E2E_DDB_ROWS) "testOnly com.scylladb.migrator.alternator.S3ExportToAlternatorE2EBenchmark"

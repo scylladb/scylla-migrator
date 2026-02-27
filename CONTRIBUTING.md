@@ -4,50 +4,124 @@
 
 Tests are implemented in the `tests` sbt submodule. They simulate the submission of a Spark job as described in the README. Therefore, before running the tests you need to build the migrator fat-jar and to set up a stack with a Spark cluster and databases to read data from and to write to.
 
-1. Build the migrator fat-jar and its dependencies
+### Prerequisites
 
-   ~~~ sh
-   make build
-   ~~~
-
-2. Set up the testing stack with Docker
-
-   ~~~ sh
-   docker compose -f docker-compose-tests.yml up
-   ~~~
-
-3. Run the tests locally
-
-   ~~~ sh
-   sbt "testOnly -- --exclude-categories=com.scylladb.migrator.AWS"
-   ~~~
-
-   Or, to run a single test:
-
-   ~~~ sh
-   sbt testOnly com.scylladb.migrator.BasicMigrationTest
-   ~~~
-
-  Or, to run the tests that access AWS, first configure your AWS credentials with `aws configure`, and then:
-
-  ~~~ sh
-  AWS_REGION=us-east-1 \
-  sbt "testOnly -- --include-categories=com.scylladb.migrator.AWS"
-  ~~~
-
-4. Ultimately, stop the Docker containers
-
-   ~~~ sh
-   docker compose -f docker-compose-tests.yml down
-   ~~~
-
-Make sure to re-build the fat-jar everytime you change something in the implementation:
+Build the migrator fat-jar (re-build every time you change the implementation):
 
 ~~~ sh
-sbt migrator/assembly
+make build
 ~~~
 
-And then re-run the tests.
+### Quick start
+
+Run all local tests (unit + integration) with a single command:
+
+~~~ sh
+make test
+~~~
+
+This starts Docker services, waits for readiness, runs the tests, and cleans up.
+
+### Test categories
+
+Tests are organized into categories using JUnit `@Category` annotations. The Makefile exposes targets for each:
+
+| Target | Category | Services required | Description |
+|--------|----------|-------------------|-------------|
+| `make test-unit` | _(none)_ | No | Parsers, encoders, config validation |
+| `make test-integration` | `Integration` | Yes | End-to-end migrations with small datasets |
+| `make test-integration-aws` | `AWS` | Yes + AWS credentials | Tests that access real AWS services |
+| `make test-benchmark-e2e-sanity` | `E2E` | Yes | All migration paths with minimal rows (~2 min) |
+| `make test-benchmark-e2e` | `E2E` | Yes | Full throughput benchmarks (5M CQL / 500k DDB rows) |
+| `make test-benchmark-jmh` | _(JMH)_ | No | JMH microbenchmarks for hot-path code |
+
+### Running tests manually
+
+1. Start the testing stack:
+
+   ~~~ sh
+   make start-services
+   make wait-for-services
+   ~~~
+
+2. Run the desired tests:
+
+   ~~~ sh
+   # Unit tests (no services needed)
+   make test-unit
+
+   # Integration tests
+   make test-integration
+
+   # A single test class
+   sbt "testOnly com.scylladb.migrator.BasicMigrationTest"
+
+   # AWS tests (requires `aws configure` first)
+   AWS_REGION=us-east-1 make test-integration-aws
+   ~~~
+
+3. Stop the Docker containers:
+
+   ~~~ sh
+   make stop-services
+   ~~~
+
+### E2E benchmark tests
+
+E2E benchmarks exercise every supported migration path end-to-end: seed data into a source database, run the migrator via Spark, then verify row counts and spot-check data in the target.
+
+**Migration paths covered:**
+
+| Target | Source | Destination |
+|--------|--------|-------------|
+| `test-benchmark-e2e-cassandra-scylla` | Cassandra | ScyllaDB |
+| `test-benchmark-e2e-scylla-scylla` | ScyllaDB | ScyllaDB |
+| `test-benchmark-e2e-dynamodb-alternator` | DynamoDB | Alternator |
+| `test-benchmark-e2e-scylla-parquet` | ScyllaDB | Parquet files |
+| `test-benchmark-e2e-parquet-scylla` | Parquet files | ScyllaDB |
+| `test-benchmark-e2e-cassandra-parquet` | Cassandra | Parquet files |
+| `test-benchmark-e2e-dynamodb-s3export` | DynamoDB | S3 Export format |
+| `test-benchmark-e2e-s3export-alternator` | S3 Export | Alternator |
+
+**Dependencies:** `parquet-scylla` requires `scylla-parquet` to run first (produces the Parquet files), and `s3export-alternator` requires `dynamodb-s3export`. The Makefile encodes these as target dependencies.
+
+**Row counts** are configurable via environment variables:
+
+~~~ sh
+# Sanity check (~2 min) — used in CI
+make test-benchmark-e2e-sanity
+
+# Custom row counts
+make test-benchmark-e2e E2E_CQL_ROWS=100000 E2E_DDB_ROWS=10000
+
+# Full benchmarks (default: 5M CQL, 500k DDB)
+make test-benchmark-e2e
+~~~
+
+### JMH microbenchmarks
+
+JMH benchmarks measure throughput of critical code paths (serialization, row comparison, value conversion) without requiring external services.
+
+~~~ sh
+# Quick smoke run (1 iteration, no warmup)
+make test-benchmark-jmh-quick
+
+# Full benchmark run with JSON output
+make test-benchmark-jmh
+~~~
+
+Results are saved to `benchmarks/results/`.
+
+### CI pipeline
+
+The GitHub Actions workflow (`.github/workflows/tests.yml`) runs on every push to `master` and on pull requests:
+
+1. **Lint** — `make lint` (scalafmt check)
+2. **Build** — `make build` (assembly JAR, uploaded as artifact)
+3. **Unit tests** — `make test-unit`
+4. **Integration tests** — `make test-integration` + `make test-benchmark-e2e-sanity`
+
+The E2E sanity suite runs as part of the integration test job, reusing the same Docker services.
 
 ## Debugging
 

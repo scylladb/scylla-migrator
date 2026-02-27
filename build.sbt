@@ -105,19 +105,47 @@ lazy val tests = project
     Test / parallelExecution := false,
     // Needed to build a Spark session on Java 17+, see https://stackoverflow.com/questions/73465937/apache-spark-3-3-0-breaks-on-java-17-with-cannot-access-class-sun-nio-ch-direct
     Test / javaOptions ++= {
-      val maybeJavaMajorVersion =
-        sys.props
-          .get("java.version")
-          .map(version => version.takeWhile(_ != '.').toInt)
-      if (maybeJavaMajorVersion.exists(_ > 11))
-        Seq("--add-exports", "java.base/sun.nio.ch=ALL-UNNAMED")
-      else
-        Nil
+      val javaCompat = {
+        val maybeJavaMajorVersion =
+          sys.props
+            .get("java.version")
+            .map(version => version.takeWhile(_ != '.').toInt)
+        if (maybeJavaMajorVersion.exists(_ > 11))
+          Seq("--add-exports", "java.base/sun.nio.ch=ALL-UNNAMED")
+        else
+          Nil
+      }
+      val e2eProps = Seq("e2e.cql.rows", "e2e.ddb.rows").flatMap { key =>
+        sys.props.get(key).map(v => s"-D${key}=${v}")
+      }
+      javaCompat ++ e2eProps
     },
     Test / fork := true
   )
   .dependsOn(migrator)
 
+lazy val benchmarks = project
+  .in(file("benchmarks"))
+  .enablePlugins(pl.project13.scala.sbt.JmhPlugin)
+  .settings(
+    name := "scylla-migrator-benchmarks",
+    libraryDependencies ++= Seq(
+      "org.apache.spark"        %% "spark-streaming"             % sparkVersion,
+      "org.apache.spark"        %% "spark-sql"                   % sparkVersion,
+      "software.amazon.awssdk"   % "dynamodb"                    % awsSdkVersion,
+      "com.amazonaws"            % "dynamodb-streams-kinesis-adapter" % dynamodbStreamsKinesisAdapterVersion,
+      "io.circe"                %% "circe-parser"                % circeVersion,
+      "com.scylladb"            %% "spark-scylladb-connector"    % connectorVersion
+    ),
+    Jmh / javaOptions ++= Seq(
+      "--add-exports",
+      "java.base/sun.nio.ch=ALL-UNNAMED"
+    ),
+    // Run JMH forks from the project root so relative output paths resolve correctly
+    Jmh / baseDirectory := (ThisBuild / baseDirectory).value
+  )
+  .dependsOn(migrator)
+
 lazy val root = project
   .in(file("."))
-  .aggregate(migrator, `spark-kinesis-dynamodb`, tests)
+  .aggregate(migrator, `spark-kinesis-dynamodb`, tests, benchmarks)
