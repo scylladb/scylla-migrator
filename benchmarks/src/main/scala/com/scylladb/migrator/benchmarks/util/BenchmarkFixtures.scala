@@ -113,4 +113,53 @@ object BenchmarkFixtures {
       null,
       null
     )
+
+  // --- Wide row fixtures (50 regular columns) ---
+
+  private val wideColumnCount = 50
+
+  val wideTimestampSchema: StructType = StructType(
+    StructField("id", StringType, nullable = false) +:
+      (1 to wideColumnCount).flatMap { j =>
+        Seq(
+          StructField(s"col$j", StringType, nullable           = true),
+          StructField(s"col${j}_ttl", IntegerType, nullable    = true),
+          StructField(s"col${j}_writetime", LongType, nullable = true)
+        )
+      }
+  )
+
+  val wideTableDef: TableDef = TableDef(
+    keyspaceName      = "bench",
+    tableName         = "wide",
+    partitionKey      = Seq(ColumnDef("id", PartitionKeyColumn, VarCharType)),
+    clusteringColumns = Seq.empty,
+    regularColumns =
+      (1 to wideColumnCount).map(j => ColumnDef(s"col$j", RegularColumn, VarCharType))
+  )
+
+  val widePrimaryKeyOrdinals: Map[String, Int] = Map("id" -> 0)
+
+  val wideRegularKeyOrdinals: Map[String, (Int, Int, Int)] =
+    (1 to wideColumnCount).map { j =>
+      val base = 1 + (j - 1) * 3
+      s"col$j" -> (base, base + 1, base + 2)
+    }.toMap
+
+  /** Generate a wide Row (50 columns) where all share the same timestamp (single-group path) */
+  def makeWideSingleTimestampRow(i: Int): Row = {
+    val writetime = 1000000L
+    val ttl = 3600
+    Row.fromSeq(
+      s"id-$i" +: (1 to wideColumnCount).flatMap(j => Seq(s"val-$j-$i", ttl, writetime))
+    )
+  }
+
+  /** Generate a wide Row (50 columns) where columns have varying timestamps (multi-group path) */
+  def makeWideMultiTimestampRow(i: Int): Row =
+    Row.fromSeq(
+      s"id-$i" +: (1 to wideColumnCount).flatMap { j =>
+        Seq(s"val-$j-$i", j * 100, j.toLong * 1000000L)
+      }
+    )
 }

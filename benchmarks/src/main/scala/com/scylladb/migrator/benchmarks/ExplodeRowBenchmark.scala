@@ -16,11 +16,15 @@ class ExplodeRowBenchmark {
 
   private var singleTimestampRow: org.apache.spark.sql.Row = _
   private var multiTimestampRow: org.apache.spark.sql.Row = _
+  private var wideSingleTimestampRow: org.apache.spark.sql.Row = _
+  private var wideMultiTimestampRow: org.apache.spark.sql.Row = _
 
   @Setup(Level.Trial)
   def setup(): Unit = {
-    singleTimestampRow = BenchmarkFixtures.makeSingleTimestampRow(1)
-    multiTimestampRow  = BenchmarkFixtures.makeMultiTimestampRow(1)
+    singleTimestampRow     = BenchmarkFixtures.makeSingleTimestampRow(1)
+    multiTimestampRow      = BenchmarkFixtures.makeMultiTimestampRow(1)
+    wideSingleTimestampRow = BenchmarkFixtures.makeWideSingleTimestampRow(1)
+    wideMultiTimestampRow  = BenchmarkFixtures.makeWideMultiTimestampRow(1)
   }
 
   @Benchmark
@@ -48,5 +52,23 @@ class ExplodeRowBenchmark {
       BenchmarkFixtures.simpleSchema,
       BenchmarkFixtures.primaryKeyOrdinals,
       regularKeyOrdinals = Map.empty
+    )
+
+  @Benchmark
+  def explodeRow_wide_singleTimestamp(): Any =
+    Cassandra.explodeRow(
+      wideSingleTimestampRow,
+      BenchmarkFixtures.wideTimestampSchema,
+      BenchmarkFixtures.widePrimaryKeyOrdinals,
+      BenchmarkFixtures.wideRegularKeyOrdinals
+    )
+
+  @Benchmark
+  def explodeRow_wide_multiTimestamp(): Any =
+    Cassandra.explodeRow(
+      wideMultiTimestampRow,
+      BenchmarkFixtures.wideTimestampSchema,
+      BenchmarkFixtures.widePrimaryKeyOrdinals,
+      BenchmarkFixtures.wideRegularKeyOrdinals
     )
 }

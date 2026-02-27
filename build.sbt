@@ -124,8 +124,12 @@ lazy val benchmarks = project
   .settings(
     name := "scylla-migrator-benchmarks",
     libraryDependencies ++= Seq(
-      "org.apache.spark" %% "spark-streaming" % sparkVersion,
-      "org.apache.spark" %% "spark-sql"       % sparkVersion
+      "org.apache.spark"        %% "spark-streaming"             % sparkVersion,
+      "org.apache.spark"        %% "spark-sql"                   % sparkVersion,
+      "software.amazon.awssdk"   % "dynamodb"                    % awsSdkVersion,
+      "com.amazonaws"            % "dynamodb-streams-kinesis-adapter" % dynamodbStreamsKinesisAdapterVersion,
+      "io.circe"                %% "circe-parser"                % "0.14.7",
+      "com.scylladb"            %% "spark-scylladb-connector"    % "4.0.0"
     ),
     // Needed on Java 17+ for Spark compatibility
     Compile / javaOptions ++= {
