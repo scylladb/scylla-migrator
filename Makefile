@@ -5,7 +5,7 @@ SHELL := bash
 .PHONY: help build docker-build-jar lint lint-fix \
         spark-image start-services stop-services wait-for-services \
         test test-unit test-integration test-integration-aws \
-        benchmark benchmark-jmh benchmark-jmh-quick benchmark-integration \
+        test-benchmark test-benchmark-jmh test-benchmark-jmh-quick test-benchmark-integration \
         dump-logs
 
 COMPOSE_FILE := docker-compose-tests.yml
@@ -135,19 +135,19 @@ test: start-services ## Run all local tests (unit + integration, excludes AWS)
 	$(MAKE) test-unit
 	$(MAKE) test-integration
 
-benchmark-jmh: ## Run all JMH microbenchmarks with JSON output
+test-benchmark-jmh: ## Run all JMH microbenchmarks with JSON output
 	$(Q)mkdir -p benchmarks/results
 	sbt "benchmarks/Jmh/run -rf json -rff benchmarks/results/jmh-results.json"
 
-benchmark-jmh-quick: ## Smoke run JMH benchmarks (1 iteration, no warmup)
+test-benchmark-jmh-quick: ## Smoke run JMH benchmarks (1 iteration, no warmup)
 	$(Q)mkdir -p benchmarks/results
 	sbt "benchmarks/Jmh/run -i 1 -wi 0 -f 1 -rf json -rff benchmarks/results/jmh-results-quick.json"
 
-benchmark-integration: ## Run integration throughput benchmarks (requires services)
+test-benchmark-integration: ## Run integration throughput benchmarks (requires services)
 	$(Q)sbt "testOnly -- --include-categories=com.scylladb.migrator.Benchmark"
 
-benchmark: start-services ## Start services and run all benchmarks (JMH + integration)
+test-benchmark: start-services ## Start services and run all benchmarks (JMH + integration)
 	$(Q)trap '$(MAKE) dump-logs || true; $(MAKE) stop-services' EXIT
 	$(MAKE) wait-for-services
-	$(MAKE) benchmark-jmh
-	$(MAKE) benchmark-integration
+	$(MAKE) test-benchmark-jmh
+	$(MAKE) test-benchmark-integration
