@@ -5,6 +5,7 @@ SHELL := bash
 .PHONY: help build docker-build-jar lint lint-fix \
         spark-image start-services stop-services wait-for-services \
         test test-unit test-integration test-integration-aws \
+        test-benchmark test-benchmark-jmh test-benchmark-jmh-quick test-benchmark-integration \
         dump-logs
 
 COMPOSE_FILE := docker-compose-tests.yml
@@ -122,8 +123,8 @@ dump-logs: ## Dump Docker Compose container logs
 test-unit: ## Run unit tests (no services required)
 	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly -- --exclude-categories=com.scylladb.migrator.Integration" $(SBT_COVERAGE_SUFFIX)
 
-test-integration: ## Run integration tests (requires services, excludes AWS)
-	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.AWS" $(SBT_COVERAGE_SUFFIX)
+test-integration: ## Run integration tests (requires services, excludes AWS and benchmarks)
+	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.AWS,com.scylladb.migrator.Benchmark" $(SBT_COVERAGE_SUFFIX)
 
 test-integration-aws: ## Run AWS integration tests (requires services + AWS credentials)
 	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly -- --include-categories=com.scylladb.migrator.AWS" $(SBT_COVERAGE_SUFFIX)
@@ -133,3 +134,20 @@ test: start-services ## Run all local tests (unit + integration, excludes AWS)
 	$(MAKE) wait-for-services
 	$(MAKE) test-unit
 	$(MAKE) test-integration
+
+test-benchmark-jmh: ## Run all JMH microbenchmarks with JSON output
+	$(Q)mkdir -p benchmarks/results
+	sbt "benchmarks/Jmh/run -rf json -rff benchmarks/results/jmh-results.json"
+
+test-benchmark-jmh-quick: ## Smoke run JMH benchmarks (1 iteration, no warmup)
+	$(Q)mkdir -p benchmarks/results
+	sbt "benchmarks/Jmh/run -i 1 -wi 0 -f 1 -rf json -rff benchmarks/results/jmh-results-quick.json"
+
+test-benchmark-integration: ## Run integration throughput benchmarks (requires services)
+	$(Q)sbt "testOnly -- --include-categories=com.scylladb.migrator.Benchmark"
+
+test-benchmark: start-services ## Start services and run all benchmarks (JMH + integration)
+	$(Q)trap '$(MAKE) dump-logs || true; $(MAKE) stop-services' EXIT
+	$(MAKE) wait-for-services
+	$(MAKE) test-benchmark-jmh
+	$(MAKE) test-benchmark-integration
