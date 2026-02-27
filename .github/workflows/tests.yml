@@ -43,7 +43,6 @@ jobs:
 
   test-unit:
     name: Unit tests
-    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -53,11 +52,18 @@ jobs:
           java-version: 8
           cache: sbt
       - uses: sbt/setup-sbt@v1
-      - name: Download assembly JAR
-        uses: actions/download-artifact@v4
+      - name: Cache SBT compilation artifacts
+        uses: actions/cache@v4
         with:
-          name: migrator-jar
-          path: migrator/target/scala-2.13/
+          path: |
+            target/
+            migrator/target/scala-2.13/classes/
+            tests/target/scala-2.13/classes/
+            spark-kinesis-dynamodb/target/scala-2.13/classes/
+            project/target/
+          key: sbt-target-${{ runner.os }}-${{ hashFiles('**/*.scala', '**/*.sbt', 'project/build.properties') }}
+          restore-keys: |
+            sbt-target-${{ runner.os }}-
       - name: Run unit tests
         run: make test-unit
 
@@ -67,6 +73,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Start services
+        run: make start-services
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -78,11 +89,6 @@ jobs:
         with:
           name: migrator-jar
           path: migrator/target/scala-2.13/
-      - name: Start services
-        run: make start-services
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Wait for services
         run: make wait-for-services
       - name: Dump container logs on failure

@@ -37,13 +37,11 @@ lazy val migrator = (project in file("migrator"))
     javacOptions ++= Seq("-source", "1.8", "-target", "1.8"),
     javaOptions ++= Seq(
       "-Xms512M",
-      "-Xmx2048M",
-      "-XX:MaxPermSize=2048M",
-      "-XX:+CMSClassUnloadingEnabled"
+      "-Xmx2048M"
     ),
-    Test / parallelExecution := false,
-    fork                     := true,
-    scalafmtOnCompile        := true,
+    fork            := true,
+    Test / fork     := false,
+    scalafmtOnCompile := true,
     libraryDependencies ++= Seq(
       "org.apache.spark" %% "spark-streaming" % sparkVersion % "provided",
       "org.apache.spark" %% "spark-sql"       % sparkVersion % "provided",
