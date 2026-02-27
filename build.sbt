@@ -141,7 +141,9 @@ lazy val benchmarks = project
     Jmh / javaOptions ++= Seq(
       "--add-exports",
       "java.base/sun.nio.ch=ALL-UNNAMED"
-    )
+    ),
+    // Run JMH forks from the project root so relative output paths resolve correctly
+    Jmh / baseDirectory := (ThisBuild / baseDirectory).value
   )
   .dependsOn(migrator)
 
