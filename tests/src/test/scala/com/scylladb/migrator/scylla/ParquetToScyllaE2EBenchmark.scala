@@ -16,7 +16,7 @@ import scala.concurrent.duration._
   *
   * Source: Parquet at /app/parquet/bench_e2e Target: ScyllaDB (port 9042)
   *
-  * If no Parquet files exist, seeds Scylla and exports to Parquet first.
+  * Requires running `test-benchmark-e2e-scylla-parquet` first to generate Parquet files.
   *
   * Row count is configurable via `-De2e.cql.rows=N` (default: 5000000).
   */
@@ -30,14 +30,10 @@ class ParquetToScyllaE2EBenchmark extends MigratorSuite(sourcePort = 9042) {
   test(s"Parquet->Scylla ${rowCount} rows") {
     val targetTable = "bench_e2e_parquet_restore"
 
-    // Generate Parquet files if they don't exist (allows running independently)
-    if (ParquetE2EBenchmarkUtils.countParquetFiles() == 0) {
-      val sourceTable = "bench_e2e_parquet"
-      ParquetE2EBenchmarkUtils.deleteParquetDir()
-      BenchmarkDataGenerator.createSimpleTable(sourceCassandra(), keyspace, sourceTable)
-      BenchmarkDataGenerator.insertSimpleRows(sourceCassandra(), keyspace, sourceTable, rowCount)
-      SparkUtils.successfullyPerformMigration("bench-e2e-scylla-to-parquet.yaml")
-    }
+    assert(
+      ParquetE2EBenchmarkUtils.countParquetFiles() > 0,
+      "No parquet files found. Run test-benchmark-e2e-scylla-parquet first."
+    )
 
     BenchmarkDataGenerator.createSimpleTable(targetScylla(), keyspace, targetTable)
 
