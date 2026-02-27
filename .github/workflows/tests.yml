@@ -73,11 +73,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Start services
-        run: make start-services
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -89,6 +84,11 @@ jobs:
         with:
           name: migrator-jar
           path: migrator/target/scala-2.13/
+      - name: Start services
+        run: make start-services
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Wait for services
         run: make wait-for-services
       - name: Dump container logs on failure
