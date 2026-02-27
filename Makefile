@@ -6,6 +6,7 @@ SHELL := bash
         spark-image start-services stop-services wait-for-services \
         test test-unit test-integration test-integration-aws \
         test-benchmark test-benchmark-jmh test-benchmark-jmh-quick test-benchmark-integration \
+        test-benchmark-e2e test-benchmark-e2e-cassandra test-benchmark-e2e-scylla test-benchmark-e2e-dynamodb test-benchmark-e2e-parquet \
         dump-logs
 
 COMPOSE_FILE := docker-compose-tests.yml
@@ -13,6 +14,8 @@ CACHE_REPO ?= scylladb/migrator-cache
 MAX_ATTEMPTS ?= 480
 COVERAGE ?= false
 VERBOSE ?= false
+E2E_CQL_ROWS ?= 5000000
+E2E_DDB_ROWS ?= 500000
 
 ifeq ($(COVERAGE),true)
 SBT_COVERAGE_PREFIX := coverage
@@ -123,8 +126,8 @@ dump-logs: ## Dump Docker Compose container logs
 test-unit: ## Run unit tests (no services required)
 	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly -- --exclude-categories=com.scylladb.migrator.Integration" $(SBT_COVERAGE_SUFFIX)
 
-test-integration: ## Run integration tests (requires services, excludes AWS and benchmarks)
-	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.AWS,com.scylladb.migrator.Benchmark" $(SBT_COVERAGE_SUFFIX)
+test-integration: ## Run integration tests (requires services, excludes AWS, benchmarks, and E2E)
+	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.AWS,com.scylladb.migrator.Benchmark,com.scylladb.migrator.E2E" $(SBT_COVERAGE_SUFFIX)
 
 test-integration-aws: ## Run AWS integration tests (requires services + AWS credentials)
 	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly -- --include-categories=com.scylladb.migrator.AWS" $(SBT_COVERAGE_SUFFIX)
@@ -151,3 +154,18 @@ test-benchmark: start-services ## Start services and run all benchmarks (JMH + i
 	$(MAKE) wait-for-services
 	$(MAKE) test-benchmark-jmh
 	$(MAKE) test-benchmark-integration
+
+test-benchmark-e2e: ## Run all E2E throughput benchmarks (requires services)
+	$(Q)sbt -De2e.cql.rows=$(E2E_CQL_ROWS) -De2e.ddb.rows=$(E2E_DDB_ROWS) "testOnly -- --include-categories=com.scylladb.migrator.E2E"
+
+test-benchmark-e2e-cassandra: ## Run Cassandra->Scylla E2E benchmarks (requires services)
+	$(Q)sbt -De2e.cql.rows=$(E2E_CQL_ROWS) "testOnly com.scylladb.migrator.scylla.CassandraToScyllaE2EBenchmark"
+
+test-benchmark-e2e-scylla: ## Run Scylla->Scylla E2E benchmarks (requires services)
+	$(Q)sbt -De2e.cql.rows=$(E2E_CQL_ROWS) "testOnly com.scylladb.migrator.scylla.ScyllaToScyllaE2EBenchmark"
+
+test-benchmark-e2e-dynamodb: ## Run DynamoDB->Alternator E2E benchmarks (requires services)
+	$(Q)sbt -De2e.ddb.rows=$(E2E_DDB_ROWS) "testOnly com.scylladb.migrator.alternator.DynamoDBToAlternatorE2EBenchmark"
+
+test-benchmark-e2e-parquet: ## Run Scylla<->Parquet E2E benchmarks (requires services)
+	$(Q)sbt -De2e.cql.rows=$(E2E_CQL_ROWS) "testOnly com.scylladb.migrator.scylla.ParquetE2EBenchmark"
