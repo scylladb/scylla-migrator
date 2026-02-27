@@ -30,8 +30,8 @@ class TestStreamPoller extends StreamPollerOps {
   var getShardIteratorAfterSequenceFn: (DynamoDbStreamsClient, String, String, String) => String =
     (_, _, _, _) => "test-iterator-after-seq"
 
-  var getRecordsFn: (DynamoDbStreamsClient, String) => (Seq[Record], Option[String]) =
-    (_, _) => (Seq.empty, None)
+  var getRecordsFn: (DynamoDbStreamsClient, String, Option[Int]) => (Seq[Record], Option[String]) =
+    (_, _, _) => (Seq.empty, None)
 
   var recordToItemFn
     : (Record, String, AttributeValue, AttributeValue) => Option[util.Map[String, AttributeValue]] =
@@ -64,9 +64,10 @@ class TestStreamPoller extends StreamPollerOps {
 
   override def getRecords(
     streamsClient: DynamoDbStreamsClient,
-    shardIterator: String
+    shardIterator: String,
+    limit: Option[Int]
   ): (Seq[Record], Option[String]) =
-    getRecordsFn(streamsClient, shardIterator)
+    getRecordsFn(streamsClient, shardIterator, limit)
 
   override def recordToItem(
     record: Record,

@@ -46,7 +46,13 @@ object SourceSettings {
     streamingPollIntervalSeconds: Option[Int] = None,
     streamingMaxConsecutiveErrors: Option[Int] = None,
     streamingPollingPoolSize: Option[Int] = None,
-    streamingLeaseDurationMs: Option[Long] = None
+    streamingLeaseDurationMs: Option[Long] = None,
+    streamingMaxRecordsPerPoll: Option[Int] = None,
+    streamingMaxRecordsPerSecond: Option[Int] = None,
+    streamingEnableCloudWatchMetrics: Option[Boolean] = None,
+    streamApiCallTimeoutSeconds: Option[Int] = None,
+    streamApiCallAttemptTimeoutSeconds: Option[Int] = None,
+    streamingPollFutureTimeoutSeconds: Option[Int] = None
   ) extends SourceSettings {
     lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
       AwsUtils.computeFinalCredentials(credentials, endpoint, region)

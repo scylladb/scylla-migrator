@@ -37,6 +37,7 @@ lazy val migrator = (project in file("migrator"))
       "software.amazon.awssdk" % "dynamodb"                 % awsSdkVersion,
       "software.amazon.awssdk" % "s3"                       % awsSdkVersion,
       "software.amazon.awssdk" % "sts"                      % awsSdkVersion,
+      "software.amazon.awssdk" % "cloudwatch"               % awsSdkVersion,
       "com.scylladb"          %% "spark-scylladb-connector" % "4.0.0",
       "com.github.jnr" % "jnr-posix" % "3.1.19", // Needed by the Spark ScyllaDB connector
       "com.scylladb.alternator" % "emr-dynamodb-hadoop"  % "5.8.0",

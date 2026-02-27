@@ -36,7 +36,8 @@ trait StreamPollerOps {
   ): String
   def getRecords(
     streamsClient: DynamoDbStreamsClient,
-    shardIterator: String
+    shardIterator: String,
+    limit: Option[Int] = None
   ): (Seq[Record], Option[String])
   def recordToItem(
     record: Record,
@@ -70,7 +71,7 @@ object DynamoStreamPoller extends StreamPollerOps {
     streamsClient: DynamoDbStreamsClient,
     streamArn: String
   ): Seq[Shard] = {
-    var shards = Seq.empty[Shard]
+    val shards = scala.collection.mutable.ListBuffer.empty[Shard]
     var lastEvaluatedShardId: Option[String] = None
     var done = false
 
@@ -80,7 +81,7 @@ object DynamoStreamPoller extends StreamPollerOps {
       lastEvaluatedShardId.foreach(requestBuilder.exclusiveStartShardId)
       val response = streamsClient.describeStream(requestBuilder.build())
       val desc = response.streamDescription()
-      shards = shards ++ desc.shards().asScala
+      shards ++= desc.shards().asScala
       val lastShardId = desc.lastEvaluatedShardId()
       if (lastShardId != null) {
         lastEvaluatedShardId = Some(lastShardId)
@@ -88,7 +89,7 @@ object DynamoStreamPoller extends StreamPollerOps {
         done = true
       }
     }
-    shards
+    shards.toSeq
   }
 
   /** Get a shard iterator for the given shard. */
@@ -133,14 +134,14 @@ object DynamoStreamPoller extends StreamPollerOps {
   /** Read records from a shard iterator. Returns (records, nextShardIterator). The next iterator is
     * None when the shard is closed.
     */
-  def getRecords(
+  override def getRecords(
     streamsClient: DynamoDbStreamsClient,
-    shardIterator: String
+    shardIterator: String,
+    limit: Option[Int]
   ): (Seq[Record], Option[String]) = {
-    val response =
-      streamsClient.getRecords(
-        GetRecordsRequest.builder().shardIterator(shardIterator).build()
-      )
+    val builder = GetRecordsRequest.builder().shardIterator(shardIterator)
+    limit.foreach(l => builder.limit(l))
+    val response = streamsClient.getRecords(builder.build())
     val records = response.records().asScala.toSeq
     val nextIterator = Option(response.nextShardIterator())
     (records, nextIterator)

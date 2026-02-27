@@ -31,3 +31,58 @@ Optionally, you can skip the initial snapshot transfer and only replicate the ch
     # ...
     streamChanges: true
     skipInitialSnapshotTransfer: true
+
+Tuning Stream Replication
+-------------------------
+
+The following optional properties can be set in the **source** configuration to tune stream replication behavior:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 35 15 50
+
+   * - Property
+     - Default
+     - Description
+   * - ``streamingPollIntervalSeconds``
+     - ``5``
+     - How often (in seconds) to poll DynamoDB Streams for new records.
+   * - ``streamingMaxConsecutiveErrors``
+     - ``50``
+     - Maximum consecutive poll failures before stopping stream replication.
+   * - ``streamingPollingPoolSize``
+     - ``max(4, CPUs)``
+     - Thread pool size for polling shards in parallel.
+   * - ``streamingLeaseDurationMs``
+     - ``60000``
+     - Lease duration in milliseconds. If a worker doesn't renew within this window, other workers can claim the shard.
+   * - ``streamingMaxRecordsPerPoll``
+     - ``1000``
+     - Maximum records to fetch per ``GetRecords`` call (DynamoDB default).
+   * - ``streamingMaxRecordsPerSecond``
+     - unlimited
+     - Maximum records processed per second across all shards. Use this to avoid overwhelming the target.
+   * - ``streamingEnableCloudWatchMetrics``
+     - ``false``
+     - Publish stream replication metrics (records processed, active shards, iterator age) to CloudWatch.
+   * - ``streamApiCallTimeoutSeconds``
+     - ``30``
+     - Overall timeout for DynamoDB Streams API calls (seconds).
+   * - ``streamApiCallAttemptTimeoutSeconds``
+     - ``10``
+     - Per-attempt timeout for DynamoDB Streams API calls (seconds).
+   * - ``streamingPollFutureTimeoutSeconds``
+     - ``60``
+     - Timeout for awaiting parallel shard poll results. Increase if the polling pool is saturated and polls take longer than expected.
+
+Example:
+
+.. code-block:: yaml
+
+  source:
+    type: dynamodb
+    table: my-table
+    # ...
+    streamingPollIntervalSeconds: 2
+    streamingMaxRecordsPerSecond: 5000
+    streamingPollingPoolSize: 8

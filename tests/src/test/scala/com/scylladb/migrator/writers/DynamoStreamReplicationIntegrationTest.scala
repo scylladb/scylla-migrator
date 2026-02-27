@@ -146,7 +146,8 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
         streamEvents,
         targetSettings,
         Map.empty[String, String],
-        tableDesc
+        tableDesc,
+        targetAlternator()
       )
 
       val finalItems = scanAll(targetAlternator(), tableName).sortBy(m => m("id").s)
@@ -225,7 +226,8 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
       streamEvents,
       targetSettings,
       Map("oldName" -> "newName"),
-      tableDesc
+      tableDesc,
+      targetAlternator()
     )
 
     val finalItems = scanAll(targetAlternator(), renamedTable)

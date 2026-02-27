@@ -177,7 +177,7 @@ class StreamReplicationPollingTest extends MigratorSuiteWithDynamoDBLocal {
     }
 
     // getRecords returns empty
-    poller.getRecordsFn = (_, _) => (Seq.empty, Some("next-iter"))
+    poller.getRecordsFn = (_, _, _) => (Seq.empty, Some("next-iter"))
 
     val tableDesc = targetAlternator()
       .describeTable(DescribeTableRequest.builder().tableName(targetTable).build())

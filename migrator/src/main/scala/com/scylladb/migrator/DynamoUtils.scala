@@ -85,107 +85,110 @@ object DynamoUtils {
         else Nil
       )
 
-    log.info("Checking for table existence at destination")
-    val describeTargetTableRequest =
-      DescribeTableRequest.builder().tableName(target.table).build()
-    val targetDescription = Try(targetClient.describeTable(describeTargetTableRequest))
-    targetDescription match {
-      case Success(desc) =>
-        log.info(s"Table ${target.table} exists at destination")
-        desc.table()
+    try {
+      log.info("Checking for table existence at destination")
+      val describeTargetTableRequest =
+        DescribeTableRequest.builder().tableName(target.table).build()
+      val targetDescription = Try(targetClient.describeTable(describeTargetTableRequest))
+      targetDescription match {
+        case Success(desc) =>
+          log.info(s"Table ${target.table} exists at destination")
+          desc.table()
 
-      case Failure(e: ResourceNotFoundException) =>
-        val requestBuilder = CreateTableRequest
-          .builder()
-          .tableName(target.table)
-          .keySchema(sourceDescription.keySchema)
-          .attributeDefinitions(sourceDescription.attributeDefinitions)
+        case Failure(e: ResourceNotFoundException) =>
+          val requestBuilder = CreateTableRequest
+            .builder()
+            .tableName(target.table)
+            .keySchema(sourceDescription.keySchema)
+            .attributeDefinitions(sourceDescription.attributeDefinitions)
 
-        target.billingMode match {
-          case Some(BillingMode.PROVISIONED)
-              if (sourceDescription.provisionedThroughput.readCapacityUnits == 0L ||
-                sourceDescription.provisionedThroughput.writeCapacityUnits == 0) =>
-            throw new RuntimeException(
-              "readCapacityUnits and writeCapacityUnits must be set for PROVISIONED billing mode"
-            )
+          target.billingMode match {
+            case Some(BillingMode.PROVISIONED)
+                if (sourceDescription.provisionedThroughput.readCapacityUnits == 0L ||
+                  sourceDescription.provisionedThroughput.writeCapacityUnits == 0) =>
+              throw new RuntimeException(
+                "readCapacityUnits and writeCapacityUnits must be set for PROVISIONED billing mode"
+              )
 
-          case Some(BillingMode.PROVISIONED) | None
-              if (sourceDescription.provisionedThroughput.readCapacityUnits != 0L &&
-                sourceDescription.provisionedThroughput.writeCapacityUnits != 0) =>
-            log.info(
-              "BillingMode PROVISIONED will be used since writeCapacityUnits and readCapacityUnits are set"
-            )
-            requestBuilder.billingMode(BillingMode.PROVISIONED)
-            requestBuilder.provisionedThroughput(
-              ProvisionedThroughput
-                .builder()
-                .readCapacityUnits(sourceDescription.provisionedThroughput.readCapacityUnits)
-                .writeCapacityUnits(sourceDescription.provisionedThroughput.writeCapacityUnits)
-                .build()
-            )
-
-          // billing mode = PAY_PER_REQUEST or empty ( for backward compatibility )
-          case _ => requestBuilder.billingMode(BillingMode.PAY_PER_REQUEST)
-        }
-        if (sourceDescription.hasLocalSecondaryIndexes) {
-          requestBuilder.localSecondaryIndexes(
-            sourceDescription.localSecondaryIndexes.stream
-              .map(index =>
-                LocalSecondaryIndex
+            case Some(BillingMode.PROVISIONED) | None
+                if (sourceDescription.provisionedThroughput.readCapacityUnits != 0L &&
+                  sourceDescription.provisionedThroughput.writeCapacityUnits != 0) =>
+              log.info(
+                "BillingMode PROVISIONED will be used since writeCapacityUnits and readCapacityUnits are set"
+              )
+              requestBuilder.billingMode(BillingMode.PROVISIONED)
+              requestBuilder.provisionedThroughput(
+                ProvisionedThroughput
                   .builder()
-                  .indexName(index.indexName())
-                  .keySchema(index.keySchema())
-                  .projection(index.projection())
+                  .readCapacityUnits(sourceDescription.provisionedThroughput.readCapacityUnits)
+                  .writeCapacityUnits(sourceDescription.provisionedThroughput.writeCapacityUnits)
                   .build()
               )
-              .collect(Collectors.toList[LocalSecondaryIndex])
-          )
-        }
-        if (sourceDescription.hasGlobalSecondaryIndexes) {
-          requestBuilder.globalSecondaryIndexes(
-            sourceDescription.globalSecondaryIndexes.stream
-              .map { index =>
-                val builder =
-                  GlobalSecondaryIndex
+
+            // billing mode = PAY_PER_REQUEST or empty ( for backward compatibility )
+            case _ => requestBuilder.billingMode(BillingMode.PAY_PER_REQUEST)
+          }
+          if (sourceDescription.hasLocalSecondaryIndexes) {
+            requestBuilder.localSecondaryIndexes(
+              sourceDescription.localSecondaryIndexes.stream
+                .map(index =>
+                  LocalSecondaryIndex
                     .builder()
                     .indexName(index.indexName())
                     .keySchema(index.keySchema())
                     .projection(index.projection())
-                if (target.billingMode.forall(_ == BillingMode.PROVISIONED))
-                  builder.provisionedThroughput(
-                    ProvisionedThroughput
-                      .builder()
-                      .readCapacityUnits(index.provisionedThroughput.readCapacityUnits)
-                      .writeCapacityUnits(index.provisionedThroughput.writeCapacityUnits)
-                      .build()
-                  )
-                builder.build()
-              }
-              .collect(Collectors.toList[GlobalSecondaryIndex])
-          )
-        }
-
-        log.info(
-          s"Table ${target.table} does not exist at destination - creating it according to definition:"
-        )
-        log.info(sourceDescription.toString)
-        targetClient.createTable(requestBuilder.build())
-        log.info(s"Table ${target.table} created.")
-
-        val waiterResponse =
-          targetClient.waiter().waitUntilTableExists(describeTargetTableRequest).matched
-        waiterResponse.response.toScala match {
-          case Some(describeTableResponse) => describeTableResponse.table
-          case None =>
-            throw new RuntimeException(
-              "Unable to replicate table definition",
-              waiterResponse.exception.get
+                    .build()
+                )
+                .collect(Collectors.toList[LocalSecondaryIndex])
             )
-        }
+          }
+          if (sourceDescription.hasGlobalSecondaryIndexes) {
+            requestBuilder.globalSecondaryIndexes(
+              sourceDescription.globalSecondaryIndexes.stream
+                .map { index =>
+                  val builder =
+                    GlobalSecondaryIndex
+                      .builder()
+                      .indexName(index.indexName())
+                      .keySchema(index.keySchema())
+                      .projection(index.projection())
+                  if (target.billingMode.forall(_ == BillingMode.PROVISIONED))
+                    builder.provisionedThroughput(
+                      ProvisionedThroughput
+                        .builder()
+                        .readCapacityUnits(index.provisionedThroughput.readCapacityUnits)
+                        .writeCapacityUnits(index.provisionedThroughput.writeCapacityUnits)
+                        .build()
+                    )
+                  builder.build()
+                }
+                .collect(Collectors.toList[GlobalSecondaryIndex])
+            )
+          }
 
-      case Failure(otherwise) =>
-        throw new RuntimeException("Failed to check for table existence", otherwise)
-    }
+          log.info(
+            s"Table ${target.table} does not exist at destination - creating it according to definition:"
+          )
+          log.info(sourceDescription.toString)
+          targetClient.createTable(requestBuilder.build())
+          log.info(s"Table ${target.table} created.")
+
+          val waiterResponse =
+            targetClient.waiter().waitUntilTableExists(describeTargetTableRequest).matched
+          waiterResponse.response.toScala match {
+            case Some(describeTableResponse) => describeTableResponse.table
+            case None =>
+              throw new RuntimeException(
+                "Unable to replicate table definition",
+                waiterResponse.exception.get
+              )
+          }
+
+        case Failure(otherwise) =>
+          throw new RuntimeException("Failed to check for table existence", otherwise)
+      }
+    } finally
+      targetClient.close()
   }
 
   def enableDynamoStream(source: SourceSettings.DynamoDB): Unit = {
@@ -205,41 +208,46 @@ object DynamoUtils {
         source.region
       )
 
-    sourceClient
-      .updateTable(
-        UpdateTableRequest
-          .builder()
-          .tableName(source.table)
-          .streamSpecification(
-            StreamSpecification
-              .builder()
-              .streamEnabled(true)
-              .streamViewType(StreamViewType.NEW_IMAGE)
-              .build()
+    try {
+      sourceClient
+        .updateTable(
+          UpdateTableRequest
+            .builder()
+            .tableName(source.table)
+            .streamSpecification(
+              StreamSpecification
+                .builder()
+                .streamEnabled(true)
+                .streamViewType(StreamViewType.NEW_IMAGE)
+                .build()
+            )
+            .build()
+        )
+
+      var done = false
+      while (!done) {
+        val tableDesc =
+          sourceClient.describeTable(DescribeTableRequest.builder().tableName(source.table).build())
+        val latestStreamArn = tableDesc.table.latestStreamArn
+        val describeStream =
+          sourceStreamsClient.describeStream(
+            DescribeStreamRequest.builder().streamArn(latestStreamArn).build()
           )
-          .build()
-      )
 
-    var done = false
-    while (!done) {
-      val tableDesc =
-        sourceClient.describeTable(DescribeTableRequest.builder().tableName(source.table).build())
-      val latestStreamArn = tableDesc.table.latestStreamArn
-      val describeStream =
-        sourceStreamsClient.describeStream(
-          DescribeStreamRequest.builder().streamArn(latestStreamArn).build()
-        )
-
-      val streamStatus = describeStream.streamDescription.streamStatus
-      if (streamStatus == StreamStatus.ENABLED) {
-        log.info("Stream enabled successfully")
-        done = true
-      } else {
-        log.info(
-          s"Stream not yet enabled (status ${streamStatus}); waiting for 5 seconds and retrying"
-        )
-        Thread.sleep(5000)
+        val streamStatus = describeStream.streamDescription.streamStatus
+        if (streamStatus == StreamStatus.ENABLED) {
+          log.info("Stream enabled successfully")
+          done = true
+        } else {
+          log.info(
+            s"Stream not yet enabled (status ${streamStatus}); waiting for 5 seconds and retrying"
+          )
+          Thread.sleep(5000)
+        }
       }
+    } finally {
+      sourceClient.close()
+      sourceStreamsClient.close()
     }
   }
 
@@ -259,14 +267,16 @@ object DynamoUtils {
   def buildDynamoStreamsClient(
     endpoint: Option[DynamoDBEndpoint],
     creds: Option[AwsCredentialsProvider],
-    region: Option[String]
+    region: Option[String],
+    apiCallTimeoutSeconds: Int = 30,
+    apiCallAttemptTimeoutSeconds: Int = 10
   ): DynamoDbStreamsClient = {
     val builder =
       AwsUtils.configureClientBuilder(DynamoDbStreamsClient.builder(), endpoint, region, creds)
     val conf = ClientOverrideConfiguration
       .builder()
-      .apiCallTimeout(java.time.Duration.ofSeconds(30))
-      .apiCallAttemptTimeout(java.time.Duration.ofSeconds(10))
+      .apiCallTimeout(java.time.Duration.ofSeconds(apiCallTimeoutSeconds.toLong))
+      .apiCallAttemptTimeout(java.time.Duration.ofSeconds(apiCallAttemptTimeoutSeconds.toLong))
       .build()
     builder.overrideConfiguration(conf).build()
   }
