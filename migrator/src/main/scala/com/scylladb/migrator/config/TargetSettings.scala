@@ -41,6 +41,11 @@ object TargetSettings {
       AwsUtils.computeFinalCredentials(credentials, endpoint, region)
   }
 
+  case class Parquet(
+    path: String,
+    compression: String = "snappy"
+  ) extends TargetSettings
+
   implicit val decoder: Decoder[TargetSettings] =
     Decoder.instance { cursor =>
       cursor.get[String]("type").flatMap {
@@ -48,6 +53,8 @@ object TargetSettings {
           deriveDecoder[Scylla].apply(cursor)
         case "dynamodb" | "dynamo" =>
           deriveDecoder[DynamoDB].apply(cursor)
+        case "parquet" =>
+          deriveDecoder[Parquet].apply(cursor)
         case otherwise =>
           Left(DecodingFailure(s"Invalid target type: ${otherwise}", cursor.history))
       }
@@ -60,5 +67,8 @@ object TargetSettings {
 
       case t: DynamoDB =>
         deriveEncoder[DynamoDB].encodeObject(t).add("type", Json.fromString("dynamodb")).asJson
+
+      case t: Parquet =>
+        deriveEncoder[Parquet].encodeObject(t).add("type", Json.fromString("parquet")).asJson
     }
 }

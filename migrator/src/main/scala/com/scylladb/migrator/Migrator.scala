@@ -42,6 +42,14 @@ object Migrator {
           ScyllaMigrator.migrate(migratorConfig, scyllaTarget, sourceDF)
         case (parquetSource: SourceSettings.Parquet, scyllaTarget: TargetSettings.Scylla) =>
           readers.Parquet.migrateToScylla(migratorConfig, parquetSource, scyllaTarget)(spark)
+        case (cassandraSource: SourceSettings.Cassandra, parquetTarget: TargetSettings.Parquet) =>
+          val sourceDF = readers.Cassandra.readDataframe(
+            spark,
+            cassandraSource,
+            cassandraSource.preserveTimestamps,
+            migratorConfig.getSkipTokenRangesOrEmptySet
+          )
+          writers.Parquet.writeDataframe(parquetTarget, sourceDF.dataFrame)
         case (dynamoSource: SourceSettings.DynamoDB, alternatorTarget: TargetSettings.DynamoDB) =>
           AlternatorMigrator.migrateFromDynamoDB(dynamoSource, alternatorTarget, migratorConfig)
         case (
