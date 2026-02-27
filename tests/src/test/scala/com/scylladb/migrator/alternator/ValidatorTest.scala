@@ -1,6 +1,6 @@
 package com.scylladb.migrator.alternator
 
-import com.scylladb.migrator.SparkUtils.{ submitSparkJob, successfullyPerformMigration }
+import com.scylladb.migrator.SparkUtils.{ performValidation, successfullyPerformMigration }
 import software.amazon.awssdk.services.dynamodb.model.{
   AttributeAction,
   AttributeValue,
@@ -11,7 +11,6 @@ import software.amazon.awssdk.services.dynamodb.model.{
 
 import scala.concurrent.duration.{ Duration, DurationInt }
 import scala.jdk.CollectionConverters._
-import scala.util.chaining._
 
 class ValidatorTest extends MigratorSuiteWithDynamoDBLocal {
 
@@ -31,9 +30,7 @@ class ValidatorTest extends MigratorSuiteWithDynamoDBLocal {
     successfullyPerformMigration(configFile)
 
     // Perform the validation
-    submitSparkJob(configFile, "com.scylladb.migrator.Validator").exitValue().tap { statusCode =>
-      assertEquals(statusCode, 0, "Validation failed")
-    }
+    assertEquals(performValidation(configFile), 0, "Validation failed")
 
     // Change the value of an item
     targetAlternator().updateItem(
@@ -54,9 +51,7 @@ class ValidatorTest extends MigratorSuiteWithDynamoDBLocal {
     )
 
     // Check that the validation failed because of the introduced change
-    submitSparkJob(configFile, "com.scylladb.migrator.Validator").exitValue().tap { statusCode =>
-      assertEquals(statusCode, 1)
-    }
+    assertEquals(performValidation(configFile), 1)
   }
 
 }

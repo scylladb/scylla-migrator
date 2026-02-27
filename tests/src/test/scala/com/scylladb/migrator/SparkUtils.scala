@@ -19,6 +19,14 @@ object SparkUtils {
     ()
   }
 
+  /** Run validation and return the exit code.
+    *
+    * @return
+    *   0 if validation passed (no differences found), 1 if validation failures were detected
+    */
+  def performValidation(migratorConfigFile: String): Int =
+    submitSparkJob(migratorConfigFile, "com.scylladb.migrator.Validator").exitValue()
+
   def submitSparkJob(migratorConfigFile: String, entryPoint: String): Process =
     submitSparkJobProcess(migratorConfigFile, entryPoint).run()
 

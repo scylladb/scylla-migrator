@@ -1,6 +1,6 @@
 package com.scylladb.migrator.alternator
 
-import com.scylladb.migrator.SparkUtils.{ submitSparkJob, successfullyPerformMigration }
+import com.scylladb.migrator.SparkUtils.{ performValidation, successfullyPerformMigration }
 import software.amazon.awssdk.services.dynamodb.model.{
   AttributeValue,
   PutItemRequest,
@@ -11,7 +11,6 @@ import software.amazon.awssdk.services.dynamodb.model.{
 import java.util.UUID
 import scala.concurrent.duration.{ Duration, DurationInt }
 import scala.jdk.CollectionConverters._
-import scala.util.chaining._
 
 class SkippedSegmentsTest extends MigratorSuiteWithDynamoDBLocal {
 
@@ -41,17 +40,13 @@ class SkippedSegmentsTest extends MigratorSuiteWithDynamoDBLocal {
     val itemCount = targetAlternatorItemCount(tableName)
     assert(itemCount > 75L && itemCount < 125L, s"Unexpected item count: ${itemCount}")
     // … but not all of them, hence the validator fails
-    submitSparkJob(configPart2, "com.scylladb.migrator.Validator").exitValue().tap { statusCode =>
-      assertEquals(statusCode, 1)
-    }
+    assertEquals(performValidation(configPart2), 1)
 
     // Perform the other (complementary) part of the migration
     successfullyPerformMigration(configPart2)
 
     // Validate that all the data from the source have been migrated to the target database
-    submitSparkJob(configPart2, "com.scylladb.migrator.Validator").exitValue().tap { statusCode =>
-      assertEquals(statusCode, 0, "Validation failed")
-    }
+    assertEquals(performValidation(configPart2), 0, "Validation failed")
   }
 
   def createRandomData(tableName: String): Unit =

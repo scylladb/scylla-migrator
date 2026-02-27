@@ -14,6 +14,18 @@ jobs:
           java-version: 8
           cache: sbt
       - uses: sbt/setup-sbt@v1
+      - name: Cache SBT compilation artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            target/
+            migrator/target/scala-2.13/classes/
+            tests/target/scala-2.13/classes/
+            spark-kinesis-dynamodb/target/scala-2.13/classes/
+            project/target/
+          key: sbt-target-${{ runner.os }}-${{ hashFiles('**/*.scala', '**/*.sbt', 'project/build.properties') }}
+          restore-keys: |
+            sbt-target-${{ runner.os }}-
       - name: Build migrator
         run: make build
       - name: Upload assembly JAR
