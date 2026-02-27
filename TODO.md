@@ -7,7 +7,7 @@
   - Running as two separate jobs would cut integration test wall time from ~11m to ~6-7m
   - Each job starts only the Docker services it needs
 
-- [x] Share Spark session across tests in a suite
+- [ ] Share Spark session across tests in a suite
   - Each test submits a separate `spark-submit` via `docker compose exec` (`SparkUtils.scala`)
   - Spark JVM startup + init is repeated for every test case
   - Sharing a `SparkSession` within a suite would eliminate this overhead
