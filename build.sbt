@@ -118,6 +118,33 @@ lazy val tests = project
   )
   .dependsOn(migrator)
 
+lazy val benchmarks = project
+  .in(file("benchmarks"))
+  .enablePlugins(pl.project13.scala.sbt.JmhPlugin)
+  .settings(
+    name := "scylla-migrator-benchmarks",
+    libraryDependencies ++= Seq(
+      "org.apache.spark" %% "spark-streaming" % sparkVersion,
+      "org.apache.spark" %% "spark-sql"       % sparkVersion
+    ),
+    // Needed on Java 17+ for Spark compatibility
+    Compile / javaOptions ++= {
+      val maybeJavaMajorVersion =
+        sys.props
+          .get("java.version")
+          .map(version => version.takeWhile(_ != '.').toInt)
+      if (maybeJavaMajorVersion.exists(_ > 11))
+        Seq("--add-exports", "java.base/sun.nio.ch=ALL-UNNAMED")
+      else
+        Nil
+    },
+    Jmh / javaOptions ++= Seq(
+      "--add-exports",
+      "java.base/sun.nio.ch=ALL-UNNAMED"
+    )
+  )
+  .dependsOn(migrator)
+
 lazy val root = project
   .in(file("."))
-  .aggregate(migrator, `spark-kinesis-dynamodb`, tests)
+  .aggregate(migrator, `spark-kinesis-dynamodb`, tests, benchmarks)
