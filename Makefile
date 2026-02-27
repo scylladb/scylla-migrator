@@ -4,8 +4,10 @@ SHELL := bash
 
 .PHONY: help build docker-build-jar lint lint-fix \
         spark-image start-services stop-services wait-for-services \
-        test test-unit test-integration test-integration-aws \
-        dump-logs
+        start-services-scylla wait-for-services-scylla \
+        start-services-alternator wait-for-services-alternator \
+        test test-unit test-integration test-integration-scylla test-integration-alternator \
+        test-integration-aws dump-logs
 
 COMPOSE_FILE := docker-compose-tests.yml
 CACHE_REPO ?= scylladb/migrator-cache
@@ -73,7 +75,9 @@ spark-image: ## Pull or build the Spark Docker image
 	$(Q)HASH=$$(find dockerfiles/spark -type f | sort | xargs sha256sum | sha256sum | cut -d' ' -f1 | head -c 16)
 	IMAGE="$(CACHE_REPO):spark-$${HASH}"
 	echo "Spark cache image: $${IMAGE}"
-	if docker pull "$${IMAGE}" 2>/dev/null; then
+	if docker image inspect "$${IMAGE}" > /dev/null 2>&1; then
+		echo "Image already loaded locally"
+	elif docker pull "$${IMAGE}" 2>/dev/null; then
 		echo "Cache hit — pulled $${IMAGE}"
 	else
 		echo "Cache miss — building from dockerfiles/spark"
@@ -86,12 +90,20 @@ spark-image: ## Pull or build the Spark Docker image
 			echo "No Docker Hub credentials — skipping push"
 		fi
 	fi
-	export SPARK_IMAGE="$${IMAGE}"
+	docker tag "$${IMAGE}" spark-migrator
 	echo "SPARK_IMAGE=$${IMAGE}" >> "$${GITHUB_ENV:-/dev/null}"
 
 start-services: spark-image ## Start all Docker Compose test services
 	$(Q)sudo chmod -R 777 ./tests/docker/scylla ./tests/docker/scylla-source
 	docker compose -f $(COMPOSE_FILE) up -d
+
+start-services-scylla: spark-image ## Start services needed for Scylla integration tests
+	$(Q)sudo chmod -R 777 ./tests/docker/scylla ./tests/docker/scylla-source
+	docker compose -f $(COMPOSE_FILE) up -d cassandra scylla-source scylla spark-master spark-worker
+
+start-services-alternator: spark-image ## Start services needed for Alternator integration tests
+	$(Q)sudo chmod -R 777 ./tests/docker/scylla
+	docker compose -f $(COMPOSE_FILE) up -d dynamodb scylla s3 spark-master spark-worker
 
 start-services-aws: spark-image ## Start only services needed for AWS tests
 	$(Q)sudo chmod -R 777 ./tests/docker/scylla
@@ -104,6 +116,21 @@ wait-for-services: ## Wait for all test services to become ready
 	$(call wait-for-cql,scylla)
 	$(call wait-for-cql,cassandra)
 	$(call wait-for-cql,scylla-source)
+	$(call wait-for-port,8080)
+	$(call wait-for-port,8081)
+
+wait-for-services-scylla: ## Wait for Scylla test services to become ready
+	$(Q)$(call wait-for-cql,cassandra)
+	$(call wait-for-cql,scylla-source)
+	$(call wait-for-cql,scylla)
+	$(call wait-for-port,8080)
+	$(call wait-for-port,8081)
+
+wait-for-services-alternator: ## Wait for Alternator test services to become ready
+	$(Q)$(call wait-for-port,8000)
+	$(call wait-for-port,8001)
+	$(call wait-for-port,4566)
+	$(call wait-for-cql,scylla)
 	$(call wait-for-port,8080)
 	$(call wait-for-port,8081)
 
@@ -124,6 +151,12 @@ test-unit: ## Run unit tests (no services required)
 
 test-integration: ## Run integration tests (requires services, excludes AWS)
 	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.AWS" $(SBT_COVERAGE_SUFFIX)
+
+test-integration-scylla: ## Run Scylla integration tests only
+	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.scylla.* -- --include-categories=com.scylladb.migrator.Integration" $(SBT_COVERAGE_SUFFIX)
+
+test-integration-alternator: ## Run Alternator integration tests only (excludes AWS)
+	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.alternator.* com.scylladb.migrator.writers.* -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.AWS" $(SBT_COVERAGE_SUFFIX)
 
 test-integration-aws: ## Run AWS integration tests (requires services + AWS credentials)
 	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly -- --include-categories=com.scylladb.migrator.AWS" $(SBT_COVERAGE_SUFFIX)

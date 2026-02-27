@@ -67,8 +67,8 @@ jobs:
       - name: Run unit tests
         run: make test-unit
 
-  test-integration:
-    name: Integration tests
+  test-integration-scylla:
+    name: Integration tests (Scylla)
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -79,32 +79,98 @@ jobs:
           java-version: 8
           cache: sbt
       - uses: sbt/setup-sbt@v1
+      - name: Restore Spark Docker image cache
+        id: spark-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/spark-image.tar
+          key: spark-image-${{ hashFiles('dockerfiles/spark/**') }}
+      - name: Load cached Spark image
+        if: steps.spark-cache.outputs.cache-hit == 'true'
+        run: docker load < /tmp/spark-image.tar
+      - name: Start services
+        run: make start-services-scylla
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Download assembly JAR
         uses: actions/download-artifact@v4
         with:
           name: migrator-jar
           path: migrator/target/scala-2.13/
-      - name: Start services
-        run: make start-services
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Wait for services
-        run: make wait-for-services
+        run: make wait-for-services-scylla
       - name: Dump container logs on failure
         if: failure()
         run: make dump-logs
-      - name: Run integration tests
-        run: make test-integration
+      - name: Run Scylla integration tests
+        run: make test-integration-scylla
         env:
           COVERAGE: ${{ github.event_name == 'push' && 'true' || 'false' }}
       - name: Stop services
         run: make stop-services
+      - name: Save Spark image to cache
+        if: steps.spark-cache.outputs.cache-hit != 'true'
+        run: docker save spark-migrator -o /tmp/spark-image.tar
       - name: Upload coverage report
         if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-report
+          name: coverage-report-scylla
+          path: |
+            tests/target/scala-2.13/scoverage-report/
+            migrator/target/scala-2.13/scoverage-report/
+
+  test-integration-alternator:
+    name: Integration tests (Alternator)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 8
+          cache: sbt
+      - uses: sbt/setup-sbt@v1
+      - name: Restore Spark Docker image cache
+        id: spark-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/spark-image.tar
+          key: spark-image-${{ hashFiles('dockerfiles/spark/**') }}
+      - name: Load cached Spark image
+        if: steps.spark-cache.outputs.cache-hit == 'true'
+        run: docker load < /tmp/spark-image.tar
+      - name: Start services
+        run: make start-services-alternator
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Download assembly JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: migrator-jar
+          path: migrator/target/scala-2.13/
+      - name: Wait for services
+        run: make wait-for-services-alternator
+      - name: Dump container logs on failure
+        if: failure()
+        run: make dump-logs
+      - name: Run Alternator integration tests
+        run: make test-integration-alternator
+        env:
+          COVERAGE: ${{ github.event_name == 'push' && 'true' || 'false' }}
+      - name: Stop services
+        run: make stop-services
+      - name: Save Spark image to cache
+        if: steps.spark-cache.outputs.cache-hit != 'true'
+        run: docker save spark-migrator -o /tmp/spark-image.tar
+      - name: Upload coverage report
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-alternator
           path: |
             tests/target/scala-2.13/scoverage-report/
             migrator/target/scala-2.13/scoverage-report/

@@ -9,6 +9,30 @@ import org.apache.spark.sql._
 object Migrator {
   val log = LogManager.getLogger("com.scylladb.migrator")
 
+  /** Run a migration based on the provided configuration. */
+  def runMigration(migratorConfig: MigratorConfig)(implicit spark: SparkSession): Unit =
+    (migratorConfig.source, migratorConfig.target) match {
+      case (cassandraSource: SourceSettings.Cassandra, scyllaTarget: TargetSettings.Scylla) =>
+        val sourceDF = readers.Cassandra.readDataframe(
+          spark,
+          cassandraSource,
+          cassandraSource.preserveTimestamps,
+          migratorConfig.getSkipTokenRangesOrEmptySet
+        )
+        ScyllaMigrator.migrate(migratorConfig, scyllaTarget, sourceDF)
+      case (parquetSource: SourceSettings.Parquet, scyllaTarget: TargetSettings.Scylla) =>
+        readers.Parquet.migrateToScylla(migratorConfig, parquetSource, scyllaTarget)(spark)
+      case (dynamoSource: SourceSettings.DynamoDB, alternatorTarget: TargetSettings.DynamoDB) =>
+        AlternatorMigrator.migrateFromDynamoDB(dynamoSource, alternatorTarget, migratorConfig)
+      case (
+            s3Source: SourceSettings.DynamoDBS3Export,
+            alternatorTarget: TargetSettings.DynamoDB
+          ) =>
+        AlternatorMigrator.migrateFromS3Export(s3Source, alternatorTarget, migratorConfig)
+      case _ =>
+        sys.error("Unsupported combination of source and target.")
+    }
+
   def main(args: Array[String]): Unit = {
     implicit val spark: SparkSession = SparkSession
       .builder()
@@ -30,29 +54,9 @@ object Migrator {
 
     log.info(s"Loaded config: ${migratorConfig}")
 
-    try {
-      (migratorConfig.source, migratorConfig.target) match {
-        case (cassandraSource: SourceSettings.Cassandra, scyllaTarget: TargetSettings.Scylla) =>
-          val sourceDF = readers.Cassandra.readDataframe(
-            spark,
-            cassandraSource,
-            cassandraSource.preserveTimestamps,
-            migratorConfig.getSkipTokenRangesOrEmptySet
-          )
-          ScyllaMigrator.migrate(migratorConfig, scyllaTarget, sourceDF)
-        case (parquetSource: SourceSettings.Parquet, scyllaTarget: TargetSettings.Scylla) =>
-          readers.Parquet.migrateToScylla(migratorConfig, parquetSource, scyllaTarget)(spark)
-        case (dynamoSource: SourceSettings.DynamoDB, alternatorTarget: TargetSettings.DynamoDB) =>
-          AlternatorMigrator.migrateFromDynamoDB(dynamoSource, alternatorTarget, migratorConfig)
-        case (
-              s3Source: SourceSettings.DynamoDBS3Export,
-              alternatorTarget: TargetSettings.DynamoDB
-            ) =>
-          AlternatorMigrator.migrateFromS3Export(s3Source, alternatorTarget, migratorConfig)
-        case _ =>
-          sys.error("Unsupported combination of source and target.")
-      }
-    } finally
+    try
+      runMigration(migratorConfig)
+    finally
       spark.stop()
   }
 

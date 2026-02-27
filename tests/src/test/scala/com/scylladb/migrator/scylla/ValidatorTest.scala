@@ -3,11 +3,10 @@ package com.scylladb.migrator.scylla
 import com.datastax.oss.driver.api.querybuilder.QueryBuilder
 import com.datastax.oss.driver.api.querybuilder.QueryBuilder.literal
 import com.datastax.oss.driver.api.querybuilder.term.Term
-import com.scylladb.migrator.SparkUtils.{ submitSparkJob, successfullyPerformMigration }
+import com.scylladb.migrator.SparkUtils.{ performValidation, successfullyPerformMigration }
 
 import scala.concurrent.duration.{ Duration, DurationInt }
 import scala.jdk.CollectionConverters._
-import scala.util.chaining.scalaUtilChainingOps
 
 class ValidatorTest extends MigratorSuite(sourcePort = 9043) {
 
@@ -33,9 +32,7 @@ class ValidatorTest extends MigratorSuite(sourcePort = 9043) {
     successfullyPerformMigration(configFile)
 
     // Perform the validation
-    submitSparkJob(configFile, "com.scylladb.migrator.Validator").exitValue().tap { statusCode =>
-      assertEquals(statusCode, 0, "Validation failed")
-    }
+    assertEquals(performValidation(configFile), 0, "Validation failed")
 
     // Change the value of an item
     val updateStatement =
@@ -48,9 +45,7 @@ class ValidatorTest extends MigratorSuite(sourcePort = 9043) {
     targetScylla().execute(updateStatement)
 
     // Check that the validation failed because of the introduced change
-    submitSparkJob(configFile, "com.scylladb.migrator.Validator").exitValue().tap { statusCode =>
-      assertEquals(statusCode, 1)
-    }
+    assertEquals(performValidation(configFile), 1)
 
   }
 
