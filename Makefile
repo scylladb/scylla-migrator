@@ -6,7 +6,9 @@ SHELL := bash
         spark-image start-services stop-services wait-for-services \
         test test-unit test-integration test-integration-aws \
         test-benchmark test-benchmark-jmh test-benchmark-jmh-quick test-benchmark-integration \
-        test-benchmark-e2e test-benchmark-e2e-cassandra test-benchmark-e2e-scylla test-benchmark-e2e-dynamodb test-benchmark-e2e-parquet \
+        test-benchmark-e2e \
+        test-benchmark-e2e-cassandra-scylla test-benchmark-e2e-scylla-scylla test-benchmark-e2e-dynamodb-alternator \
+        test-benchmark-e2e-scylla-parquet test-benchmark-e2e-parquet-scylla \
         dump-logs
 
 COMPOSE_FILE := docker-compose-tests.yml
@@ -158,14 +160,17 @@ test-benchmark: start-services ## Start services and run all benchmarks (JMH + i
 test-benchmark-e2e: ## Run all E2E throughput benchmarks (requires services)
 	$(Q)sbt -De2e.cql.rows=$(E2E_CQL_ROWS) -De2e.ddb.rows=$(E2E_DDB_ROWS) "testOnly -- --include-categories=com.scylladb.migrator.E2E"
 
-test-benchmark-e2e-cassandra: ## Run Cassandra->Scylla E2E benchmarks (requires services)
+test-benchmark-e2e-cassandra-scylla: ## Run Cassandra->Scylla E2E benchmarks
 	$(Q)sbt -De2e.cql.rows=$(E2E_CQL_ROWS) "testOnly com.scylladb.migrator.scylla.CassandraToScyllaE2EBenchmark"
 
-test-benchmark-e2e-scylla: ## Run Scylla->Scylla E2E benchmarks (requires services)
+test-benchmark-e2e-scylla-scylla: ## Run Scylla->Scylla E2E benchmarks
 	$(Q)sbt -De2e.cql.rows=$(E2E_CQL_ROWS) "testOnly com.scylladb.migrator.scylla.ScyllaToScyllaE2EBenchmark"
 
-test-benchmark-e2e-dynamodb: ## Run DynamoDB->Alternator E2E benchmarks (requires services)
+test-benchmark-e2e-dynamodb-alternator: ## Run DynamoDB->Alternator E2E benchmarks
 	$(Q)sbt -De2e.ddb.rows=$(E2E_DDB_ROWS) "testOnly com.scylladb.migrator.alternator.DynamoDBToAlternatorE2EBenchmark"
 
-test-benchmark-e2e-parquet: ## Run Scylla<->Parquet E2E benchmarks (requires services)
-	$(Q)sbt -De2e.cql.rows=$(E2E_CQL_ROWS) "testOnly com.scylladb.migrator.scylla.ParquetE2EBenchmark"
+test-benchmark-e2e-scylla-parquet: ## Run Scylla->Parquet E2E benchmark
+	$(Q)sbt -De2e.cql.rows=$(E2E_CQL_ROWS) "testOnly com.scylladb.migrator.scylla.ScyllaToParquetE2EBenchmark"
+
+test-benchmark-e2e-parquet-scylla: ## Run Parquet->Scylla E2E benchmark
+	$(Q)sbt -De2e.cql.rows=$(E2E_CQL_ROWS) "testOnly com.scylladb.migrator.scylla.ParquetToScyllaE2EBenchmark"
