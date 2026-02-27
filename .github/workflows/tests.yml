@@ -88,8 +88,10 @@ jobs:
       - name: Load cached Spark image
         if: steps.spark-cache.outputs.cache-hit == 'true'
         run: docker load < /tmp/spark-image.tar
-      - name: Start services
-        run: make start-services-scylla
+      - name: Pre-create JAR directory and start services
+        run: |
+          mkdir -p migrator/target/scala-2.13
+          make start-services-scylla
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -142,8 +144,10 @@ jobs:
       - name: Load cached Spark image
         if: steps.spark-cache.outputs.cache-hit == 'true'
         run: docker load < /tmp/spark-image.tar
-      - name: Start services
-        run: make start-services-alternator
+      - name: Pre-create JAR directory and start services
+        run: |
+          mkdir -p migrator/target/scala-2.13
+          make start-services-alternator
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
