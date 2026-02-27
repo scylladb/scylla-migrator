@@ -46,6 +46,10 @@ object TargetSettings {
     compression: String = "snappy"
   ) extends TargetSettings
 
+  case class DynamoDBS3Export(
+    path: String
+  ) extends TargetSettings
+
   implicit val decoder: Decoder[TargetSettings] =
     Decoder.instance { cursor =>
       cursor.get[String]("type").flatMap {
@@ -55,6 +59,8 @@ object TargetSettings {
           deriveDecoder[DynamoDB].apply(cursor)
         case "parquet" =>
           deriveDecoder[Parquet].apply(cursor)
+        case "dynamodb-s3-export" =>
+          deriveDecoder[DynamoDBS3Export].apply(cursor)
         case otherwise =>
           Left(DecodingFailure(s"Invalid target type: ${otherwise}", cursor.history))
       }
@@ -70,5 +76,11 @@ object TargetSettings {
 
       case t: Parquet =>
         deriveEncoder[Parquet].encodeObject(t).add("type", Json.fromString("parquet")).asJson
+
+      case t: DynamoDBS3Export =>
+        deriveEncoder[DynamoDBS3Export]
+          .encodeObject(t)
+          .add("type", Json.fromString("dynamodb-s3-export"))
+          .asJson
     }
 }
