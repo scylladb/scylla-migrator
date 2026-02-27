@@ -1,0 +1,38 @@
+source:
+  type: dynamodb-s3-export
+  bucket: bench-bucket
+  manifestKey: bench_s3export/manifest-summary.json
+  region: eu-central-1
+  endpoint:
+    host: http://s3
+    port: 4566
+  credentials:
+    accessKey: dummy
+    secretKey: dummy
+  usePathStyleAccess: true
+  tableDescription:
+    attributeDefinitions:
+      - name: id
+        type: S
+    keySchema:
+      - name: id
+        type: HASH
+    billingMode: PAY_PER_REQUEST
+
+target:
+  type: dynamodb
+  table: bench_e2e_ddb_s3_restore
+  region: dummy
+  endpoint:
+    host: http://scylla
+    port: 8000
+  credentials:
+    accessKey: dummy
+    secretKey: dummy
+  streamChanges: false
+  removeConsumedCapacity: true
+  billingMode: PAY_PER_REQUEST
+
+savepoints:
+  path: /app/savepoints
+  intervalSeconds: 300

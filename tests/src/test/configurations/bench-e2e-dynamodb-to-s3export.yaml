@@ -1,0 +1,20 @@
+source:
+  type: dynamodb
+  table: bench_e2e_ddb_s3
+  region: dummy
+  endpoint:
+    host: http://dynamodb
+    port: 8000
+  credentials:
+    accessKey: dummy
+    secretKey: dummy
+  scanSegments: 8
+  readThroughput: 25
+
+target:
+  type: dynamodb-s3-export
+  path: /app/parquet/bench_s3export
+
+savepoints:
+  path: /app/savepoints
+  intervalSeconds: 300

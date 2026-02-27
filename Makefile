@@ -9,6 +9,7 @@ SHELL := bash
         test-benchmark-e2e \
         test-benchmark-e2e-cassandra-scylla test-benchmark-e2e-scylla-scylla test-benchmark-e2e-dynamodb-alternator \
         test-benchmark-e2e-scylla-parquet test-benchmark-e2e-parquet-scylla \
+        test-benchmark-e2e-dynamodb-s3export test-benchmark-e2e-s3export-alternator \
         dump-logs
 
 COMPOSE_FILE := docker-compose-tests.yml
@@ -174,3 +175,9 @@ test-benchmark-e2e-scylla-parquet: ## Run Scylla->Parquet E2E benchmark
 
 test-benchmark-e2e-parquet-scylla: ## Run Parquet->Scylla E2E benchmark
 	$(Q)sbt -De2e.cql.rows=$(E2E_CQL_ROWS) "testOnly com.scylladb.migrator.scylla.ParquetToScyllaE2EBenchmark"
+
+test-benchmark-e2e-dynamodb-s3export: ## Run DynamoDB->S3Export E2E benchmark
+	$(Q)sbt -De2e.ddb.rows=$(E2E_DDB_ROWS) "testOnly com.scylladb.migrator.alternator.DynamoDBToS3ExportE2EBenchmark"
+
+test-benchmark-e2e-s3export-alternator: ## Run S3Export->Alternator E2E benchmark
+	$(Q)sbt -De2e.ddb.rows=$(E2E_DDB_ROWS) "testOnly com.scylladb.migrator.alternator.S3ExportToAlternatorE2EBenchmark"
