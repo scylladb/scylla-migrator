@@ -149,9 +149,16 @@ object BatchWriter {
         if (!unprocessed.isEmpty) {
           attempt += 1
           if (attempt > flushBatchMaxRetries) {
+            val deadLetterKeys = unprocessed.asScala.map { wr =>
+              val key =
+                if (wr.putRequest() != null) wr.putRequest().item().toString
+                else if (wr.deleteRequest() != null) wr.deleteRequest().key().toString
+                else "unknown"
+              key
+            }
             val msg =
               s"Giving up on ${unprocessed.size()} unprocessed items after $attempt attempts"
-            log.error(msg)
+            log.error(s"$msg — dead-letter items: ${deadLetterKeys.mkString("; ")}")
             throw new RuntimeException(msg)
           } else {
             val backoffMs =
