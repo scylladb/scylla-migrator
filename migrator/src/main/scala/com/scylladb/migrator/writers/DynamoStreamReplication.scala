@@ -5,31 +5,18 @@ import com.scylladb.migrator.config.{ SourceSettings, TargetSettings }
 import org.apache.log4j.LogManager
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
 import software.amazon.awssdk.services.dynamodb.model.{
-  AttributeValue,
   DynamoDbException,
   Record,
-  TableDescription,
-  WriteRequest
+  TableDescription
 }
 import software.amazon.awssdk.services.dynamodb.streams.DynamoDbStreamsClient
 
-import java.util
 import java.util.concurrent.{ CountDownLatch, ExecutorService, Executors, ThreadFactory, TimeUnit }
 import scala.concurrent.ExecutionContext
 import scala.jdk.CollectionConverters._
 
 object DynamoStreamReplication {
   private val log = LogManager.getLogger("com.scylladb.migrator.writers.DynamoStreamReplication")
-
-  type DynamoItem = util.Map[String, AttributeValue]
-
-  // --- Delegating accessors for backward compatibility with tests ---
-  // These delegate to BatchWriter so existing test code continues to work.
-
-  private[writers] val operationTypeColumn: String = BatchWriter.operationTypeColumn
-  private[writers] val putOperation: AttributeValue = BatchWriter.putOperation
-  private[writers] val deleteOperation: AttributeValue = BatchWriter.deleteOperation
-  private[writers] val batchWriteItemLimit: Int = BatchWriter.batchWriteItemLimit
 
   /** Default maximum consecutive polling failures before stopping stream replication. */
   private val defaultMaxConsecutiveErrors = 50
@@ -47,88 +34,6 @@ object DynamoStreamReplication {
 
   /** Default lease duration in milliseconds. */
   private val defaultLeaseDurationMs = 60000L
-
-  // --- Delegating accessors for backward compatibility with tests ---
-  // These delegate to DefaultCheckpointManager so existing test code
-  // (e.g., DynamoStreamReplication.createCheckpointTable(...)) continues to work.
-
-  private[writers] val leaseKeyColumn: String = DefaultCheckpointManager.leaseKeyColumn
-  private[writers] val shardEndSentinel: String = DefaultCheckpointManager.shardEndSentinel
-
-  private[writers] def createCheckpointTable(client: DynamoDbClient, tableName: String): Unit =
-    DefaultCheckpointManager.createCheckpointTable(client, tableName)
-
-  private[writers] def getCheckpoint(
-    client: DynamoDbClient,
-    tableName: String,
-    shardId: String
-  ): Option[String] =
-    DefaultCheckpointManager.getCheckpoint(client, tableName, shardId)
-
-  private[writers] def isParentDrained(
-    client: DynamoDbClient,
-    tableName: String,
-    parentShardId: Option[String]
-  ): Boolean =
-    DefaultCheckpointManager.isParentDrained(client, tableName, parentShardId)
-
-  private[writers] def tryClaimShard(
-    client: DynamoDbClient,
-    tableName: String,
-    shardId: String,
-    workerId: String,
-    leaseDurationMs: Long = defaultLeaseDurationMs,
-    parentShardId: Option[String] = None
-  ): Option[Option[String]] =
-    DefaultCheckpointManager.tryClaimShard(
-      client,
-      tableName,
-      shardId,
-      workerId,
-      leaseDurationMs,
-      parentShardId
-    )
-
-  private[writers] def renewLeaseAndCheckpoint(
-    client: DynamoDbClient,
-    tableName: String,
-    shardId: String,
-    workerId: String,
-    maybeSeqNum: Option[String],
-    leaseDurationMs: Long = defaultLeaseDurationMs
-  ): Boolean =
-    DefaultCheckpointManager.renewLeaseAndCheckpoint(
-      client,
-      tableName,
-      shardId,
-      workerId,
-      maybeSeqNum,
-      leaseDurationMs
-    )
-
-  private[writers] def requestLeaseTransfer(
-    client: DynamoDbClient,
-    tableName: String,
-    shardId: String,
-    requestingWorkerId: String
-  ): Boolean =
-    DefaultCheckpointManager.requestLeaseTransfer(client, tableName, shardId, requestingWorkerId)
-
-  private[writers] def releaseLease(
-    client: DynamoDbClient,
-    tableName: String,
-    shardId: String,
-    workerId: String
-  ): Unit =
-    DefaultCheckpointManager.releaseLease(client, tableName, shardId, workerId)
-
-  private[writers] def retryRandom[T](
-    expression: => T,
-    numRetriesLeft: Int,
-    maxBackOffMillis: Int,
-    random: scala.util.Random = scala.util.Random
-  ): T =
-    DefaultCheckpointManager.retryRandom(expression, numRetriesLeft, maxBackOffMillis, random)
 
   /** Build a deterministic checkpoint table name for the given source settings. Includes a hash of
     * the endpoint and region to avoid collisions when migrating tables with the same name from
@@ -220,23 +125,6 @@ object DynamoStreamReplication {
     }
   }
 
-  private[writers] def run(
-    items: Iterable[Option[DynamoItem]],
-    target: TargetSettings.DynamoDB,
-    renamesMap: Map[String, String],
-    targetTableDesc: TableDescription,
-    client: DynamoDbClient
-  ): Unit =
-    BatchWriter.run(items, target, renamesMap, targetTableDesc, client)
-
-  private[writers] def flushBatch(
-    client: DynamoDbClient,
-    tableName: String,
-    batch: util.ArrayList[WriteRequest],
-    batchKeys: util.HashSet[String]
-  ): Unit =
-    BatchWriter.flushBatch(client, tableName, batch, batchKeys)
-
   /** Start streaming replication from a DynamoDB stream. Returns a [[StreamHandle]] for lifecycle
     * management.
     */
@@ -259,6 +147,32 @@ object DynamoStreamReplication {
     val pollFutureTimeoutSeconds = src.streamingPollFutureTimeoutSeconds.getOrElse(60)
     val enableCloudWatch =
       src.streamingEnableCloudWatchMetrics.getOrElse(false)
+
+    // Validate configuration values
+    require(
+      leaseDurationMs > 0,
+      s"streamingLeaseDurationMs must be positive, got $leaseDurationMs"
+    )
+    require(
+      maxConsecutiveErrors > 0,
+      s"streamingMaxConsecutiveErrors must be positive, got $maxConsecutiveErrors"
+    )
+    require(
+      pollFutureTimeoutSeconds > 0,
+      s"streamingPollFutureTimeoutSeconds must be positive, got $pollFutureTimeoutSeconds"
+    )
+    maxRecordsPerPoll.foreach { v =>
+      require(v > 0, s"streamingMaxRecordsPerPoll must be positive, got $v")
+    }
+    maxRecordsPerSecond.foreach { v =>
+      require(v > 0, s"streamingMaxRecordsPerSecond must be positive, got $v")
+    }
+    src.streamApiCallTimeoutSeconds.foreach { v =>
+      require(v > 0, s"streamApiCallTimeoutSeconds must be positive, got $v")
+    }
+    src.streamApiCallAttemptTimeoutSeconds.foreach { v =>
+      require(v > 0, s"streamApiCallAttemptTimeoutSeconds must be positive, got $v")
+    }
 
     val metrics = new StreamMetrics(src.table, src.region, enableCloudWatch)
 
@@ -291,8 +205,13 @@ object DynamoStreamReplication {
 
     val workerId = {
       val host =
-        try java.net.InetAddress.getLocalHost.getHostName
-        catch { case _: Exception => "unknown" }
+        try {
+          val hostname = java.net.InetAddress.getLocalHost.getHostName
+          // Hash hostname to avoid leaking infrastructure names in shared checkpoint table
+          val digest = java.security.MessageDigest.getInstance("SHA-256")
+          val hashBytes = digest.digest(hostname.getBytes("UTF-8"))
+          hashBytes.take(4).map(b => f"${b & 0xff}%02x").mkString
+        } catch { case _: Exception => "unknown" }
       s"$host-${java.util.UUID.randomUUID()}"
     }
     log.info(s"Worker ID: $workerId")
@@ -418,6 +337,7 @@ object DynamoStreamReplication {
     * durations are short. Converting to async would require `Future`-based composition throughout
     * the polling pipeline.
     */
+  @annotation.tailrec
   private[writers] def pollShard(
     streamsClient: DynamoDbStreamsClient,
     shardId: String,

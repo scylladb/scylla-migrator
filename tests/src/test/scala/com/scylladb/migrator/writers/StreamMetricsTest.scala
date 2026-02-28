@@ -4,10 +4,10 @@ class StreamMetricsTest extends munit.FunSuite {
 
   test("publishToCloudWatch does not throw when CloudWatch is disabled") {
     val metrics = new StreamMetrics("test-table", Some("us-east-1"), enableCloudWatch = false)
-    try {
+    try
       // Should be a no-op when CloudWatch is disabled
       metrics.publishToCloudWatch()
-    } finally
+    finally
       metrics.close()
   }
 

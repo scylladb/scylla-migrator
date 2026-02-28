@@ -108,10 +108,9 @@ class CleanupClosedShardsTest extends MigratorSuiteWithDynamoDBLocal {
     val shard = Shard.builder().shardId("shard-closing-1").build()
     val pollCount = new AtomicInteger(0)
 
-    poller.listShardsFn = (_, _) => {
+    poller.listShardsFn = (_, _) =>
       if (pollCount.get() <= 1) Seq(shard)
       else Seq.empty // shard disappears after a few cycles
-    }
 
     // First call returns records with nextIterator=None (shard closed)
     poller.getRecordsFn = (_, _, _) => {
@@ -131,13 +130,12 @@ class CleanupClosedShardsTest extends MigratorSuiteWithDynamoDBLocal {
       poller = poller
     )
 
-    // Wait for a few cycles to process the closed shard
-    Thread.sleep(4000)
-
-    // Verify SHARD_END was written to the checkpoint table
-    val checkpoint =
-      DynamoStreamReplication.getCheckpoint(sourceDDb(), checkpointTable, "shard-closing-1")
-    assertEquals(checkpoint, Some(DynamoStreamReplication.shardEndSentinel))
+    // Wait until SHARD_END is written to the checkpoint table
+    Eventually(timeoutMs = 10000) {
+      DefaultCheckpointManager
+        .getCheckpoint(sourceDDb(), checkpointTable, "shard-closing-1")
+        .contains(DefaultCheckpointManager.shardEndSentinel)
+    }("Expected SHARD_END checkpoint for shard-closing-1")
 
     handle.stop()
   }
@@ -150,10 +148,9 @@ class CleanupClosedShardsTest extends MigratorSuiteWithDynamoDBLocal {
     val pollCount = new AtomicInteger(0)
 
     // Shard appears in first cycle, then disappears
-    poller.listShardsFn = (_, _) => {
+    poller.listShardsFn = (_, _) =>
       if (pollCount.get() <= 1) Seq(shard)
       else Seq.empty
-    }
 
     // Return empty records with None (closed) immediately
     poller.getRecordsFn = (_, _, _) => {
@@ -173,11 +170,9 @@ class CleanupClosedShardsTest extends MigratorSuiteWithDynamoDBLocal {
       poller = poller
     )
 
-    // Wait enough cycles for the system to process the closed shard and remain stable
-    Thread.sleep(5000)
-
-    // System should still be running (not crashed)
-    assert(pollCount.get() >= 2, s"Expected at least 2 poll cycles, got ${pollCount.get()}")
+    Eventually(timeoutMs = 10000) {
+      pollCount.get() >= 2
+    }(s"Expected at least 2 poll cycles, got ${pollCount.get()}")
 
     handle.stop()
   }

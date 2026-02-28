@@ -152,11 +152,9 @@ class RateLimitingTest extends MigratorSuiteWithDynamoDBLocal {
       poller = poller
     )
 
-    // Wait for processing + rate limiting sleep
-    Thread.sleep(8000)
-
-    // System should still be running and have processed the records
-    assert(pollCount.get() >= 2, s"Expected at least 2 poll cycles, got ${pollCount.get()}")
+    Eventually(timeoutMs = 15000) {
+      pollCount.get() >= 2
+    }(s"Expected at least 2 poll cycles, got ${pollCount.get()}")
 
     handle.stop()
   }
@@ -191,10 +189,9 @@ class RateLimitingTest extends MigratorSuiteWithDynamoDBLocal {
       poller = poller
     )
 
-    Thread.sleep(5000)
-
-    // Without rate limiting, should have gotten through more cycles quickly
-    assert(pollCount.get() >= 3, s"Expected at least 3 poll cycles without rate limiting, got ${pollCount.get()}")
+    Eventually(timeoutMs = 10000) {
+      pollCount.get() >= 3
+    }(s"Expected at least 3 poll cycles without rate limiting, got ${pollCount.get()}")
 
     handle.stop()
   }

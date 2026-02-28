@@ -7,15 +7,15 @@ import software.amazon.awssdk.services.dynamodb.model._
 import java.util
 import scala.jdk.CollectionConverters._
 
-/** Tests for the batch write logic in DynamoStreamReplication.run(), which exercises
-  * the flushBatch retry path indirectly through successful batch writes.
+/** Tests for the batch write logic in BatchWriter.run(), which exercises the flushBatch retry path
+  * indirectly through successful batch writes.
   */
 class FlushBatchRetryTest extends MigratorSuiteWithDynamoDBLocal {
 
   private val tableName = "FlushBatchRetryTest"
-  private val operationTypeColumn = DynamoStreamReplication.operationTypeColumn
-  private val putOperation = DynamoStreamReplication.putOperation
-  private val deleteOperation = DynamoStreamReplication.deleteOperation
+  private val operationTypeColumn = BatchWriter.operationTypeColumn
+  private val putOperation = BatchWriter.putOperation
+  private val deleteOperation = BatchWriter.deleteOperation
 
   private val targetSettings = TargetSettings.DynamoDB(
     table                       = tableName,
@@ -25,7 +25,7 @@ class FlushBatchRetryTest extends MigratorSuiteWithDynamoDBLocal {
     streamChanges               = false,
     skipInitialSnapshotTransfer = None,
     writeThroughput             = None,
-    throughputWritePercent       = None
+    throughputWritePercent      = None
   )
 
   private def createTable(): TableDescription = {
@@ -87,7 +87,7 @@ class FlushBatchRetryTest extends MigratorSuiteWithDynamoDBLocal {
     val tableDesc = createTable()
     val items = (1 to 25).map(i => makeItem(s"item-$i", isPut = true))
 
-    DynamoStreamReplication.run(items, targetSettings, Map.empty, tableDesc, targetAlternator())
+    BatchWriter.run(items, targetSettings, Map.empty, tableDesc, targetAlternator())
 
     val results = scanAll()
     assertEquals(results.size, 25)
@@ -97,7 +97,7 @@ class FlushBatchRetryTest extends MigratorSuiteWithDynamoDBLocal {
     val tableDesc = createTable()
     val items = (1 to 60).map(i => makeItem(s"item-$i", isPut = true))
 
-    DynamoStreamReplication.run(items, targetSettings, Map.empty, tableDesc, targetAlternator())
+    BatchWriter.run(items, targetSettings, Map.empty, tableDesc, targetAlternator())
 
     val results = scanAll()
     assertEquals(results.size, 60)
@@ -111,7 +111,7 @@ class FlushBatchRetryTest extends MigratorSuiteWithDynamoDBLocal {
       makeItem("dup-1", isPut = true) // duplicate key forces a flush
     )
 
-    DynamoStreamReplication.run(items, targetSettings, Map.empty, tableDesc, targetAlternator())
+    BatchWriter.run(items, targetSettings, Map.empty, tableDesc, targetAlternator())
 
     val results = scanAll()
     assertEquals(results.size, 2) // dup-1 and dup-2
@@ -121,16 +121,16 @@ class FlushBatchRetryTest extends MigratorSuiteWithDynamoDBLocal {
     val tableDesc = createTable()
     // First insert some items
     val inserts = (1 to 5).map(i => makeItem(s"item-$i", isPut = true))
-    DynamoStreamReplication.run(inserts, targetSettings, Map.empty, tableDesc, targetAlternator())
+    BatchWriter.run(inserts, targetSettings, Map.empty, tableDesc, targetAlternator())
     assertEquals(scanAll().size, 5)
 
     // Now delete some and add new ones
     val mixed = Seq(
       makeItem("item-2", isPut = false), // delete
       makeItem("item-4", isPut = false), // delete
-      makeItem("item-6", isPut = true)   // insert
+      makeItem("item-6", isPut = true) // insert
     )
-    DynamoStreamReplication.run(mixed, targetSettings, Map.empty, tableDesc, targetAlternator())
+    BatchWriter.run(mixed, targetSettings, Map.empty, tableDesc, targetAlternator())
 
     val results = scanAll()
     val ids = results.map(_("id").s()).toSet
@@ -140,8 +140,8 @@ class FlushBatchRetryTest extends MigratorSuiteWithDynamoDBLocal {
   test("run() with empty items is a no-op") {
     val tableDesc = createTable()
     // Should not throw
-    DynamoStreamReplication.run(Seq.empty, targetSettings, Map.empty, tableDesc, targetAlternator())
-    DynamoStreamReplication.run(Seq(None, None), targetSettings, Map.empty, tableDesc, targetAlternator())
+    BatchWriter.run(Seq.empty, targetSettings, Map.empty, tableDesc, targetAlternator())
+    BatchWriter.run(Seq(None, None), targetSettings, Map.empty, tableDesc, targetAlternator())
     assertEquals(scanAll().size, 0)
   }
 }

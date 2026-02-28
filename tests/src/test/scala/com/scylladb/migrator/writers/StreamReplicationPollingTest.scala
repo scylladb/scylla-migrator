@@ -192,7 +192,9 @@ class StreamReplicationPollingTest extends MigratorSuiteWithDynamoDBLocal {
     )
 
     // Wait for first cycle to claim and start polling the shard
-    Thread.sleep(3000)
+    Eventually(timeoutMs = 10000) {
+      pollCount >= 1
+    }("Expected at least 1 poll cycle")
 
     // Now steal the lease by manually updating the checkpoint table
     val leaseKeyColumn = "leaseKey"
@@ -222,12 +224,9 @@ class StreamReplicationPollingTest extends MigratorSuiteWithDynamoDBLocal {
     }
 
     // Wait for a couple more poll cycles so renewLeaseAndCheckpoint sees the stolen lease
-    Thread.sleep(3000)
-
-    // The shard should have been removed from tracking (renewLeaseAndCheckpoint returns false).
-    // We can't directly inspect the internal state, but we can verify the system stays alive
-    // (doesn't crash) and continues polling.
-    assert(pollCount >= 2, s"Expected at least 2 poll cycles, got $pollCount")
+    Eventually(timeoutMs = 10000) {
+      pollCount >= 2
+    }(s"Expected at least 2 poll cycles, got $pollCount")
 
     handle.stop()
   }

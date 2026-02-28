@@ -23,6 +23,32 @@ import scala.jdk.CollectionConverters._
 
 /** Trait encapsulating checkpoint and lease operations for DynamoDB stream replication.
   *
+  * ==Checkpoint Table Schema==
+  *
+  * The checkpoint table uses a single hash key and the following columns:
+  *
+  * {{{
+  * leaseKey          (S)  — Hash key. The DynamoDB Streams shard ID.
+  * checkpoint        (S)  — Last successfully processed sequence number, or "SHARD_END" sentinel.
+  * leaseOwner        (S)  — Worker ID that currently owns this shard's lease.
+  * leaseExpiryEpochMs(N)  — Epoch millis when the lease expires; 0 means released.
+  * parentShardId     (S)  — Optional parent shard ID for ordering child-after-parent processing.
+  * leaseTransferTo   (S)  — Worker ID requesting a graceful lease transfer (removed on release).
+  * leaseCounter      (N)  — Monotonically increasing counter incremented on each renewal.
+  * }}}
+  *
+  * ==Lease Protocol==
+  *
+  * '''Claim:''' A shard is claimable when the row does not exist, the lease has expired
+  * (`leaseExpiryEpochMs < now`), or the requesting worker already owns it (`leaseOwner = me`). All
+  * claims use conditional writes to prevent races.
+  *
+  * '''Renewal:''' The lease owner periodically extends `leaseExpiryEpochMs` and optionally updates
+  * `checkpoint`. The condition `leaseOwner = me` ensures stolen leases are detected.
+  *
+  * '''Transfer:''' A worker requests transfer by setting `leaseTransferTo`. The current owner
+  * detects this on its next renewal, releases the lease, and the requester claims it.
+  *
   * Extracted from `DynamoStreamReplication` to reduce coupling: `StreamReplicationWorker` depends
   * on this trait rather than importing a concrete companion object, making it testable in
   * isolation.
@@ -209,13 +235,14 @@ object DefaultCheckpointManager extends CheckpointManager {
         case Some(_) => baseAttrNames + ("#parent" -> parentShardIdColumn)
         case None    => baseAttrNames
       }
+      val nowMs = System.currentTimeMillis()
       val baseAttrValues = Map(
         ":owner" -> AttributeValue.fromS(workerId),
         ":expiry" -> AttributeValue.fromN(
-          (System.currentTimeMillis() + leaseDurationMs).toString
+          (nowMs + leaseDurationMs).toString
         ),
         ":now" -> AttributeValue.fromN(
-          System.currentTimeMillis().toString
+          nowMs.toString
         ),
         ":me" -> AttributeValue.fromS(workerId)
       )

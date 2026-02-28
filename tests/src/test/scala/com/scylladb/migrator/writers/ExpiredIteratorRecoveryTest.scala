@@ -15,8 +15,9 @@ import scala.jdk.CollectionConverters._
 
 /** Tests for expired iterator recovery in pollOwnedShards.
   *
-  * Simulates an ExpiredIteratorException on the first getRecords call, then verifies that the worker
-  * recovers by refreshing the iterator (from checkpoint or TRIM_HORIZON) and continues processing.
+  * Simulates an ExpiredIteratorException on the first getRecords call, then verifies that the
+  * worker recovers by refreshing the iterator (from checkpoint or TRIM_HORIZON) and continues
+  * processing.
   */
 class ExpiredIteratorRecoveryTest extends MigratorSuiteWithDynamoDBLocal {
 
@@ -149,12 +150,9 @@ class ExpiredIteratorRecoveryTest extends MigratorSuiteWithDynamoDBLocal {
       poller = poller
     )
 
-    // Wait for a few poll cycles
-    Thread.sleep(5000)
-
-    // The worker should have recovered: first call expired, then it refreshed the iterator
-    assert(
-      getRecordsCallCount.get() >= 2,
+    Eventually(timeoutMs = 10000) {
+      getRecordsCallCount.get() >= 2
+    }(
       s"Expected at least 2 getRecords calls (1 expired + 1 recovered), got ${getRecordsCallCount.get()}"
     )
 
@@ -188,8 +186,8 @@ class ExpiredIteratorRecoveryTest extends MigratorSuiteWithDynamoDBLocal {
     }
 
     // getShardIteratorAfterSequence fails (simulating no valid checkpoint)
-    poller.getShardIteratorAfterSequenceFn = (_, _, _, _) =>
-      throw new RuntimeException("No valid sequence number")
+    poller.getShardIteratorAfterSequenceFn =
+      (_, _, _, _) => throw new RuntimeException("No valid sequence number")
 
     // Should fall back to TRIM_HORIZON
     var trimHorizonRequested = false
@@ -210,12 +208,9 @@ class ExpiredIteratorRecoveryTest extends MigratorSuiteWithDynamoDBLocal {
       poller = poller
     )
 
-    Thread.sleep(5000)
-
-    assert(
-      getRecordsCallCount.get() >= 2,
-      s"Expected recovery after expired iterator, got ${getRecordsCallCount.get()} calls"
-    )
+    Eventually(timeoutMs = 10000) {
+      getRecordsCallCount.get() >= 2
+    }(s"Expected recovery after expired iterator, got ${getRecordsCallCount.get()} calls")
 
     handle.stop()
   }

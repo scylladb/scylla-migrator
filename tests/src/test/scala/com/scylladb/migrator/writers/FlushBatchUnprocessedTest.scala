@@ -17,12 +17,11 @@ class FlushBatchUnprocessedTest extends MigratorSuiteWithDynamoDBLocal {
   private val tableName = "FlushBatchUnprocessedTest"
 
   private val targetSettings = com.scylladb.migrator.config.TargetSettings.DynamoDB(
-    table                       = tableName,
-    region                      = Some("eu-central-1"),
-    endpoint = Some(com.scylladb.migrator.config.DynamoDBEndpoint("http://localhost", 8000)),
-    credentials =
-      Some(com.scylladb.migrator.config.AWSCredentials("dummy", "dummy", None)),
-    streamChanges               = false,
+    table         = tableName,
+    region        = Some("eu-central-1"),
+    endpoint      = Some(com.scylladb.migrator.config.DynamoDBEndpoint("http://localhost", 8000)),
+    credentials   = Some(com.scylladb.migrator.config.AWSCredentials("dummy", "dummy", None)),
+    streamChanges = false,
     skipInitialSnapshotTransfer = None,
     writeThroughput             = None,
     throughputWritePercent      = None
@@ -68,9 +67,9 @@ class FlushBatchUnprocessedTest extends MigratorSuiteWithDynamoDBLocal {
     item.put("id", AttributeValue.fromS(id))
     if (isPut) {
       item.put("value", AttributeValue.fromS(s"val-$id"))
-      item.put(DynamoStreamReplication.operationTypeColumn, DynamoStreamReplication.putOperation)
+      item.put(BatchWriter.operationTypeColumn, BatchWriter.putOperation)
     } else {
-      item.put(DynamoStreamReplication.operationTypeColumn, DynamoStreamReplication.deleteOperation)
+      item.put(BatchWriter.operationTypeColumn, BatchWriter.deleteOperation)
     }
     Some(item)
   }
@@ -88,7 +87,7 @@ class FlushBatchUnprocessedTest extends MigratorSuiteWithDynamoDBLocal {
     val batch = new util.ArrayList[WriteRequest]()
     val batchKeys = new util.HashSet[String]()
     // flushBatch with empty batch should be a no-op (while loop condition is immediately false)
-    DynamoStreamReplication.flushBatch(targetAlternator(), tableName, batch, batchKeys)
+    BatchWriter.flushBatch(targetAlternator(), tableName, batch, batchKeys)
   }
 
   test("flushBatch directly writes a single item") {
@@ -101,13 +100,15 @@ class FlushBatchUnprocessedTest extends MigratorSuiteWithDynamoDBLocal {
         .putRequest(
           PutRequest
             .builder()
-            .item(Map("id" -> AttributeValue.fromS("direct-1"), "v" -> AttributeValue.fromS("x")).asJava)
+            .item(
+              Map("id" -> AttributeValue.fromS("direct-1"), "v" -> AttributeValue.fromS("x")).asJava
+            )
             .build()
         )
         .build()
     )
     batchKeys.add("id=direct-1")
-    DynamoStreamReplication.flushBatch(targetAlternator(), tableName, batch, batchKeys)
+    BatchWriter.flushBatch(targetAlternator(), tableName, batch, batchKeys)
 
     assert(batch.isEmpty, "batch should be cleared after flush")
     assert(batchKeys.isEmpty, "batchKeys should be cleared after flush")
@@ -118,7 +119,7 @@ class FlushBatchUnprocessedTest extends MigratorSuiteWithDynamoDBLocal {
     createTable()
     val batch = new util.ArrayList[WriteRequest]()
     val batchKeys = new util.HashSet[String]()
-    for (i <- 1 to DynamoStreamReplication.batchWriteItemLimit) {
+    for (i <- 1 to BatchWriter.batchWriteItemLimit) {
       batch.add(
         WriteRequest
           .builder()
@@ -132,15 +133,15 @@ class FlushBatchUnprocessedTest extends MigratorSuiteWithDynamoDBLocal {
       )
       batchKeys.add(s"id=b-$i")
     }
-    DynamoStreamReplication.flushBatch(targetAlternator(), tableName, batch, batchKeys)
-    assertEquals(scanAll().size, DynamoStreamReplication.batchWriteItemLimit)
+    BatchWriter.flushBatch(targetAlternator(), tableName, batch, batchKeys)
+    assertEquals(scanAll().size, BatchWriter.batchWriteItemLimit)
   }
 
   test("run() with 100 items correctly flushes multiple batches") {
     val tableDesc = createTable()
     val items = (1 to 100).map(i => makeItem(s"item-$i", isPut = true))
 
-    DynamoStreamReplication.run(items, targetSettings, Map.empty, tableDesc, targetAlternator())
+    BatchWriter.run(items, targetSettings, Map.empty, tableDesc, targetAlternator())
 
     val results = scanAll()
     assertEquals(results.size, 100)
@@ -156,7 +157,7 @@ class FlushBatchUnprocessedTest extends MigratorSuiteWithDynamoDBLocal {
       )
     }
 
-    DynamoStreamReplication.run(items, targetSettings, Map.empty, tableDesc, targetAlternator())
+    BatchWriter.run(items, targetSettings, Map.empty, tableDesc, targetAlternator())
 
     // All keys should be deleted since the last operation for each key is a delete
     val results = scanAll()

@@ -36,7 +36,7 @@ class DynamoStreamLeaseIntegrationTest extends MigratorSuiteWithDynamoDBLocal {
     } catch {
       case _: ResourceNotFoundException => ()
     }
-    DynamoStreamReplication.createCheckpointTable(sourceDDb(), checkpointTable)
+    DefaultCheckpointManager.createCheckpointTable(sourceDDb(), checkpointTable)
   }
 
   // --- createCheckpointTable tests ---
@@ -51,7 +51,7 @@ class DynamoStreamLeaseIntegrationTest extends MigratorSuiteWithDynamoDBLocal {
     } catch {
       case _: ResourceNotFoundException => ()
     }
-    DynamoStreamReplication.createCheckpointTable(sourceDDb(), tableName)
+    DefaultCheckpointManager.createCheckpointTable(sourceDDb(), tableName)
     val desc = sourceDDb()
       .describeTable(DescribeTableRequest.builder().tableName(tableName).build())
       .table()
@@ -62,7 +62,7 @@ class DynamoStreamLeaseIntegrationTest extends MigratorSuiteWithDynamoDBLocal {
 
   test("createCheckpointTable: no-op when table already exists") {
     // Table was already created in beforeEach; calling again should not throw
-    DynamoStreamReplication.createCheckpointTable(sourceDDb(), checkpointTable)
+    DefaultCheckpointManager.createCheckpointTable(sourceDDb(), checkpointTable)
     val desc = sourceDDb()
       .describeTable(DescribeTableRequest.builder().tableName(checkpointTable).build())
       .table()
@@ -72,7 +72,7 @@ class DynamoStreamLeaseIntegrationTest extends MigratorSuiteWithDynamoDBLocal {
   // --- tryClaimShard tests ---
 
   test("tryClaimShard: claim unclaimed shard returns Some(None)") {
-    val result = DynamoStreamReplication.tryClaimShard(
+    val result = DefaultCheckpointManager.tryClaimShard(
       sourceDDb(),
       checkpointTable,
       "shard-001",
@@ -83,13 +83,13 @@ class DynamoStreamLeaseIntegrationTest extends MigratorSuiteWithDynamoDBLocal {
 
   test("tryClaimShard: claim shard with expired lease preserves checkpoint") {
     // First, worker-A claims the shard and sets a checkpoint
-    DynamoStreamReplication.tryClaimShard(
+    DefaultCheckpointManager.tryClaimShard(
       sourceDDb(),
       checkpointTable,
       "shard-002",
       "worker-A"
     )
-    DynamoStreamReplication.renewLeaseAndCheckpoint(
+    DefaultCheckpointManager.renewLeaseAndCheckpoint(
       sourceDDb(),
       checkpointTable,
       "shard-002",
@@ -112,7 +112,7 @@ class DynamoStreamLeaseIntegrationTest extends MigratorSuiteWithDynamoDBLocal {
     )
 
     // worker-B claims the expired shard
-    val result = DynamoStreamReplication.tryClaimShard(
+    val result = DefaultCheckpointManager.tryClaimShard(
       sourceDDb(),
       checkpointTable,
       "shard-002",
@@ -123,7 +123,7 @@ class DynamoStreamLeaseIntegrationTest extends MigratorSuiteWithDynamoDBLocal {
 
   test("tryClaimShard: fail on shard with active lease owned by another worker") {
     // worker-A claims with a far-future expiry
-    DynamoStreamReplication.tryClaimShard(
+    DefaultCheckpointManager.tryClaimShard(
       sourceDDb(),
       checkpointTable,
       "shard-003",
@@ -132,7 +132,7 @@ class DynamoStreamLeaseIntegrationTest extends MigratorSuiteWithDynamoDBLocal {
     )
 
     // worker-B tries to claim
-    val result = DynamoStreamReplication.tryClaimShard(
+    val result = DefaultCheckpointManager.tryClaimShard(
       sourceDDb(),
       checkpointTable,
       "shard-003",
@@ -142,13 +142,13 @@ class DynamoStreamLeaseIntegrationTest extends MigratorSuiteWithDynamoDBLocal {
   }
 
   test("tryClaimShard: re-claim own shard succeeds") {
-    DynamoStreamReplication.tryClaimShard(
+    DefaultCheckpointManager.tryClaimShard(
       sourceDDb(),
       checkpointTable,
       "shard-004",
       "worker-A"
     )
-    val result = DynamoStreamReplication.tryClaimShard(
+    val result = DefaultCheckpointManager.tryClaimShard(
       sourceDDb(),
       checkpointTable,
       "shard-004",
@@ -160,13 +160,13 @@ class DynamoStreamLeaseIntegrationTest extends MigratorSuiteWithDynamoDBLocal {
   // --- renewLeaseAndCheckpoint tests ---
 
   test("renewLeaseAndCheckpoint: renew with checkpoint update") {
-    DynamoStreamReplication.tryClaimShard(
+    DefaultCheckpointManager.tryClaimShard(
       sourceDDb(),
       checkpointTable,
       "shard-010",
       "worker-A"
     )
-    val renewed = DynamoStreamReplication.renewLeaseAndCheckpoint(
+    val renewed = DefaultCheckpointManager.renewLeaseAndCheckpoint(
       sourceDDb(),
       checkpointTable,
       "shard-010",
@@ -189,13 +189,13 @@ class DynamoStreamLeaseIntegrationTest extends MigratorSuiteWithDynamoDBLocal {
   }
 
   test("renewLeaseAndCheckpoint: renew without checkpoint (expiry-only)") {
-    DynamoStreamReplication.tryClaimShard(
+    DefaultCheckpointManager.tryClaimShard(
       sourceDDb(),
       checkpointTable,
       "shard-011",
       "worker-A"
     )
-    val renewed = DynamoStreamReplication.renewLeaseAndCheckpoint(
+    val renewed = DefaultCheckpointManager.renewLeaseAndCheckpoint(
       sourceDDb(),
       checkpointTable,
       "shard-011",
@@ -206,7 +206,7 @@ class DynamoStreamLeaseIntegrationTest extends MigratorSuiteWithDynamoDBLocal {
   }
 
   test("renewLeaseAndCheckpoint: fail when lease was stolen by another worker") {
-    DynamoStreamReplication.tryClaimShard(
+    DefaultCheckpointManager.tryClaimShard(
       sourceDDb(),
       checkpointTable,
       "shard-012",
@@ -228,7 +228,7 @@ class DynamoStreamLeaseIntegrationTest extends MigratorSuiteWithDynamoDBLocal {
     )
 
     // worker-B steals the lease
-    DynamoStreamReplication.tryClaimShard(
+    DefaultCheckpointManager.tryClaimShard(
       sourceDDb(),
       checkpointTable,
       "shard-012",
@@ -237,7 +237,7 @@ class DynamoStreamLeaseIntegrationTest extends MigratorSuiteWithDynamoDBLocal {
     )
 
     // worker-A tries to renew — should fail
-    val renewed = DynamoStreamReplication.renewLeaseAndCheckpoint(
+    val renewed = DefaultCheckpointManager.renewLeaseAndCheckpoint(
       sourceDDb(),
       checkpointTable,
       "shard-012",
@@ -254,7 +254,7 @@ class DynamoStreamLeaseIntegrationTest extends MigratorSuiteWithDynamoDBLocal {
 
     // Worker A claims first
     val claimedByA = shardIds.flatMap { shardId =>
-      DynamoStreamReplication.tryClaimShard(
+      DefaultCheckpointManager.tryClaimShard(
         sourceDDb(),
         checkpointTable,
         shardId,
@@ -268,7 +268,7 @@ class DynamoStreamLeaseIntegrationTest extends MigratorSuiteWithDynamoDBLocal {
 
     // Worker B tries to claim all — should get None for A's shards
     val claimedByB = shardIds.flatMap { shardId =>
-      DynamoStreamReplication.tryClaimShard(
+      DefaultCheckpointManager.tryClaimShard(
         sourceDDb(),
         checkpointTable,
         shardId,
@@ -289,7 +289,7 @@ class DynamoStreamLeaseIntegrationTest extends MigratorSuiteWithDynamoDBLocal {
 
     // Worker A claims with very short lease
     shardIds.foreach { shardId =>
-      DynamoStreamReplication.tryClaimShard(
+      DefaultCheckpointManager.tryClaimShard(
         sourceDDb(),
         checkpointTable,
         shardId,
@@ -303,7 +303,7 @@ class DynamoStreamLeaseIntegrationTest extends MigratorSuiteWithDynamoDBLocal {
 
     // Worker B claims the expired shards
     val claimedByB = shardIds.flatMap { shardId =>
-      DynamoStreamReplication.tryClaimShard(
+      DefaultCheckpointManager.tryClaimShard(
         sourceDDb(),
         checkpointTable,
         shardId,

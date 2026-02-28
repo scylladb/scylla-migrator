@@ -21,7 +21,7 @@ class LeaseTransferTest extends MigratorSuiteWithDynamoDBLocal {
     try
       sourceDDb().deleteTable(DeleteTableRequest.builder().tableName(checkpointTable).build())
     catch { case _: Exception => () }
-    DynamoStreamReplication.createCheckpointTable(sourceDDb(), checkpointTable)
+    DefaultCheckpointManager.createCheckpointTable(sourceDDb(), checkpointTable)
   }
 
   override def afterEach(context: AfterEach): Unit = {
@@ -34,12 +34,17 @@ class LeaseTransferTest extends MigratorSuiteWithDynamoDBLocal {
   test("requestLeaseTransfer sets transfer field on an existing shard") {
     // Worker 1 claims the shard
     val claimed =
-      DynamoStreamReplication.tryClaimShard(sourceDDb(), checkpointTable, "shard-1", worker1)
+      DefaultCheckpointManager.tryClaimShard(sourceDDb(), checkpointTable, "shard-1", worker1)
     assert(claimed.isDefined)
 
     // Worker 2 requests a transfer
     val result =
-      DynamoStreamReplication.requestLeaseTransfer(sourceDDb(), checkpointTable, "shard-1", worker2)
+      DefaultCheckpointManager.requestLeaseTransfer(
+        sourceDDb(),
+        checkpointTable,
+        "shard-1",
+        worker2
+      )
     assert(result)
 
     // Verify the transfer field is set
@@ -49,7 +54,7 @@ class LeaseTransferTest extends MigratorSuiteWithDynamoDBLocal {
           .builder()
           .tableName(checkpointTable)
           .key(
-            Map(DynamoStreamReplication.leaseKeyColumn -> AttributeValue.fromS("shard-1")).asJava
+            Map(DefaultCheckpointManager.leaseKeyColumn -> AttributeValue.fromS("shard-1")).asJava
           )
           .build()
       )
@@ -58,7 +63,7 @@ class LeaseTransferTest extends MigratorSuiteWithDynamoDBLocal {
   }
 
   test("requestLeaseTransfer fails for non-existent shard") {
-    val result = DynamoStreamReplication.requestLeaseTransfer(
+    val result = DefaultCheckpointManager.requestLeaseTransfer(
       sourceDDb(),
       checkpointTable,
       "nonexistent",
@@ -69,13 +74,13 @@ class LeaseTransferTest extends MigratorSuiteWithDynamoDBLocal {
 
   test("renewLeaseAndCheckpoint detects transfer request and releases lease") {
     // Worker 1 claims the shard
-    DynamoStreamReplication.tryClaimShard(sourceDDb(), checkpointTable, "shard-1", worker1)
+    DefaultCheckpointManager.tryClaimShard(sourceDDb(), checkpointTable, "shard-1", worker1)
 
     // Worker 2 requests a transfer
-    DynamoStreamReplication.requestLeaseTransfer(sourceDDb(), checkpointTable, "shard-1", worker2)
+    DefaultCheckpointManager.requestLeaseTransfer(sourceDDb(), checkpointTable, "shard-1", worker2)
 
     // Worker 1 renews — should see the transfer and release
-    val renewed = DynamoStreamReplication.renewLeaseAndCheckpoint(
+    val renewed = DefaultCheckpointManager.renewLeaseAndCheckpoint(
       sourceDDb(),
       checkpointTable,
       "shard-1",
@@ -86,7 +91,7 @@ class LeaseTransferTest extends MigratorSuiteWithDynamoDBLocal {
 
     // Worker 2 should now be able to claim the shard
     val claimed =
-      DynamoStreamReplication.tryClaimShard(sourceDDb(), checkpointTable, "shard-1", worker2)
+      DefaultCheckpointManager.tryClaimShard(sourceDDb(), checkpointTable, "shard-1", worker2)
     assert(claimed.isDefined)
   }
 }

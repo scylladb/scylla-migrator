@@ -38,23 +38,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 import scala.collection.concurrent.TrieMap
 import scala.jdk.CollectionConverters._
 
-/** Poll a condition at regular intervals until it returns true or the timeout expires.
-  * @throws AssertionError if the timeout expires before the condition is met
-  */
-private object Eventually {
-  def apply(
-    timeoutMs: Long = 10000,
-    intervalMs: Long = 200
-  )(condition: => Boolean)(message: => String): Unit = {
-    val deadline = System.currentTimeMillis() + timeoutMs
-    while (!condition) {
-      if (System.currentTimeMillis() >= deadline)
-        throw new AssertionError(s"Timed out after ${timeoutMs}ms: ${message}")
-      Thread.sleep(intervalMs)
-    }
-  }
-}
-
 /** End-to-end tests verifying that multiple DynamoStreamReplication.startStreaming() instances can
   * run concurrently, coordinate via the shared checkpoint table, split shards between each other,
   * and replicate all stream records to the target without duplication or loss.
@@ -64,7 +47,8 @@ private object Eventually {
 class MultiRunnerStreamReplicationTest extends MigratorSuiteWithDynamoDBLocal {
 
   private val targetTable = "MultiRunnerTestTarget"
-  private lazy val checkpointTable = DynamoStreamReplication.buildCheckpointTableName(makeSourceSettings())
+  private lazy val checkpointTable =
+    DynamoStreamReplication.buildCheckpointTableName(makeSourceSettings())
 
   private def makeSourceSettings(
     pollIntervalSeconds: Int = 1,

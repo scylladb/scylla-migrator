@@ -19,7 +19,7 @@ class IsParentDrainedTest extends MigratorSuiteWithDynamoDBLocal {
     try
       sourceDDb().deleteTable(DeleteTableRequest.builder().tableName(checkpointTable).build())
     catch { case _: Exception => () }
-    DynamoStreamReplication.createCheckpointTable(sourceDDb(), checkpointTable)
+    DefaultCheckpointManager.createCheckpointTable(sourceDDb(), checkpointTable)
   }
 
   override def afterEach(context: AfterEach): Unit = {
@@ -30,13 +30,13 @@ class IsParentDrainedTest extends MigratorSuiteWithDynamoDBLocal {
   }
 
   test("isParentDrained returns true when parentShardId is None (root shard)") {
-    val result = DynamoStreamReplication.isParentDrained(sourceDDb(), checkpointTable, None)
+    val result = DefaultCheckpointManager.isParentDrained(sourceDDb(), checkpointTable, None)
     assert(result)
   }
 
   test("isParentDrained returns false when parent has no checkpoint row") {
     val result =
-      DynamoStreamReplication.isParentDrained(sourceDDb(), checkpointTable, Some("nonexistent"))
+      DefaultCheckpointManager.isParentDrained(sourceDDb(), checkpointTable, Some("nonexistent"))
     assert(!result)
   }
 
@@ -48,15 +48,15 @@ class IsParentDrainedTest extends MigratorSuiteWithDynamoDBLocal {
         .tableName(checkpointTable)
         .item(
           Map(
-            DynamoStreamReplication.leaseKeyColumn -> AttributeValue.fromS("parent-shard"),
-            "checkpoint"                           -> AttributeValue.fromS("seq-12345")
+            DefaultCheckpointManager.leaseKeyColumn -> AttributeValue.fromS("parent-shard"),
+            "checkpoint"                            -> AttributeValue.fromS("seq-12345")
           ).asJava
         )
         .build()
     )
 
     val result =
-      DynamoStreamReplication.isParentDrained(sourceDDb(), checkpointTable, Some("parent-shard"))
+      DefaultCheckpointManager.isParentDrained(sourceDDb(), checkpointTable, Some("parent-shard"))
     assert(!result)
   }
 
@@ -67,15 +67,15 @@ class IsParentDrainedTest extends MigratorSuiteWithDynamoDBLocal {
         .tableName(checkpointTable)
         .item(
           Map(
-            DynamoStreamReplication.leaseKeyColumn -> AttributeValue.fromS("parent-shard"),
-            "checkpoint" -> AttributeValue.fromS(DynamoStreamReplication.shardEndSentinel)
+            DefaultCheckpointManager.leaseKeyColumn -> AttributeValue.fromS("parent-shard"),
+            "checkpoint" -> AttributeValue.fromS(DefaultCheckpointManager.shardEndSentinel)
           ).asJava
         )
         .build()
     )
 
     val result =
-      DynamoStreamReplication.isParentDrained(sourceDDb(), checkpointTable, Some("parent-shard"))
+      DefaultCheckpointManager.isParentDrained(sourceDDb(), checkpointTable, Some("parent-shard"))
     assert(result)
   }
 }

@@ -21,7 +21,7 @@ class RetryRandomTest extends munit.FunSuite {
 
   test("retryRandom: succeeds on first try") {
     var callCount = 0
-    val result = DynamoStreamReplication.retryRandom(
+    val result = DefaultCheckpointManager.retryRandom(
       { callCount += 1; 42 },
       numRetriesLeft   = 3,
       maxBackOffMillis = 10
@@ -32,7 +32,7 @@ class RetryRandomTest extends munit.FunSuite {
 
   test("retryRandom: retries on retryable DynamoDbException and eventually succeeds") {
     var callCount = 0
-    val result = DynamoStreamReplication.retryRandom(
+    val result = DefaultCheckpointManager.retryRandom(
       {
         callCount += 1
         if (callCount < 3)
@@ -49,7 +49,7 @@ class RetryRandomTest extends munit.FunSuite {
   test("retryRandom: exhausts retries and throws") {
     var callCount = 0
     val ex = intercept[DynamoDbException] {
-      DynamoStreamReplication.retryRandom(
+      DefaultCheckpointManager.retryRandom(
         {
           callCount += 1
           throw makeDynamoException("ProvisionedThroughputExceededException")
@@ -65,7 +65,7 @@ class RetryRandomTest extends munit.FunSuite {
   test("retryRandom: non-retryable exception thrown immediately without retry") {
     var callCount = 0
     val ex = intercept[DynamoDbException] {
-      DynamoStreamReplication.retryRandom(
+      DefaultCheckpointManager.retryRandom(
         {
           callCount += 1
           throw makeDynamoException("ValidationException")
@@ -81,7 +81,7 @@ class RetryRandomTest extends munit.FunSuite {
   test("retryRandom: non-DynamoDB exception thrown immediately") {
     var callCount = 0
     val ex = intercept[RuntimeException] {
-      DynamoStreamReplication.retryRandom(
+      DefaultCheckpointManager.retryRandom(
         {
           callCount += 1
           throw new RuntimeException("generic error")

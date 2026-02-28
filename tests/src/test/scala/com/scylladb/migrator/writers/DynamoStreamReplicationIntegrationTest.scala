@@ -73,7 +73,7 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
           .build()
       )
 
-      val streamEvents: Seq[Option[DynamoStreamReplication.DynamoItem]] = Seq(
+      val streamEvents: Seq[Option[BatchWriter.DynamoItem]] = Seq(
         Some(
           Map(
             "id"                -> AttributeValue.fromS("toDelete"),
@@ -142,7 +142,7 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
         )
         .table()
 
-      DynamoStreamReplication.run(
+      BatchWriter.run(
         streamEvents,
         targetSettings,
         Map.empty[String, String],
@@ -197,7 +197,7 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
       .waiter()
       .waitUntilTableExists(DescribeTableRequest.builder().tableName(renamedTable).build())
 
-    val streamEvents: Seq[Option[DynamoStreamReplication.DynamoItem]] = Seq(
+    val streamEvents: Seq[Option[BatchWriter.DynamoItem]] = Seq(
       Some(
         Map(
           "id"                -> AttributeValue.fromS("k1"),
@@ -222,7 +222,7 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
       .describeTable(DescribeTableRequest.builder().tableName(renamedTable).build())
       .table()
 
-    DynamoStreamReplication.run(
+    BatchWriter.run(
       streamEvents,
       targetSettings,
       Map("oldName" -> "newName"),

@@ -21,7 +21,8 @@ import scala.jdk.CollectionConverters._
 class StreamMetrics(
   tableName: String,
   region: Option[String],
-  enableCloudWatch: Boolean
+  enableCloudWatch: Boolean,
+  cloudWatchNamespace: String = "ScyllaMigrator/StreamReplication"
 ) extends AutoCloseable {
 
   private val log = LogManager.getLogger("com.scylladb.migrator.writers.StreamMetrics")
@@ -31,6 +32,8 @@ class StreamMetrics(
   val activeShards = new AtomicLong(0L)
   val maxIteratorAgeMs = new AtomicLong(0L)
   val lastPollDurationMs = new AtomicLong(0L)
+  val writeFailures = new AtomicLong(0L)
+  val checkpointFailures = new AtomicLong(0L)
 
   // --- CloudWatch (optional, lazily initialized) ---
 
@@ -49,20 +52,26 @@ class StreamMetrics(
       }
     else None
 
-  private val namespace = "ScyllaMigrator/StreamReplication"
+  private val namespace = cloudWatchNamespace
 
   private val tableDimension =
     Dimension.builder().name("TableName").value(tableName).build()
+
+  /** Track the last published value of recordsProcessed to compute deltas. */
+  private var lastPublishedRecordsProcessed = 0L
 
   /** Publish current metric values to CloudWatch. Call periodically (e.g., every 60 cycles). */
   def publishToCloudWatch(): Unit =
     cloudWatchClient.foreach { client =>
       try {
+        val currentRecordsProcessed = recordsProcessed.get()
+        val recordsDelta = currentRecordsProcessed - lastPublishedRecordsProcessed
+        lastPublishedRecordsProcessed = currentRecordsProcessed
         val data = Seq(
           MetricDatum
             .builder()
             .metricName("RecordsProcessed")
-            .value(recordsProcessed.get().toDouble)
+            .value(recordsDelta.toDouble)
             .unit(StandardUnit.COUNT)
             .dimensions(tableDimension)
             .build(),
@@ -85,6 +94,20 @@ class StreamMetrics(
             .metricName("PollDurationMs")
             .value(lastPollDurationMs.get().toDouble)
             .unit(StandardUnit.MILLISECONDS)
+            .dimensions(tableDimension)
+            .build(),
+          MetricDatum
+            .builder()
+            .metricName("WriteFailures")
+            .value(writeFailures.get().toDouble)
+            .unit(StandardUnit.COUNT)
+            .dimensions(tableDimension)
+            .build(),
+          MetricDatum
+            .builder()
+            .metricName("CheckpointFailures")
+            .value(checkpointFailures.get().toDouble)
+            .unit(StandardUnit.COUNT)
             .dimensions(tableDimension)
             .build()
         )

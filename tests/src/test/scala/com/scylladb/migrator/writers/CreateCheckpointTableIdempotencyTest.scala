@@ -1,10 +1,7 @@
 package com.scylladb.migrator.writers
 
 import com.scylladb.migrator.alternator.MigratorSuiteWithDynamoDBLocal
-import software.amazon.awssdk.services.dynamodb.model.{
-  DeleteTableRequest,
-  DescribeTableRequest
-}
+import software.amazon.awssdk.services.dynamodb.model.{ DeleteTableRequest, DescribeTableRequest }
 
 /** Tests for createCheckpointTable idempotency (when table already exists). */
 class CreateCheckpointTableIdempotencyTest extends MigratorSuiteWithDynamoDBLocal {
@@ -23,7 +20,7 @@ class CreateCheckpointTableIdempotencyTest extends MigratorSuiteWithDynamoDBLoca
       sourceDDb().deleteTable(DeleteTableRequest.builder().tableName(checkpointTable).build())
     catch { case _: Exception => () }
 
-    DynamoStreamReplication.createCheckpointTable(sourceDDb(), checkpointTable)
+    DefaultCheckpointManager.createCheckpointTable(sourceDDb(), checkpointTable)
 
     // Verify table exists
     val desc = sourceDDb()
@@ -33,10 +30,10 @@ class CreateCheckpointTableIdempotencyTest extends MigratorSuiteWithDynamoDBLoca
 
   test("createCheckpointTable is idempotent when table already exists") {
     // Create table first
-    DynamoStreamReplication.createCheckpointTable(sourceDDb(), checkpointTable)
+    DefaultCheckpointManager.createCheckpointTable(sourceDDb(), checkpointTable)
 
     // Second call should not throw
-    DynamoStreamReplication.createCheckpointTable(sourceDDb(), checkpointTable)
+    DefaultCheckpointManager.createCheckpointTable(sourceDDb(), checkpointTable)
 
     // Table should still exist
     val desc = sourceDDb()
