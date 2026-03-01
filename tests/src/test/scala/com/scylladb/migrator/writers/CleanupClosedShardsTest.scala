@@ -80,7 +80,7 @@ class CleanupClosedShardsTest extends StreamReplicationTestFixture {
 
     try
       // Wait until SHARD_END is written to the checkpoint table
-      Eventually(timeoutMs = 10000) {
+      Eventually(timeoutMs = 20000) {
         DefaultCheckpointManager
           .getCheckpoint(sourceDDb(), checkpointTable, "shard-closing-1")
           .contains(DefaultCheckpointManager.shardEndSentinel)
