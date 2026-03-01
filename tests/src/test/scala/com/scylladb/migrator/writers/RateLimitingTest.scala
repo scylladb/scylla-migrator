@@ -77,14 +77,14 @@ class RateLimitingTest extends StreamReplicationTestFixture {
     val pollCount = new AtomicInteger(0)
 
     // Return a burst of records on the first poll, empty afterward
-    poller.getRecordsFn.set((_, _, _) => {
+    poller.getRecordsFn.set { (_, _, _) =>
       val n = pollCount.incrementAndGet()
       if (n == 1) {
         val records = (1 to 10).map(i => makeRecord(s"rate-$i", s"seq-$i"))
         (records, Some("next-iter"))
       } else
         (Seq.empty, Some("next-iter"))
-    })
+    }
 
     val tableDesc = targetAlternator()
       .describeTable(DescribeTableRequest.builder().tableName(targetTable).build())
@@ -99,11 +99,11 @@ class RateLimitingTest extends StreamReplicationTestFixture {
       poller = poller
     )
 
-    try {
+    try
       Eventually(timeoutMs = 15000) {
         pollCount.get() >= 2
       }(s"Expected at least 2 poll cycles, got ${pollCount.get()}")
-    } finally
+    finally
       handle.stop()
   }
 
@@ -116,14 +116,14 @@ class RateLimitingTest extends StreamReplicationTestFixture {
 
     val pollCount = new AtomicInteger(0)
 
-    poller.getRecordsFn.set((_, _, _) => {
+    poller.getRecordsFn.set { (_, _, _) =>
       val n = pollCount.incrementAndGet()
       if (n <= 3) {
         val records = (1 to 5).map(i => makeRecord(s"nr-$n-$i", s"seq-$n-$i"))
         (records, Some("next-iter"))
       } else
         (Seq.empty, Some("next-iter"))
-    })
+    }
 
     val tableDesc = targetAlternator()
       .describeTable(DescribeTableRequest.builder().tableName(targetTable).build())
@@ -137,11 +137,11 @@ class RateLimitingTest extends StreamReplicationTestFixture {
       poller = poller
     )
 
-    try {
+    try
       Eventually(timeoutMs = 10000) {
         pollCount.get() >= 3
       }(s"Expected at least 3 poll cycles without rate limiting, got ${pollCount.get()}")
-    } finally
+    finally
       handle.stop()
   }
 }

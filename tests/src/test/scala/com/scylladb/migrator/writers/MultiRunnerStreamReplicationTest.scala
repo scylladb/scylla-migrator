@@ -137,7 +137,7 @@ class MultiRunnerStreamReplicationTest extends StreamReplicationTestFixture {
     poller.getShardIteratorFn.set((_, _, shardId, _) => s"iter-$shardId")
     poller.getShardIteratorAfterSequenceFn.set((_, _, shardId, _) => s"iter-$shardId-resume")
 
-    poller.getRecordsFn.set((_, iterator, _) => {
+    poller.getRecordsFn.set { (_, iterator, _) =>
       // Extract shard id from iterator
       val shardId = shards.find(s => iterator.contains(s)).getOrElse("")
       val flag = delivered.getOrElse(shardId, new AtomicBoolean(true))
@@ -149,7 +149,7 @@ class MultiRunnerStreamReplicationTest extends StreamReplicationTestFixture {
       } else {
         (Seq.empty, Some(s"next-iter-$shardId"))
       }
-    })
+    }
 
     poller
   }
@@ -176,11 +176,11 @@ class MultiRunnerStreamReplicationTest extends StreamReplicationTestFixture {
       poller = poller2
     )
 
-    try {
+    try
       Eventually(timeoutMs = 15000) {
         scanTargetTable().size >= 12
       }(s"Expected 12 items in target, got ${scanTargetTable().size}")
-    } finally {
+    finally {
       handle1.stop()
       handle2.stop()
     }
@@ -235,11 +235,11 @@ class MultiRunnerStreamReplicationTest extends StreamReplicationTestFixture {
       poller = poller2
     )
 
-    try {
+    try
       Eventually(timeoutMs = 15000) {
         scanTargetTable().size >= 5
       }(s"Expected 5 items in target, got ${scanTargetTable().size}")
-    } finally {
+    finally {
       handle1.stop()
       handle2.stop()
     }
@@ -372,7 +372,7 @@ class MultiRunnerStreamReplicationTest extends StreamReplicationTestFixture {
       Map.empty
     )
 
-    try {
+    try
       // Wait for runner 1 to process the first batch
       Eventually(timeoutMs = 15000) {
         targetAlternator()
@@ -380,7 +380,7 @@ class MultiRunnerStreamReplicationTest extends StreamReplicationTestFixture {
           .items()
           .size() >= 5
       }("Runner 1 did not process all 5 items in time")
-    } finally
+    finally
       handle1.stop()
 
     // Insert second batch of 5 items while runner 1 is stopped
@@ -397,7 +397,7 @@ class MultiRunnerStreamReplicationTest extends StreamReplicationTestFixture {
       Map.empty
     )
 
-    try {
+    try
       // Wait for runner 2 to process the second batch
       Eventually(timeoutMs = 15000) {
         targetAlternator()
@@ -405,7 +405,7 @@ class MultiRunnerStreamReplicationTest extends StreamReplicationTestFixture {
           .items()
           .size() >= 10
       }("Runner 2 did not process all 10 items in time")
-    } finally
+    finally
       handle2.stop()
 
     // Verify all 10 items present in target with correct values

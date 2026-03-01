@@ -110,11 +110,11 @@ class StreamReplicationPollingTest extends StreamReplicationTestFixture {
     val shard = makeShard("shard-steal-1")
 
     // First cycle: return shard to claim; subsequent cycles: return empty
-    poller.listShardsFn.set((_, _) => {
+    poller.listShardsFn.set { (_, _) =>
       val count = pollCount.incrementAndGet()
       if (count <= 1) Seq(shard)
       else Seq.empty
-    })
+    }
 
     // getRecords returns empty
     poller.getRecordsFn.set((_, _, _) => (Seq.empty, Some("next-iter")))

@@ -12,11 +12,11 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import scala.jdk.CollectionConverters._
 
-/** Verifies that sustained write failures accumulate `consecutiveErrors` and eventually
-  * trigger worker termination via the `maxConsecutiveErrors` threshold.
+/** Verifies that sustained write failures accumulate `consecutiveErrors` and eventually trigger
+  * worker termination via the `maxConsecutiveErrors` threshold.
   *
-  * Before the fix, `consecutiveErrors` was reset after a successful poll but BEFORE the write,
-  * so a pattern of "poll ok, write fail" never accumulated errors and never triggered termination.
+  * Before the fix, `consecutiveErrors` was reset after a successful poll but BEFORE the write, so a
+  * pattern of "poll ok, write fail" never accumulated errors and never triggered termination.
   */
 class WriteFailureTerminationTest extends StreamReplicationTestFixture {
 
@@ -63,7 +63,7 @@ class WriteFailureTerminationTest extends StreamReplicationTestFixture {
     poller.listShardsFn.set((_, _) => Seq(shard))
 
     // Every poll returns records so BatchWriter.run is invoked every cycle
-    poller.getRecordsFn.set((_, _, _) => {
+    poller.getRecordsFn.set { (_, _, _) =>
       pollCount.incrementAndGet()
       val record = Record
         .builder()
@@ -83,7 +83,7 @@ class WriteFailureTerminationTest extends StreamReplicationTestFixture {
         )
         .build()
       (Seq(record), Some("next-iter"))
-    })
+    }
 
     // Target table does NOT exist, so BatchWriter.run() will throw on every cycle
     val tableDesc = TableDescription

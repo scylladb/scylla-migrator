@@ -61,10 +61,10 @@ class CleanupClosedShardsTest extends StreamReplicationTestFixture {
     )
 
     // First call returns records with nextIterator=None (shard closed)
-    poller.getRecordsFn.set((_, _, _) => {
+    poller.getRecordsFn.set { (_, _, _) =>
       pollCount.incrementAndGet()
       (Seq.empty, None) // None signals shard is closed
-    })
+    }
 
     val tableDesc = targetAlternator()
       .describeTable(DescribeTableRequest.builder().tableName(targetTable).build())
@@ -78,14 +78,14 @@ class CleanupClosedShardsTest extends StreamReplicationTestFixture {
       poller = poller
     )
 
-    try {
+    try
       // Wait until SHARD_END is written to the checkpoint table
       Eventually(timeoutMs = 10000) {
         DefaultCheckpointManager
           .getCheckpoint(sourceDDb(), checkpointTable, "shard-closing-1")
           .contains(DefaultCheckpointManager.shardEndSentinel)
       }("Expected SHARD_END checkpoint for shard-closing-1")
-    } finally
+    finally
       handle.stop()
   }
 
@@ -103,10 +103,10 @@ class CleanupClosedShardsTest extends StreamReplicationTestFixture {
     )
 
     // Return empty records with None (closed) immediately
-    poller.getRecordsFn.set((_, _, _) => {
+    poller.getRecordsFn.set { (_, _, _) =>
       pollCount.incrementAndGet()
       (Seq.empty, None)
-    })
+    }
 
     val tableDesc = targetAlternator()
       .describeTable(DescribeTableRequest.builder().tableName(targetTable).build())
@@ -120,11 +120,11 @@ class CleanupClosedShardsTest extends StreamReplicationTestFixture {
       poller = poller
     )
 
-    try {
+    try
       Eventually(timeoutMs = 10000) {
         pollCount.get() >= 2
       }(s"Expected at least 2 poll cycles, got ${pollCount.get()}")
-    } finally
+    finally
       handle.stop()
   }
 }

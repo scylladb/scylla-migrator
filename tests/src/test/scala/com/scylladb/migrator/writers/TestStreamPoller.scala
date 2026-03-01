@@ -20,22 +20,31 @@ import java.util.concurrent.atomic.AtomicReference
 class TestStreamPoller extends StreamPollerOps {
 
   val getStreamArnFn: AtomicReference[(DynamoDbClient, String) => String] =
-    new AtomicReference((_, _) => throw new UnsupportedOperationException("getStreamArn not configured"))
+    new AtomicReference((_, _) =>
+      throw new UnsupportedOperationException("getStreamArn not configured")
+    )
 
   val listShardsFn: AtomicReference[(DynamoDbStreamsClient, String) => Seq[Shard]] =
     new AtomicReference((_, _) => Seq.empty)
 
-  val getShardIteratorFn: AtomicReference[(DynamoDbStreamsClient, String, String, ShardIteratorType) => String] =
+  val getShardIteratorFn
+    : AtomicReference[(DynamoDbStreamsClient, String, String, ShardIteratorType) => String] =
     new AtomicReference((_, _, _, _) => "test-iterator")
 
-  val getShardIteratorAfterSequenceFn: AtomicReference[(DynamoDbStreamsClient, String, String, String) => String] =
+  val getShardIteratorAfterSequenceFn
+    : AtomicReference[(DynamoDbStreamsClient, String, String, String) => String] =
     new AtomicReference((_, _, _, _) => "test-iterator-after-seq")
 
-  val getRecordsFn: AtomicReference[(DynamoDbStreamsClient, String, Option[Int]) => (Seq[Record], Option[String])] =
-    new AtomicReference((_, _, _) => throw new UnsupportedOperationException("getRecords not configured"))
+  val getRecordsFn: AtomicReference[
+    (DynamoDbStreamsClient, String, Option[Int]) => (Seq[Record], Option[String])
+  ] =
+    new AtomicReference((_, _, _) =>
+      throw new UnsupportedOperationException("getRecords not configured")
+    )
 
-  val recordToItemFn
-    : AtomicReference[(Record, String, AttributeValue, AttributeValue) => Option[util.Map[String, AttributeValue]]] =
+  val recordToItemFn: AtomicReference[
+    (Record, String, AttributeValue, AttributeValue) => Option[util.Map[String, AttributeValue]]
+  ] =
     new AtomicReference(DynamoStreamPoller.recordToItem)
 
   override def getStreamArn(client: DynamoDbClient, tableName: String): String =

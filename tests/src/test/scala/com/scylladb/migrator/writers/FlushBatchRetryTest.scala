@@ -7,8 +7,8 @@ import software.amazon.awssdk.services.dynamodb.model._
 import java.util
 import scala.jdk.CollectionConverters._
 
-/** Tests for the batch write logic in BatchWriter.run(), which exercises the flushAndClearBatch retry path
-  * indirectly through successful batch writes.
+/** Tests for the batch write logic in BatchWriter.run(), which exercises the flushAndClearBatch
+  * retry path indirectly through successful batch writes.
   */
 class FlushBatchRetryTest extends MigratorSuiteWithDynamoDBLocal {
 

@@ -59,11 +59,11 @@ class PollShardRetryTest extends munit.FunSuite {
   test("pollShard: retries on LimitExceededException then succeeds") {
     val poller = new TestStreamPoller
     var callCount = 0
-    poller.getRecordsFn.set((_, _, _) => {
+    poller.getRecordsFn.set { (_, _, _) =>
       callCount += 1
       if (callCount <= 2) throw makeDynamoException("LimitExceededException")
       (Seq(makeRecord("002")), Some("next"))
-    })
+    }
 
     val (_, recs, _) =
       StreamReplicationWorker.pollShard(
@@ -80,11 +80,11 @@ class PollShardRetryTest extends munit.FunSuite {
   test("pollShard: retries on ProvisionedThroughputExceededException") {
     val poller = new TestStreamPoller
     var callCount = 0
-    poller.getRecordsFn.set((_, _, _) => {
+    poller.getRecordsFn.set { (_, _, _) =>
       callCount += 1
       if (callCount <= 1) throw makeDynamoException("ProvisionedThroughputExceededException")
       (Seq(makeRecord("003")), None)
-    })
+    }
 
     val (_, recs, nextIter) =
       StreamReplicationWorker.pollShard(
@@ -102,10 +102,10 @@ class PollShardRetryTest extends munit.FunSuite {
   test("pollShard: exhausts retries and throws") {
     val poller = new TestStreamPoller
     var callCount = 0
-    poller.getRecordsFn.set((_, _, _) => {
+    poller.getRecordsFn.set { (_, _, _) =>
       callCount += 1
       throw makeDynamoException("LimitExceededException")
-    })
+    }
 
     val ex = intercept[DynamoDbException] {
       StreamReplicationWorker.pollShard(
@@ -124,10 +124,10 @@ class PollShardRetryTest extends munit.FunSuite {
   test("pollShard: non-retryable DynamoDbException thrown immediately") {
     val poller = new TestStreamPoller
     var callCount = 0
-    poller.getRecordsFn.set((_, _, _) => {
+    poller.getRecordsFn.set { (_, _, _) =>
       callCount += 1
       throw makeDynamoException("ValidationException")
-    })
+    }
 
     intercept[DynamoDbException] {
       StreamReplicationWorker.pollShard(
@@ -144,10 +144,10 @@ class PollShardRetryTest extends munit.FunSuite {
   test("pollShard: non-DynamoDB exception thrown immediately") {
     val poller = new TestStreamPoller
     var callCount = 0
-    poller.getRecordsFn.set((_, _, _) => {
+    poller.getRecordsFn.set { (_, _, _) =>
       callCount += 1
       throw new RuntimeException("network error")
-    })
+    }
 
     intercept[RuntimeException] {
       StreamReplicationWorker.pollShard(

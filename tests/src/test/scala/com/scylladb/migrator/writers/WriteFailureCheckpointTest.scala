@@ -57,7 +57,7 @@ class WriteFailureCheckpointTest extends StreamReplicationTestFixture {
     poller.listShardsFn.set((_, _) => Seq(shard))
 
     // Return records with sequence numbers on first poll, then empty
-    poller.getRecordsFn.set((_, _, _) => {
+    poller.getRecordsFn.set { (_, _, _) =>
       val count = pollCount.incrementAndGet()
       if (count == 1) {
         val record = Record
@@ -80,7 +80,7 @@ class WriteFailureCheckpointTest extends StreamReplicationTestFixture {
         (Seq(record), Some("next-iter"))
       } else
         (Seq.empty, Some("next-iter"))
-    })
+    }
 
     // Target table is not created (createTargetTableOnSetup=false),
     // so BatchWriter.run() will throw when attempting to write.

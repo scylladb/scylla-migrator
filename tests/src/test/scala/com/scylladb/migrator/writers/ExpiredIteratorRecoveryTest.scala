@@ -59,7 +59,7 @@ class ExpiredIteratorRecoveryTest extends StreamReplicationTestFixture {
     val getRecordsCallCount = new AtomicInteger(0)
 
     // First call throws ExpiredIteratorException, subsequent calls succeed with empty records
-    poller.getRecordsFn.set((_, iterator, _) => {
+    poller.getRecordsFn.set { (_, iterator, _) =>
       val callNum = getRecordsCallCount.incrementAndGet()
       if (callNum == 1) {
         // Simulate an expired iterator - DynamoDB SDK throws DynamoDbException with this error code
@@ -76,14 +76,14 @@ class ExpiredIteratorRecoveryTest extends StreamReplicationTestFixture {
           .build()
       }
       (Seq.empty, Some("refreshed-iter"))
-    })
+    }
 
     // getShardIterator should be called as fallback after the expired iterator
     val shardIteratorRequested = new AtomicBoolean(false)
-    poller.getShardIteratorFn.set((_, _, _, iterType) => {
+    poller.getShardIteratorFn.set { (_, _, _, iterType) =>
       shardIteratorRequested.set(true)
       "fallback-trim-horizon-iter"
-    })
+    }
 
     val tableDesc = targetAlternator()
       .describeTable(DescribeTableRequest.builder().tableName(targetTable).build())
@@ -121,7 +121,7 @@ class ExpiredIteratorRecoveryTest extends StreamReplicationTestFixture {
 
     val getRecordsCallCount = new AtomicInteger(0)
 
-    poller.getRecordsFn.set((_, _, _) => {
+    poller.getRecordsFn.set { (_, _, _) =>
       val callNum = getRecordsCallCount.incrementAndGet()
       if (callNum == 1)
         throw DynamoDbException
@@ -136,17 +136,19 @@ class ExpiredIteratorRecoveryTest extends StreamReplicationTestFixture {
           )
           .build()
       (Seq.empty, Some("refreshed-iter"))
-    })
+    }
 
     // getShardIteratorAfterSequence fails (simulating no valid checkpoint)
-    poller.getShardIteratorAfterSequenceFn.set((_, _, _, _) => throw new RuntimeException("No valid sequence number"))
+    poller.getShardIteratorAfterSequenceFn.set((_, _, _, _) =>
+      throw new RuntimeException("No valid sequence number")
+    )
 
     // Should fall back to TRIM_HORIZON
     val trimHorizonRequested = new AtomicBoolean(false)
-    poller.getShardIteratorFn.set((_, _, _, iterType) => {
+    poller.getShardIteratorFn.set { (_, _, _, iterType) =>
       if (iterType == ShardIteratorType.TRIM_HORIZON) trimHorizonRequested.set(true)
       "trim-horizon-iter"
-    })
+    }
 
     val tableDesc = targetAlternator()
       .describeTable(DescribeTableRequest.builder().tableName(targetTable).build())
