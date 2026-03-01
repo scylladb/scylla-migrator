@@ -1,29 +1,23 @@
 package com.scylladb.migrator.writers
 
-import com.amazonaws.services.dynamodbv2.model.{ AttributeValue => AttributeValueV1 }
-import com.scylladb.migrator.AttributeValueUtils
 import com.scylladb.migrator.config.{ AWSCredentials, DynamoDBEndpoint, TargetSettings }
-import org.apache.log4j.{ Level, Logger }
-import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.SparkSession
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
 import software.amazon.awssdk.services.dynamodb.model._
 
-import java.net.URI
-import java.util
 import scala.jdk.CollectionConverters._
 import com.scylladb.migrator.alternator.MigratorSuiteWithDynamoDBLocal
 
 class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLocal {
-  implicit val spark: SparkSession =
-    SparkSession.builder().appName("test").master("local[*]").getOrCreate()
 
   private val tableName = "DynamoStreamReplicationIntegrationTest"
   private val operationTypeColumn = "_dynamo_op_type"
-  private val putOperation = new AttributeValueV1().withBOOL(true)
-  private val deleteOperation = new AttributeValueV1().withBOOL(false)
+  private val putOperation = AttributeValue.fromBool(true)
+  private val deleteOperation = AttributeValue.fromBool(false)
 
-  def scanAll(client: DynamoDbClient, tableName: String): List[Map[String, AttributeValue]] =
+  def scanAll(
+    client: DynamoDbClient,
+    tableName: String
+  ): List[Map[String, AttributeValue]] =
     client
       .scanPaginator(ScanRequest.builder().tableName(tableName).build())
       .items()
@@ -79,58 +73,40 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
           .build()
       )
 
-      val streamEvents = Seq(
-        Some(
-          Map(
-            "id"                -> new AttributeValueV1().withS("toDelete"),
-            operationTypeColumn -> deleteOperation
-          ).asJava
-        ),
-        Some(
-          Map(
-            "id"                -> new AttributeValueV1().withS("toUpdate"),
-            "value"             -> new AttributeValueV1().withS("value2-updated"),
-            operationTypeColumn -> putOperation
-          ).asJava
-        ),
-        Some(
-          Map(
-            "id"                -> new AttributeValueV1().withS("toInsert"),
-            "value"             -> new AttributeValueV1().withS("value3"),
-            operationTypeColumn -> putOperation
-          ).asJava
-        ),
-        Some(
-          Map(
-            "id"                -> new AttributeValueV1().withS("keyPutDelete"),
-            "value"             -> new AttributeValueV1().withS("value4"),
-            operationTypeColumn -> putOperation
-          ).asJava
-        ),
-        Some(
-          Map(
-            "id"                -> new AttributeValueV1().withS("keyPutDelete"),
-            operationTypeColumn -> deleteOperation
-          ).asJava
-        ),
-        Some(
-          Map(
-            "id"                -> new AttributeValueV1().withS("keyDeletePut"),
-            operationTypeColumn -> deleteOperation
-          ).asJava
-        ),
-        Some(
-          Map(
-            "id"                -> new AttributeValueV1().withS("keyDeletePut"),
-            "value"             -> new AttributeValueV1().withS("value5"),
-            operationTypeColumn -> putOperation
-          ).asJava
-        )
+      val streamEvents: Seq[BatchWriter.DynamoItem] = Seq(
+        Map(
+          "id"                -> AttributeValue.fromS("toDelete"),
+          operationTypeColumn -> deleteOperation
+        ).asJava,
+        Map(
+          "id"                -> AttributeValue.fromS("toUpdate"),
+          "value"             -> AttributeValue.fromS("value2-updated"),
+          operationTypeColumn -> putOperation
+        ).asJava,
+        Map(
+          "id"                -> AttributeValue.fromS("toInsert"),
+          "value"             -> AttributeValue.fromS("value3"),
+          operationTypeColumn -> putOperation
+        ).asJava,
+        Map(
+          "id"                -> AttributeValue.fromS("keyPutDelete"),
+          "value"             -> AttributeValue.fromS("value4"),
+          operationTypeColumn -> putOperation
+        ).asJava,
+        Map(
+          "id"                -> AttributeValue.fromS("keyPutDelete"),
+          operationTypeColumn -> deleteOperation
+        ).asJava,
+        Map(
+          "id"                -> AttributeValue.fromS("keyDeletePut"),
+          operationTypeColumn -> deleteOperation
+        ).asJava,
+        Map(
+          "id"                -> AttributeValue.fromS("keyDeletePut"),
+          "value"             -> AttributeValue.fromS("value5"),
+          operationTypeColumn -> putOperation
+        ).asJava
       )
-
-      val rdd = spark.sparkContext
-        .parallelize(streamEvents, 1)
-        .asInstanceOf[RDD[Option[DynamoStreamReplication.DynamoItem]]]
 
       val targetSettings = TargetSettings.DynamoDB(
         table                       = tableName,
@@ -152,11 +128,12 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
         )
         .table()
 
-      DynamoStreamReplication.run(
-        rdd,
+      BatchWriter.run(
+        streamEvents,
         targetSettings,
         Map.empty[String, String],
-        tableDesc
+        tableDesc,
+        targetAlternator()
       )
 
       val finalItems = scanAll(targetAlternator(), tableName).sortBy(m => m("id").s)
@@ -179,5 +156,69 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
       finalItems.foreach { item =>
         assert(!item.contains(operationTypeColumn))
       }
+  }
+
+  withTable(tableName + "Renames").test(
+    "should correctly apply renames when renamesMap is provided"
+  ) { _ =>
+    val renamedTable = tableName + "Renames"
+    targetAlternator().createTable(
+      CreateTableRequest
+        .builder()
+        .tableName(renamedTable)
+        .keySchema(KeySchemaElement.builder().attributeName("id").keyType(KeyType.HASH).build())
+        .attributeDefinitions(
+          AttributeDefinition
+            .builder()
+            .attributeName("id")
+            .attributeType(ScalarAttributeType.S)
+            .build()
+        )
+        .provisionedThroughput(
+          ProvisionedThroughput.builder().readCapacityUnits(25L).writeCapacityUnits(25L).build()
+        )
+        .build()
+    )
+    targetAlternator()
+      .waiter()
+      .waitUntilTableExists(DescribeTableRequest.builder().tableName(renamedTable).build())
+
+    val streamEvents: Seq[BatchWriter.DynamoItem] = Seq(
+      Map(
+        "id"                -> AttributeValue.fromS("k1"),
+        "oldName"           -> AttributeValue.fromS("val1"),
+        operationTypeColumn -> putOperation
+      ).asJava
+    )
+
+    val targetSettings = TargetSettings.DynamoDB(
+      table                       = renamedTable,
+      region                      = Some("eu-central-1"),
+      endpoint                    = Some(DynamoDBEndpoint("http://localhost", 8000)),
+      credentials                 = Some(AWSCredentials("dummy", "dummy", None)),
+      streamChanges               = false,
+      skipInitialSnapshotTransfer = Some(true),
+      writeThroughput             = None,
+      throughputWritePercent      = None
+    )
+
+    val tableDesc = targetAlternator()
+      .describeTable(DescribeTableRequest.builder().tableName(renamedTable).build())
+      .table()
+
+    BatchWriter.run(
+      streamEvents,
+      targetSettings,
+      Map("oldName" -> "newName"),
+      tableDesc,
+      targetAlternator()
+    )
+
+    val finalItems = scanAll(targetAlternator(), renamedTable)
+    assertEquals(finalItems.size, 1)
+    val item = finalItems.head
+    assertEquals(item("id").s, "k1")
+    assertEquals(item("newName").s, "val1")
+    assert(!item.contains("oldName"))
   }
 }

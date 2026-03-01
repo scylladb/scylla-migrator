@@ -8,7 +8,6 @@ import org.apache.hadoop.io.Text
 import org.apache.log4j.LogManager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.streaming.{ Seconds, StreamingContext }
 import software.amazon.awssdk.services.dynamodb.model.TableDescription
 
 import scala.util.control.NonFatal
@@ -97,19 +96,13 @@ object AlternatorMigrator {
 
       for (streamedSource <- maybeStreamedSource) {
         log.info("Starting to transfer changes")
-        val streamingContext = new StreamingContext(spark.sparkContext, Seconds(5))
-
-        DynamoStreamReplication.createDStream(
-          spark,
-          streamingContext,
+        val handle = DynamoStreamReplication.startStreaming(
           streamedSource,
           target,
           targetTableDesc,
           migratorConfig.renamesMap
         )
-
-        streamingContext.start()
-        streamingContext.awaitTermination()
+        handle.awaitTermination()
       }
     } catch {
       case NonFatal(e) =>

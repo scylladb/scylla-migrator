@@ -33,6 +33,28 @@ object SourceSettings {
     where: Option[String],
     consistencyLevel: String
   ) extends SourceSettings
+
+  /** @param streamingPollIntervalSeconds
+    *   Interval between stream poll cycles (default: 5, min: 1).
+    * @param streamingMaxConsecutiveErrors
+    *   Max consecutive poll failures before stopping (default: 50).
+    * @param streamingPollingPoolSize
+    *   Thread pool size for parallel shard polling (default: max(4, CPUs)).
+    * @param streamingLeaseDurationMs
+    *   Duration of shard leases in milliseconds (default: 60000). Must be positive.
+    * @param streamingMaxRecordsPerPoll
+    *   Max records per GetRecords call per shard. Must be positive if set.
+    * @param streamingMaxRecordsPerSecond
+    *   Global rate limit for records processed per second. Must be positive if set.
+    * @param streamingEnableCloudWatchMetrics
+    *   Enable publishing metrics to CloudWatch (default: false).
+    * @param streamApiCallTimeoutSeconds
+    *   Overall timeout for DynamoDB Streams API calls (default: 30). Must be positive.
+    * @param streamApiCallAttemptTimeoutSeconds
+    *   Per-attempt timeout for Streams API calls (default: 10). Must be positive.
+    * @param streamingPollFutureTimeoutSeconds
+    *   Timeout for waiting on parallel poll futures (default: 60). Must be positive.
+    */
   case class DynamoDB(
     endpoint: Option[DynamoDBEndpoint],
     region: Option[String],
@@ -42,7 +64,17 @@ object SourceSettings {
     readThroughput: Option[Int],
     throughputReadPercent: Option[Float],
     maxMapTasks: Option[Int],
-    removeConsumedCapacity: Option[Boolean] = None
+    removeConsumedCapacity: Option[Boolean] = None,
+    streamingPollIntervalSeconds: Option[Int] = None,
+    streamingMaxConsecutiveErrors: Option[Int] = None,
+    streamingPollingPoolSize: Option[Int] = None,
+    streamingLeaseDurationMs: Option[Long] = None,
+    streamingMaxRecordsPerPoll: Option[Int] = None,
+    streamingMaxRecordsPerSecond: Option[Int] = None,
+    streamingEnableCloudWatchMetrics: Option[Boolean] = None,
+    streamApiCallTimeoutSeconds: Option[Int] = None,
+    streamApiCallAttemptTimeoutSeconds: Option[Int] = None,
+    streamingPollFutureTimeoutSeconds: Option[Int] = None
   ) extends SourceSettings {
     lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
       AwsUtils.computeFinalCredentials(credentials, endpoint, region)
