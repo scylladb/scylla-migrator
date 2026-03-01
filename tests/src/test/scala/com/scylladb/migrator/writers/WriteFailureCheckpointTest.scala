@@ -18,7 +18,8 @@ import scala.jdk.CollectionConverters._
 class WriteFailureCheckpointTest extends StreamReplicationTestFixture {
 
   protected val targetTable = "WriteFailureCheckpointTarget"
-  protected val checkpointTable = "migrator_WriteFailureCheckpointSource"
+  protected lazy val checkpointTable =
+    DynamoStreamReplication.buildCheckpointTableName(sourceSettings)
   override protected def createTargetTableOnSetup: Boolean = false
 
   private val sourceSettings = SourceSettings.DynamoDB(

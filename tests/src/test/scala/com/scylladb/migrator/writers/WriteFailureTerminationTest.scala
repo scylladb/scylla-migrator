@@ -21,7 +21,8 @@ import scala.jdk.CollectionConverters._
 class WriteFailureTerminationTest extends StreamReplicationTestFixture {
 
   protected val targetTable = "WriteFailureTermTarget"
-  protected val checkpointTable = "migrator_WriteFailureTermSource"
+  protected lazy val checkpointTable =
+    DynamoStreamReplication.buildCheckpointTableName(sourceSettings)
   override protected def createTargetTableOnSetup: Boolean = false
 
   // Use a very small maxConsecutiveErrors so the test terminates quickly

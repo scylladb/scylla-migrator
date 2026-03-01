@@ -21,7 +21,8 @@ import scala.jdk.CollectionConverters._
 class ExpiredIteratorRecoveryTest extends StreamReplicationTestFixture {
 
   protected val targetTable = "ExpiredIterRecoveryTarget"
-  protected val checkpointTable = "migrator_ExpiredIterRecoverySource"
+  protected lazy val checkpointTable =
+    DynamoStreamReplication.buildCheckpointTableName(sourceSettings)
 
   private val sourceSettings = SourceSettings.DynamoDB(
     endpoint                      = Some(DynamoDBEndpoint("http://localhost", 8001)),

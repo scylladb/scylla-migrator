@@ -25,7 +25,8 @@ import scala.jdk.CollectionConverters._
 class StreamReplicationPollingTest extends StreamReplicationTestFixture {
 
   protected val targetTable = "StreamPollingTestTarget"
-  protected val checkpointTable = "migrator_StreamPollingTestSource"
+  protected lazy val checkpointTable =
+    DynamoStreamReplication.buildCheckpointTableName(sourceSettings)
 
   private val sourceSettings = SourceSettings.DynamoDB(
     endpoint                      = Some(DynamoDBEndpoint("http://localhost", 8001)),

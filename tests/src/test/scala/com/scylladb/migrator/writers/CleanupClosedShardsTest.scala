@@ -6,6 +6,7 @@ import com.scylladb.migrator.config.{
   SourceSettings,
   TargetSettings
 }
+import com.scylladb.migrator.writers.DynamoStreamReplication
 import software.amazon.awssdk.services.dynamodb.model._
 
 import java.util.concurrent.TimeUnit
@@ -20,7 +21,8 @@ import scala.jdk.CollectionConverters._
 class CleanupClosedShardsTest extends StreamReplicationTestFixture {
 
   protected val targetTable = "CleanupShardsTarget"
-  protected val checkpointTable = "migrator_CleanupShardsSource"
+  protected lazy val checkpointTable =
+    DynamoStreamReplication.buildCheckpointTableName(sourceSettings)
 
   private val sourceSettings = SourceSettings.DynamoDB(
     endpoint                      = Some(DynamoDBEndpoint("http://localhost", 8001)),
@@ -80,7 +82,7 @@ class CleanupClosedShardsTest extends StreamReplicationTestFixture {
 
     try
       // Wait until SHARD_END is written to the checkpoint table
-      Eventually(timeoutMs = 20000) {
+      Eventually(timeoutMs = 10000) {
         DefaultCheckpointManager
           .getCheckpoint(sourceDDb(), checkpointTable, "shard-closing-1")
           .contains(DefaultCheckpointManager.shardEndSentinel)

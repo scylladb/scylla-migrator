@@ -19,7 +19,8 @@ import scala.jdk.CollectionConverters._
 class RateLimitingTest extends StreamReplicationTestFixture {
 
   protected val targetTable = "RateLimitTestTarget"
-  protected val checkpointTable = "migrator_RateLimitTestSource"
+  protected lazy val checkpointTable =
+    DynamoStreamReplication.buildCheckpointTableName(makeSourceSettings(None))
 
   private def makeSourceSettings(maxRecordsPerSecond: Option[Int]) = SourceSettings.DynamoDB(
     endpoint                      = Some(DynamoDBEndpoint("http://localhost", 8001)),
