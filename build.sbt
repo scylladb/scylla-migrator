@@ -4,6 +4,8 @@ import sbt.librarymanagement.InclExclRule
 val awsSdkVersion = "2.23.19"
 val sparkVersion = "3.5.8"
 val hadoopVersion = "3.3.4"
+val circeVersion = "0.14.7"
+val connectorVersion = "4.0.0"
 val dynamodbStreamsKinesisAdapterVersion =
   "1.5.4" // Note This version still depends on AWS SDK 1.x, but there is no more recent version that supports AWS SDK v2.
 
@@ -56,12 +58,12 @@ lazy val migrator = (project in file("migrator"))
       "software.amazon.awssdk" % "dynamodb"                 % awsSdkVersion,
       "software.amazon.awssdk" % "s3"                       % awsSdkVersion,
       "software.amazon.awssdk" % "sts"                      % awsSdkVersion,
-      "com.scylladb"          %% "spark-scylladb-connector" % "4.0.0",
+      "com.scylladb"          %% "spark-scylladb-connector" % connectorVersion,
       "com.github.jnr" % "jnr-posix" % "3.1.19", // Needed by the Spark ScyllaDB connector
       "com.scylladb.alternator" % "emr-dynamodb-hadoop"  % "5.8.0",
       "com.scylladb.alternator" % "load-balancing"       % "1.0.0",
-      "io.circe"               %% "circe-generic"        % "0.14.7",
-      "io.circe"               %% "circe-parser"         % "0.14.7",
+      "io.circe"               %% "circe-generic"        % circeVersion,
+      "io.circe"               %% "circe-parser"         % circeVersion,
       "io.circe"               %% "circe-yaml"           % "0.15.1",
       "io.circe"               %% "circe-generic-extras" % "0.14.4"
     ),
@@ -105,14 +107,20 @@ lazy val tests = project
     Test / parallelExecution := false,
     // Needed to build a Spark session on Java 17+, see https://stackoverflow.com/questions/73465937/apache-spark-3-3-0-breaks-on-java-17-with-cannot-access-class-sun-nio-ch-direct
     Test / javaOptions ++= {
-      val maybeJavaMajorVersion =
-        sys.props
-          .get("java.version")
-          .map(version => version.takeWhile(_ != '.').toInt)
-      if (maybeJavaMajorVersion.exists(_ > 11))
-        Seq("--add-exports", "java.base/sun.nio.ch=ALL-UNNAMED")
-      else
-        Nil
+      val javaCompat = {
+        val maybeJavaMajorVersion =
+          sys.props
+            .get("java.version")
+            .map(version => version.takeWhile(_ != '.').toInt)
+        if (maybeJavaMajorVersion.exists(_ > 11))
+          Seq("--add-exports", "java.base/sun.nio.ch=ALL-UNNAMED")
+        else
+          Nil
+      }
+      val e2eProps = Seq("e2e.cql.rows", "e2e.ddb.rows").flatMap { key =>
+        sys.props.get(key).map(v => s"-D${key}=${v}")
+      }
+      javaCompat ++ e2eProps
     },
     Test / fork := true
   )
@@ -128,20 +136,9 @@ lazy val benchmarks = project
       "org.apache.spark"        %% "spark-sql"                   % sparkVersion,
       "software.amazon.awssdk"   % "dynamodb"                    % awsSdkVersion,
       "com.amazonaws"            % "dynamodb-streams-kinesis-adapter" % dynamodbStreamsKinesisAdapterVersion,
-      "io.circe"                %% "circe-parser"                % "0.14.7",
-      "com.scylladb"            %% "spark-scylladb-connector"    % "4.0.0"
+      "io.circe"                %% "circe-parser"                % circeVersion,
+      "com.scylladb"            %% "spark-scylladb-connector"    % connectorVersion
     ),
-    // Needed on Java 17+ for Spark compatibility
-    Compile / javaOptions ++= {
-      val maybeJavaMajorVersion =
-        sys.props
-          .get("java.version")
-          .map(version => version.takeWhile(_ != '.').toInt)
-      if (maybeJavaMajorVersion.exists(_ > 11))
-        Seq("--add-exports", "java.base/sun.nio.ch=ALL-UNNAMED")
-      else
-        Nil
-    },
     Jmh / javaOptions ++= Seq(
       "--add-exports",
       "java.base/sun.nio.ch=ALL-UNNAMED"

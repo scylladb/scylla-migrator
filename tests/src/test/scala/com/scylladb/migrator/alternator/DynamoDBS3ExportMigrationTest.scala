@@ -1,9 +1,7 @@
 package com.scylladb.migrator.alternator
 
 import com.scylladb.migrator.SparkUtils.successfullyPerformMigration
-import software.amazon.awssdk.auth.credentials.{ AwsBasicCredentials, StaticCredentialsProvider }
 import software.amazon.awssdk.core.SdkBytes
-import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.dynamodb.model.{
   AttributeDefinition,
   AttributeValue,
@@ -13,32 +11,15 @@ import software.amazon.awssdk.services.dynamodb.model.{
   ScalarAttributeType
 }
 import software.amazon.awssdk.services.s3.S3Client
-import software.amazon.awssdk.services.s3.model.{
-  CreateBucketRequest,
-  DeleteBucketRequest,
-  DeleteObjectRequest,
-  HeadBucketRequest,
-  ListObjectsV2Request,
-  NoSuchBucketException,
-  PutObjectRequest
-}
+import software.amazon.awssdk.services.s3.model.{ CreateBucketRequest, PutObjectRequest }
 
-import java.net.URI
 import java.nio.file.{ Files, Path, Paths }
 import java.util.function.Consumer
 import scala.jdk.CollectionConverters._
 
 class DynamoDBS3ExportMigrationTest extends MigratorSuiteWithDynamoDBLocal {
 
-  val s3Client: S3Client =
-    S3Client
-      .builder()
-      .endpointOverride(new URI("http://127.0.0.1:4566"))
-      .region(Region.EU_WEST_1)
-      .credentialsProvider(
-        StaticCredentialsProvider.create(AwsBasicCredentials.create("dummy", "dummy"))
-      )
-      .build()
+  val s3Client: S3Client = S3TestUtils.localStackS3Client()
 
   withResources("test-bucket", "BasicTest").test(
     "Export data from DynamoDB to S3, and import from S3 to Alternator"
@@ -118,38 +99,14 @@ class DynamoDBS3ExportMigrationTest extends MigratorSuiteWithDynamoDBLocal {
     FunFixture(
       setup = _ => {
         deleteTableIfExists(targetAlternator(), tableName)
-        deleteBucket(bucketName)
+        S3TestUtils.deleteBucket(s3Client, bucketName)
         s3Client.createBucket(CreateBucketRequest.builder().bucket(bucketName).build())
         (bucketName, tableName)
       },
       teardown = _ => {
         targetAlternator().deleteTable(DeleteTableRequest.builder().tableName(tableName).build())
-        deleteBucket(bucketName)
+        S3TestUtils.deleteBucket(s3Client, bucketName)
       }
     )
-
-  def deleteBucket(bucketName: String): Unit = {
-    val bucketExists =
-      try {
-        s3Client.headBucket(HeadBucketRequest.builder().bucket(bucketName).build())
-        true
-      } catch {
-        case _: NoSuchBucketException => false
-      }
-    if (bucketExists) {
-      s3Client
-        .listObjectsV2Paginator(ListObjectsV2Request.builder().bucket(bucketName).build())
-        .stream()
-        .forEach { response =>
-          response.contents().stream().forEach { s3Object =>
-            s3Client.deleteObject(
-              DeleteObjectRequest.builder().bucket(bucketName).key(s3Object.key).build()
-            )
-          }
-        }
-
-      s3Client.deleteBucket(DeleteBucketRequest.builder().bucket(bucketName).build())
-    }
-  }
 
 }

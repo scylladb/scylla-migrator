@@ -43,8 +43,15 @@ object TargetSettings {
 
   case class Parquet(
     path: String,
-    compression: String = "snappy"
+    compression: String = "snappy",
+    mode: String = "error"
   ) extends TargetSettings
+  object Parquet {
+    val validCompressionCodecs: Set[String] =
+      Set("none", "uncompressed", "snappy", "gzip", "lzo", "brotli", "lz4", "zstd")
+    val validModes: Set[String] =
+      Set("error", "overwrite", "append", "ignore")
+  }
 
   case class DynamoDBS3Export(
     path: String
@@ -58,7 +65,29 @@ object TargetSettings {
         case "dynamodb" | "dynamo" =>
           deriveDecoder[DynamoDB].apply(cursor)
         case "parquet" =>
-          deriveDecoder[Parquet].apply(cursor)
+          for {
+            path        <- cursor.get[String]("path")
+            compression <- cursor.getOrElse[String]("compression")("snappy")
+            mode        <- cursor.getOrElse[String]("mode")("error")
+            _ <- Either.cond(
+              Parquet.validCompressionCodecs.contains(compression.toLowerCase),
+              (),
+              DecodingFailure(
+                s"Invalid Parquet compression codec '$compression'. " +
+                  s"Valid values: ${Parquet.validCompressionCodecs.toSeq.sorted.mkString(", ")}",
+                cursor.history
+              )
+            )
+            _ <- Either.cond(
+              Parquet.validModes.contains(mode.toLowerCase),
+              (),
+              DecodingFailure(
+                s"Invalid Parquet write mode '$mode'. " +
+                  s"Valid values: ${Parquet.validModes.toSeq.sorted.mkString(", ")}",
+                cursor.history
+              )
+            )
+          } yield Parquet(path, compression.toLowerCase, mode.toLowerCase)
         case "dynamodb-s3-export" =>
           deriveDecoder[DynamoDBS3Export].apply(cursor)
         case otherwise =>

@@ -1,0 +1,30 @@
+source:
+  type: dynamodb
+  table: bench_e2e_ddb
+  region: dummy
+  endpoint:
+    host: http://dynamodb
+    port: 8000
+  credentials:
+    accessKey: dummy
+    secretKey: dummy
+  scanSegments: 8
+  readThroughput: 25
+
+target:
+  type: dynamodb
+  table: bench_e2e_ddb
+  region: dummy
+  endpoint:
+    host: http://scylla
+    port: 8000
+  credentials:
+    accessKey: dummy
+    secretKey: dummy
+  streamChanges: false
+  removeConsumedCapacity: true
+  billingMode: PAY_PER_REQUEST
+
+savepoints:
+  path: /app/savepoints
+  intervalSeconds: 300

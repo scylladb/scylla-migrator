@@ -56,6 +56,17 @@ object DynamoDBS3Export {
 
     val s3Client = buildS3Client(source)
 
+    // Resolve S3 keys relative to the manifest summary's parent directory.
+    // The writer produces relative paths (e.g., "manifest-files.json", "data/00000.json.gz"),
+    // but when uploaded under a prefix the absolute key differs.
+    val manifestKeyPrefix = {
+      val idx = source.manifestKey.lastIndexOf('/')
+      if (idx >= 0) source.manifestKey.substring(0, idx + 1) else ""
+    }
+    def resolveKey(key: String): String =
+      if (manifestKeyPrefix.isEmpty) key
+      else manifestKeyPrefix + key
+
     // The entry point is a single file containing a manifest summary
     val summary =
       decode[ManifestSummary](
@@ -92,7 +103,7 @@ object DynamoDBS3Export {
               GetObjectRequest
                 .builder()
                 .bucket(source.bucket)
-                .key(summary.manifestFilesS3Key)
+                .key(resolveKey(summary.manifestFilesS3Key))
                 .build()
             )
             .asInputStream()
@@ -126,7 +137,7 @@ object DynamoDBS3Export {
                       GetObjectRequest
                         .builder()
                         .bucket(source.bucket)
-                        .key(manifestFile.dataFileS3Key)
+                        .key(resolveKey(manifestFile.dataFileS3Key))
                         .build()
                     )
                     .asInputStream()

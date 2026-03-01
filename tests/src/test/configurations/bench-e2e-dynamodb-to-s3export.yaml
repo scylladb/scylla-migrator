@@ -9,6 +9,7 @@ source:
     accessKey: dummy
     secretKey: dummy
   scanSegments: 8
+  # Low value is fine for local DynamoDB which does not enforce throughput limits
   readThroughput: 25
 
 target:

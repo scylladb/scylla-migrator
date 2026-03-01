@@ -2,15 +2,10 @@ package com.scylladb.migrator.scylla
 
 import com.scylladb.migrator.{
   BenchmarkDataGenerator,
-  E2E,
-  Integration,
   SparkUtils,
   ThroughputReporter
 }
 import com.datastax.oss.driver.api.querybuilder.QueryBuilder
-import org.junit.experimental.categories.Category
-
-import scala.concurrent.duration._
 
 /** End-to-end throughput benchmark for Parquet -> Scylla import.
   *
@@ -20,12 +15,7 @@ import scala.concurrent.duration._
   *
   * Row count is configurable via `-De2e.cql.rows=N` (default: 5000000).
   */
-@Category(Array(classOf[Integration], classOf[E2E]))
-class ParquetToScyllaE2EBenchmark extends MigratorSuite(sourcePort = 9042) {
-
-  override val munitTimeout: Duration = 60.minutes
-
-  private val rowCount = sys.props.getOrElse("e2e.cql.rows", "5000000").toInt
+class ParquetToScyllaE2EBenchmark extends E2EBenchmarkSuite(sourcePort = 9042) {
 
   test(s"Parquet->Scylla ${rowCount} rows") {
     val targetTable = "bench_e2e_parquet_restore"
@@ -35,24 +25,38 @@ class ParquetToScyllaE2EBenchmark extends MigratorSuite(sourcePort = 9042) {
       "No parquet files found. Run test-benchmark-e2e-scylla-parquet first."
     )
 
+    val parquetRows = ParquetE2EBenchmarkUtils.countParquetRows()
+    assertEquals(
+      parquetRows,
+      rowCount.toLong,
+      s"Parquet files contain $parquetRows rows but expected $rowCount. " +
+        "Stale files from a previous run with different -De2e.cql.rows? " +
+        "Re-run test-benchmark-e2e-scylla-parquet first."
+    )
+
     BenchmarkDataGenerator.createSimpleTable(targetScylla(), keyspace, targetTable)
 
-    val startTime = System.currentTimeMillis()
-    SparkUtils.successfullyPerformMigration("bench-e2e-parquet-to-scylla.yaml")
-    val durationMs = System.currentTimeMillis() - startTime
+    try {
+      val startTime = System.currentTimeMillis()
+      SparkUtils.successfullyPerformMigration("bench-e2e-parquet-to-scylla.yaml")
+      val durationMs = System.currentTimeMillis() - startTime
 
-    val countResult = targetScylla()
-      .execute(
-        QueryBuilder
-          .selectFrom(keyspace, targetTable)
-          .countAll()
-          .build()
-      )
-    val targetRowCount = countResult.one().getLong(0)
-    assertEquals(targetRowCount, rowCount.toLong, "Row count mismatch for Parquet->Scylla")
+      val countResult = targetScylla()
+        .execute(
+          QueryBuilder
+            .selectFrom(keyspace, targetTable)
+            .countAll()
+            .build()
+        )
+      val targetRowCount = countResult.one().getLong(0)
+      assertEquals(targetRowCount, rowCount.toLong, "Row count mismatch for Parquet->Scylla")
 
-    ThroughputReporter.report(s"parquet-to-scylla-${rowCount}", rowCount.toLong, durationMs)
+      // Spot-check a few rows to catch data corruption
+      spotCheckRows(targetTable, rowCount)
 
-    ParquetE2EBenchmarkUtils.deleteParquetDir()
+      ThroughputReporter.report(s"parquet-to-scylla-${rowCount}", rowCount.toLong, durationMs)
+    } finally {
+      ParquetE2EBenchmarkUtils.deleteParquetDir()
+    }
   }
 }

@@ -1,13 +1,13 @@
 source:
-  type: cassandra
-  host: cassandra
+  type: scylla
+  host: scylla-source
   port: 9042
   localDC: datacenter1
   credentials:
     username: dummy
     password: dummy
   keyspace: test
-  table: bench_simple_nots
+  table: bench_e2e_s2s
   consistencyLevel: LOCAL_QUORUM
   preserveTimestamps: false
   splitCount: 8
@@ -23,7 +23,7 @@ target:
     username: dummy
     password: dummy
   keyspace: test
-  table: bench_simple_nots
+  table: bench_e2e_s2s
   consistencyLevel: LOCAL_QUORUM
   connections: 16
   stripTrailingZerosForDecimals: false

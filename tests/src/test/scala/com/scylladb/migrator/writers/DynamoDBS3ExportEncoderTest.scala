@@ -131,6 +131,42 @@ class DynamoDBS3ExportEncoderTest extends munit.FunSuite {
     assertEquals(result("msg").s(), "hello \"world\"\nnewline\ttab\\backslash")
   }
 
+  test("Roundtrip empty List (L: [])") {
+    val item = Map("emptyList" -> AttributeValue.fromL(List.empty[AttributeValue].asJava))
+    val result = roundtrip(item)
+    assertEquals(result("emptyList").l().asScala.toList, List.empty)
+  }
+
+  test("Roundtrip empty Map (M: {})") {
+    val item = Map("emptyMap" -> AttributeValue.fromM(Map.empty[String, AttributeValue].asJava))
+    val result = roundtrip(item)
+    assertEquals(result("emptyMap").m().asScala.toMap, Map.empty[String, AttributeValue])
+  }
+
+  test("Roundtrip empty String Set (SS: [])") {
+    val item = Map("emptySS" -> AttributeValue.fromSs(List.empty[String].asJava))
+    val result = roundtrip(item)
+    assertEquals(result("emptySS").ss().asScala.toList, List.empty)
+  }
+
+  test("Roundtrip empty Number Set (NS: [])") {
+    val item = Map("emptyNS" -> AttributeValue.fromNs(List.empty[String].asJava))
+    val result = roundtrip(item)
+    assertEquals(result("emptyNS").ns().asScala.toList, List.empty)
+  }
+
+  test("Roundtrip empty Binary Set (BS: [])") {
+    val item = Map("emptyBS" -> AttributeValue.fromBs(List.empty[SdkBytes].asJava))
+    val result = roundtrip(item)
+    assertEquals(result("emptyBS").bs().asScala.toList, List.empty)
+  }
+
+  test("Roundtrip empty item") {
+    val item = Map.empty[String, AttributeValue]
+    val result = roundtrip(item)
+    assertEquals(result, item)
+  }
+
   test("encodeItem produces valid DynamoDB JSON format") {
     val item = Map("id" -> AttributeValue.fromS("test"))
     val json = DynamoDBS3Export.encodeItem(item)

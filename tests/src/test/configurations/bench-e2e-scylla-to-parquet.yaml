@@ -17,6 +17,7 @@ source:
 target:
   type: parquet
   path: /app/parquet/bench_e2e
+  compression: gzip
 
 savepoints:
   path: /app/savepoints

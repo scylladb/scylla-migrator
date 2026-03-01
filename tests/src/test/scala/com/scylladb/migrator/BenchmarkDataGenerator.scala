@@ -4,7 +4,16 @@ import com.datastax.oss.driver.api.core.CqlSession
 import com.datastax.oss.driver.api.core.`type`.DataTypes
 import com.datastax.oss.driver.api.querybuilder.SchemaBuilder
 
+import java.util.concurrent.{ CompletionException, CompletionStage }
+import scala.collection.mutable
+
 object BenchmarkDataGenerator {
+
+  /** Sample indices for spot-checking benchmark rows: first, 25%, 50%, last.
+    * Deduplicates indices when rowCount is small (< 4).
+    */
+  def sampleIndices(rowCount: Int): Seq[Int] =
+    Seq(0, rowCount / 4, rowCount / 2, rowCount - 1).distinct.filter(_ >= 0)
 
   /** Create a simple flat table: (id TEXT PK, col1 TEXT, col2 INT, col3 BIGINT) */
   def createSimpleTable(session: CqlSession, keyspace: String, table: String): Unit = {
@@ -20,7 +29,7 @@ object BenchmarkDataGenerator {
     session.execute(createStmt)
   }
 
-  /** Insert rows using batched prepared statements for throughput.
+  /** Insert rows using batched prepared statements with async execution for throughput.
     *
     * @param session
     *   CQL session
@@ -32,20 +41,39 @@ object BenchmarkDataGenerator {
     *   number of rows to insert
     * @param batchSize
     *   number of rows per unlogged batch
+    * @param maxConcurrent
+    *   maximum number of in-flight async batch requests
     */
   def insertSimpleRows(
     session: CqlSession,
     keyspace: String,
     table: String,
     rowCount: Int,
-    batchSize: Int = 100
+    batchSize: Int = 100,
+    maxConcurrent: Int = 64
   ): Unit = {
     val prepared = session.prepare(
       s"INSERT INTO $keyspace.$table (id, col1, col2, col3) VALUES (?, ?, ?, ?)"
     )
 
-    val batches = (0 until rowCount).grouped(batchSize)
-    for (batch <- batches) {
+    val inflight = mutable.Queue.empty[CompletionStage[_]]
+
+    def drainOne(): Unit = {
+      val future = inflight.dequeue().toCompletableFuture
+      try future.join()
+      catch {
+        case e: CompletionException =>
+          // Drain remaining futures to avoid leaking resources, then rethrow
+          inflight.foreach { f =>
+            try f.toCompletableFuture.join()
+            catch { case _: Exception => () }
+          }
+          inflight.clear()
+          throw e
+      }
+    }
+
+    for (batch <- (0 until rowCount).grouped(batchSize)) {
       val batchStmt =
         com.datastax.oss.driver.api.core.cql.BatchStatement
           .newInstance(com.datastax.oss.driver.api.core.cql.BatchType.UNLOGGED)
@@ -60,7 +88,15 @@ object BenchmarkDataGenerator {
       }
 
       val finalBatch = stmts.foldLeft(batchStmt)((b, s) => b.add(s))
-      session.execute(finalBatch)
+      inflight.enqueue(session.executeAsync(finalBatch))
+
+      // Drain oldest futures when we reach the concurrency limit
+      while (inflight.size >= maxConcurrent)
+        drainOne()
     }
+
+    // Wait for remaining in-flight requests
+    while (inflight.nonEmpty)
+      drainOne()
   }
 }

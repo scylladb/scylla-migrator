@@ -2,14 +2,14 @@ package com.scylladb.migrator.alternator
 
 import com.scylladb.migrator.{
   DynamoDBBenchmarkDataGenerator,
-  E2E,
-  Integration,
   SparkUtils,
   ThroughputReporter
 }
-import org.junit.experimental.categories.Category
+import io.circe.parser.{ decode => jsonDecode }
 
-import scala.concurrent.duration._
+import java.io.File
+import scala.io.Source
+import scala.util.Using
 
 /** End-to-end throughput benchmark for DynamoDB -> S3 Export.
   *
@@ -17,29 +17,37 @@ import scala.concurrent.duration._
   *
   * Row count is configurable via `-De2e.ddb.rows=N` (default: 500000).
   */
-@Category(Array(classOf[Integration], classOf[E2E]))
-class DynamoDBToS3ExportE2EBenchmark extends MigratorSuiteWithDynamoDBLocal {
-
-  override val munitTimeout: Duration = 60.minutes
-
-  private val rowCount = sys.props.getOrElse("e2e.ddb.rows", "500000").toInt
+class DynamoDBToS3ExportE2EBenchmark extends DynamoDBE2EBenchmarkSuite {
 
   test(s"DynamoDB->S3Export ${rowCount} rows") {
     val tableName = "bench_e2e_ddb_s3"
 
-    S3ExportE2EBenchmarkUtils.deleteS3ExportDir()
+    DynamoDBS3ExportE2EBenchmarkUtils.deleteS3ExportDir()
     DynamoDBBenchmarkDataGenerator.createSimpleTable(sourceDDb(), tableName)
     DynamoDBBenchmarkDataGenerator.insertSimpleRows(sourceDDb(), tableName, rowCount)
 
-    val startTime = System.currentTimeMillis()
-    SparkUtils.successfullyPerformMigration("bench-e2e-dynamodb-to-s3export.yaml")
-    val durationMs = System.currentTimeMillis() - startTime
+    try {
+      val startTime = System.currentTimeMillis()
+      SparkUtils.successfullyPerformMigration("bench-e2e-dynamodb-to-s3export.yaml")
+      val durationMs = System.currentTimeMillis() - startTime
 
-    assert(
-      S3ExportE2EBenchmarkUtils.hasExportFiles,
-      s"Expected S3 export files in ${S3ExportE2EBenchmarkUtils.s3ExportHostDir}, found none"
-    )
+      assert(
+        DynamoDBS3ExportE2EBenchmarkUtils.hasExportFiles,
+        s"Expected S3 export files in ${DynamoDBS3ExportE2EBenchmarkUtils.s3ExportHostDir}, found none"
+      )
 
-    ThroughputReporter.report(s"dynamodb-to-s3export-${rowCount}", rowCount.toLong, durationMs)
+      // Verify item count from manifest
+      val summaryFile = new File(DynamoDBS3ExportE2EBenchmarkUtils.s3ExportHostDir, "manifest-summary.json")
+      val summaryJson = Using.resource(Source.fromFile(summaryFile))(_.mkString)
+      val summary = jsonDecode[DynamoDBS3ExportE2EBenchmarkUtils.ManifestSummary](summaryJson).fold(throw _, identity)
+      assertEquals(summary.itemCount, rowCount.toLong, "Manifest item count mismatch")
+
+      ThroughputReporter.report(s"dynamodb-to-s3export-${rowCount}", rowCount.toLong, durationMs)
+    } finally {
+      deleteTableIfExists(sourceDDb(), tableName)
+      // S3 export files are intentionally NOT deleted here because
+      // S3ExportToAlternatorE2EBenchmark depends on them. Cleanup happens there.
+    }
   }
+
 }
