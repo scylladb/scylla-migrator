@@ -1,6 +1,5 @@
 package com.scylladb.migrator.writers
 
-import com.scylladb.migrator.alternator.MigratorSuiteWithDynamoDBLocal
 import com.scylladb.migrator.config.{
   AWSCredentials,
   DynamoDBEndpoint,
@@ -17,10 +16,10 @@ import scala.jdk.CollectionConverters._
   * Verifies that streamingMaxRecordsPerSecond throttles the record processing rate and that the
   * system remains stable under rate limiting.
   */
-class RateLimitingTest extends MigratorSuiteWithDynamoDBLocal {
+class RateLimitingTest extends StreamReplicationTestFixture {
 
-  private val targetTable = "RateLimitTestTarget"
-  private val checkpointTable = "migrator_RateLimitTestSource"
+  protected val targetTable = "RateLimitTestTarget"
+  protected val checkpointTable = "migrator_RateLimitTestSource"
 
   private def makeSourceSettings(maxRecordsPerSecond: Option[Int]) = SourceSettings.DynamoDB(
     endpoint                      = Some(DynamoDBEndpoint("http://localhost", 8001)),
@@ -49,58 +48,6 @@ class RateLimitingTest extends MigratorSuiteWithDynamoDBLocal {
     throughputWritePercent      = None
   )
 
-  private def ensureTargetTable(): Unit = {
-    try
-      targetAlternator().deleteTable(
-        DeleteTableRequest.builder().tableName(targetTable).build()
-      )
-    catch { case _: Exception => () }
-    targetAlternator().createTable(
-      CreateTableRequest
-        .builder()
-        .tableName(targetTable)
-        .keySchema(KeySchemaElement.builder().attributeName("id").keyType(KeyType.HASH).build())
-        .attributeDefinitions(
-          AttributeDefinition
-            .builder()
-            .attributeName("id")
-            .attributeType(ScalarAttributeType.S)
-            .build()
-        )
-        .provisionedThroughput(
-          ProvisionedThroughput.builder().readCapacityUnits(25L).writeCapacityUnits(25L).build()
-        )
-        .build()
-    )
-    targetAlternator()
-      .waiter()
-      .waitUntilTableExists(DescribeTableRequest.builder().tableName(targetTable).build())
-  }
-
-  private def cleanupTables(): Unit = {
-    try
-      targetAlternator().deleteTable(
-        DeleteTableRequest.builder().tableName(targetTable).build()
-      )
-    catch { case _: Exception => () }
-    try
-      sourceDDb().deleteTable(
-        DeleteTableRequest.builder().tableName(checkpointTable).build()
-      )
-    catch { case _: Exception => () }
-  }
-
-  override def beforeEach(context: BeforeEach): Unit = {
-    super.beforeEach(context)
-    cleanupTables()
-    ensureTargetTable()
-  }
-
-  override def afterEach(context: AfterEach): Unit = {
-    cleanupTables()
-    super.afterEach(context)
-  }
-
   private def makeRecord(id: String, seqNum: String): Record =
     Record
       .builder()
@@ -122,22 +69,22 @@ class RateLimitingTest extends MigratorSuiteWithDynamoDBLocal {
 
   test("rate limiting does not crash when maxRecordsPerSecond is set") {
     val poller = new TestStreamPoller
-    poller.getStreamArnFn = (_, _) => "arn:aws:dynamodb:us-east-1:000:table/t/stream/s"
+    poller.getStreamArnFn.set((_, _) => "arn:aws:dynamodb:us-east-1:000:table/t/stream/s")
 
     val shard = Shard.builder().shardId("shard-rate-1").build()
-    poller.listShardsFn = (_, _) => Seq(shard)
+    poller.listShardsFn.set((_, _) => Seq(shard))
 
     val pollCount = new AtomicInteger(0)
 
     // Return a burst of records on the first poll, empty afterward
-    poller.getRecordsFn = (_, _, _) => {
+    poller.getRecordsFn.set((_, _, _) => {
       val n = pollCount.incrementAndGet()
       if (n == 1) {
         val records = (1 to 10).map(i => makeRecord(s"rate-$i", s"seq-$i"))
         (records, Some("next-iter"))
       } else
         (Seq.empty, Some("next-iter"))
-    }
+    })
 
     val tableDesc = targetAlternator()
       .describeTable(DescribeTableRequest.builder().tableName(targetTable).build())
@@ -152,30 +99,31 @@ class RateLimitingTest extends MigratorSuiteWithDynamoDBLocal {
       poller = poller
     )
 
-    Eventually(timeoutMs = 15000) {
-      pollCount.get() >= 2
-    }(s"Expected at least 2 poll cycles, got ${pollCount.get()}")
-
-    handle.stop()
+    try {
+      Eventually(timeoutMs = 15000) {
+        pollCount.get() >= 2
+      }(s"Expected at least 2 poll cycles, got ${pollCount.get()}")
+    } finally
+      handle.stop()
   }
 
   test("no rate limiting when maxRecordsPerSecond is not set") {
     val poller = new TestStreamPoller
-    poller.getStreamArnFn = (_, _) => "arn:aws:dynamodb:us-east-1:000:table/t/stream/s"
+    poller.getStreamArnFn.set((_, _) => "arn:aws:dynamodb:us-east-1:000:table/t/stream/s")
 
     val shard = Shard.builder().shardId("shard-norate-1").build()
-    poller.listShardsFn = (_, _) => Seq(shard)
+    poller.listShardsFn.set((_, _) => Seq(shard))
 
     val pollCount = new AtomicInteger(0)
 
-    poller.getRecordsFn = (_, _, _) => {
+    poller.getRecordsFn.set((_, _, _) => {
       val n = pollCount.incrementAndGet()
       if (n <= 3) {
         val records = (1 to 5).map(i => makeRecord(s"nr-$n-$i", s"seq-$n-$i"))
         (records, Some("next-iter"))
       } else
         (Seq.empty, Some("next-iter"))
-    }
+    })
 
     val tableDesc = targetAlternator()
       .describeTable(DescribeTableRequest.builder().tableName(targetTable).build())
@@ -189,10 +137,11 @@ class RateLimitingTest extends MigratorSuiteWithDynamoDBLocal {
       poller = poller
     )
 
-    Eventually(timeoutMs = 10000) {
-      pollCount.get() >= 3
-    }(s"Expected at least 3 poll cycles without rate limiting, got ${pollCount.get()}")
-
-    handle.stop()
+    try {
+      Eventually(timeoutMs = 10000) {
+        pollCount.get() >= 3
+      }(s"Expected at least 3 poll cycles without rate limiting, got ${pollCount.get()}")
+    } finally
+      handle.stop()
   }
 }

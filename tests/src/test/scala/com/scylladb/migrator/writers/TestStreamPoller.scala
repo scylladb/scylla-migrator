@@ -11,40 +11,41 @@ import software.amazon.awssdk.services.dynamodb.model.{
 import software.amazon.awssdk.services.dynamodb.streams.DynamoDbStreamsClient
 
 import java.util
+import java.util.concurrent.atomic.AtomicReference
 
-/** Configurable test double for [[StreamPollerOps]]. Each method delegates to a `var` function that
-  * can be replaced per-test. Default implementations delegate to the real [[DynamoStreamPoller]] or
-  * throw.
+/** Configurable test double for [[StreamPollerOps]]. Each method delegates to an
+  * [[AtomicReference]]-wrapped function that can be safely swapped from the test thread while
+  * polling pool threads invoke the methods.
   */
 class TestStreamPoller extends StreamPollerOps {
 
-  var getStreamArnFn: (DynamoDbClient, String) => String =
-    (_, _) => throw new UnsupportedOperationException("getStreamArn not configured")
+  val getStreamArnFn: AtomicReference[(DynamoDbClient, String) => String] =
+    new AtomicReference((_, _) => throw new UnsupportedOperationException("getStreamArn not configured"))
 
-  var listShardsFn: (DynamoDbStreamsClient, String) => Seq[Shard] =
-    (_, _) => Seq.empty
+  val listShardsFn: AtomicReference[(DynamoDbStreamsClient, String) => Seq[Shard]] =
+    new AtomicReference((_, _) => Seq.empty)
 
-  var getShardIteratorFn: (DynamoDbStreamsClient, String, String, ShardIteratorType) => String =
-    (_, _, _, _) => "test-iterator"
+  val getShardIteratorFn: AtomicReference[(DynamoDbStreamsClient, String, String, ShardIteratorType) => String] =
+    new AtomicReference((_, _, _, _) => "test-iterator")
 
-  var getShardIteratorAfterSequenceFn: (DynamoDbStreamsClient, String, String, String) => String =
-    (_, _, _, _) => "test-iterator-after-seq"
+  val getShardIteratorAfterSequenceFn: AtomicReference[(DynamoDbStreamsClient, String, String, String) => String] =
+    new AtomicReference((_, _, _, _) => "test-iterator-after-seq")
 
-  var getRecordsFn: (DynamoDbStreamsClient, String, Option[Int]) => (Seq[Record], Option[String]) =
-    (_, _, _) => (Seq.empty, None)
+  val getRecordsFn: AtomicReference[(DynamoDbStreamsClient, String, Option[Int]) => (Seq[Record], Option[String])] =
+    new AtomicReference((_, _, _) => throw new UnsupportedOperationException("getRecords not configured"))
 
-  var recordToItemFn
-    : (Record, String, AttributeValue, AttributeValue) => Option[util.Map[String, AttributeValue]] =
-    DynamoStreamPoller.recordToItem
+  val recordToItemFn
+    : AtomicReference[(Record, String, AttributeValue, AttributeValue) => Option[util.Map[String, AttributeValue]]] =
+    new AtomicReference(DynamoStreamPoller.recordToItem)
 
   override def getStreamArn(client: DynamoDbClient, tableName: String): String =
-    getStreamArnFn(client, tableName)
+    getStreamArnFn.get()(client, tableName)
 
   override def listShards(
     streamsClient: DynamoDbStreamsClient,
     streamArn: String
   ): Seq[Shard] =
-    listShardsFn(streamsClient, streamArn)
+    listShardsFn.get()(streamsClient, streamArn)
 
   override def getShardIterator(
     streamsClient: DynamoDbStreamsClient,
@@ -52,7 +53,7 @@ class TestStreamPoller extends StreamPollerOps {
     shardId: String,
     iteratorType: ShardIteratorType
   ): String =
-    getShardIteratorFn(streamsClient, streamArn, shardId, iteratorType)
+    getShardIteratorFn.get()(streamsClient, streamArn, shardId, iteratorType)
 
   override def getShardIteratorAfterSequence(
     streamsClient: DynamoDbStreamsClient,
@@ -60,14 +61,14 @@ class TestStreamPoller extends StreamPollerOps {
     shardId: String,
     sequenceNumber: String
   ): String =
-    getShardIteratorAfterSequenceFn(streamsClient, streamArn, shardId, sequenceNumber)
+    getShardIteratorAfterSequenceFn.get()(streamsClient, streamArn, shardId, sequenceNumber)
 
   override def getRecords(
     streamsClient: DynamoDbStreamsClient,
     shardIterator: String,
     limit: Option[Int]
   ): (Seq[Record], Option[String]) =
-    getRecordsFn(streamsClient, shardIterator, limit)
+    getRecordsFn.get()(streamsClient, shardIterator, limit)
 
   override def recordToItem(
     record: Record,
@@ -75,5 +76,5 @@ class TestStreamPoller extends StreamPollerOps {
     putMarker: AttributeValue,
     deleteMarker: AttributeValue
   ): Option[util.Map[String, AttributeValue]] =
-    recordToItemFn(record, operationTypeColumn, putMarker, deleteMarker)
+    recordToItemFn.get()(record, operationTypeColumn, putMarker, deleteMarker)
 }

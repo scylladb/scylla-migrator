@@ -7,7 +7,7 @@ import software.amazon.awssdk.services.dynamodb.model._
 import java.util
 import scala.jdk.CollectionConverters._
 
-/** Tests for the batch write logic in BatchWriter.run(), which exercises the flushBatch retry path
+/** Tests for the batch write logic in BatchWriter.run(), which exercises the flushAndClearBatch retry path
   * indirectly through successful batch writes.
   */
 class FlushBatchRetryTest extends MigratorSuiteWithDynamoDBLocal {
@@ -63,7 +63,7 @@ class FlushBatchRetryTest extends MigratorSuiteWithDynamoDBLocal {
   private def makeItem(
     id: String,
     isPut: Boolean
-  ): Option[util.Map[String, AttributeValue]] = {
+  ): util.Map[String, AttributeValue] = {
     val item = new util.HashMap[String, AttributeValue]()
     item.put("id", AttributeValue.fromS(id))
     if (isPut) {
@@ -72,7 +72,7 @@ class FlushBatchRetryTest extends MigratorSuiteWithDynamoDBLocal {
     } else {
       item.put(operationTypeColumn, deleteOperation)
     }
-    Some(item)
+    item
   }
 
   private def scanAll(): List[Map[String, AttributeValue]] =
@@ -141,7 +141,6 @@ class FlushBatchRetryTest extends MigratorSuiteWithDynamoDBLocal {
     val tableDesc = createTable()
     // Should not throw
     BatchWriter.run(Seq.empty, targetSettings, Map.empty, tableDesc, targetAlternator())
-    BatchWriter.run(Seq(None, None), targetSettings, Map.empty, tableDesc, targetAlternator())
     assertEquals(scanAll().size, 0)
   }
 }

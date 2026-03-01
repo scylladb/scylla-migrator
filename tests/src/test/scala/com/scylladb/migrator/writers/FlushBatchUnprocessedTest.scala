@@ -6,11 +6,11 @@ import software.amazon.awssdk.services.dynamodb.model._
 import java.util
 import scala.jdk.CollectionConverters._
 
-/** Tests for flushBatch retry behavior with unprocessed items.
+/** Tests for flushAndClearBatch batch boundary conditions.
   *
-  * Since DynamoDB Local does not return unprocessed items under normal conditions, these tests
-  * exercise the batch boundary conditions and verify the retry logic through run() which calls
-  * flushBatch internally.
+  * Note: DynamoDB Local does not return unprocessed items under normal conditions, so these tests
+  * verify batch splitting, empty-batch handling, and multi-batch flushing via run() — not the
+  * unprocessed-item retry path.
   */
 class FlushBatchUnprocessedTest extends MigratorSuiteWithDynamoDBLocal {
 
@@ -62,7 +62,7 @@ class FlushBatchUnprocessedTest extends MigratorSuiteWithDynamoDBLocal {
   private def makeItem(
     id: String,
     isPut: Boolean
-  ): Option[util.Map[String, AttributeValue]] = {
+  ): util.Map[String, AttributeValue] = {
     val item = new util.HashMap[String, AttributeValue]()
     item.put("id", AttributeValue.fromS(id))
     if (isPut) {
@@ -71,7 +71,7 @@ class FlushBatchUnprocessedTest extends MigratorSuiteWithDynamoDBLocal {
     } else {
       item.put(BatchWriter.operationTypeColumn, BatchWriter.deleteOperation)
     }
-    Some(item)
+    item
   }
 
   private def scanAll(): List[Map[String, AttributeValue]] =
@@ -82,15 +82,15 @@ class FlushBatchUnprocessedTest extends MigratorSuiteWithDynamoDBLocal {
       .map(_.asScala.toMap)
       .toList
 
-  test("flushBatch directly handles empty batch without error") {
+  test("flushAndClearBatch directly handles empty batch without error") {
     createTable()
     val batch = new util.ArrayList[WriteRequest]()
     val batchKeys = new util.HashSet[String]()
-    // flushBatch with empty batch should be a no-op (while loop condition is immediately false)
-    BatchWriter.flushBatch(targetAlternator(), tableName, batch, batchKeys)
+    // flushAndClearBatch with empty batch should be a no-op (while loop condition is immediately false)
+    BatchWriter.flushAndClearBatch(targetAlternator(), tableName, batch, batchKeys)
   }
 
-  test("flushBatch directly writes a single item") {
+  test("flushAndClearBatch directly writes a single item") {
     createTable()
     val batch = new util.ArrayList[WriteRequest]()
     val batchKeys = new util.HashSet[String]()
@@ -108,14 +108,14 @@ class FlushBatchUnprocessedTest extends MigratorSuiteWithDynamoDBLocal {
         .build()
     )
     batchKeys.add("id=direct-1")
-    BatchWriter.flushBatch(targetAlternator(), tableName, batch, batchKeys)
+    BatchWriter.flushAndClearBatch(targetAlternator(), tableName, batch, batchKeys)
 
     assert(batch.isEmpty, "batch should be cleared after flush")
     assert(batchKeys.isEmpty, "batchKeys should be cleared after flush")
     assertEquals(scanAll().size, 1)
   }
 
-  test("flushBatch directly writes exactly 25 items (max batch size)") {
+  test("flushAndClearBatch directly writes exactly 25 items (max batch size)") {
     createTable()
     val batch = new util.ArrayList[WriteRequest]()
     val batchKeys = new util.HashSet[String]()
@@ -133,7 +133,7 @@ class FlushBatchUnprocessedTest extends MigratorSuiteWithDynamoDBLocal {
       )
       batchKeys.add(s"id=b-$i")
     }
-    BatchWriter.flushBatch(targetAlternator(), tableName, batch, batchKeys)
+    BatchWriter.flushAndClearBatch(targetAlternator(), tableName, batch, batchKeys)
     assertEquals(scanAll().size, BatchWriter.batchWriteItemLimit)
   }
 

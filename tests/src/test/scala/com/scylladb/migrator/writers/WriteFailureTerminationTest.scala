@@ -12,26 +12,32 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import scala.jdk.CollectionConverters._
 
-/** Verifies that records are NOT checkpointed when BatchWriter.run() throws, preventing the
-  * data-loss scenario where failed records are permanently skipped.
+/** Verifies that sustained write failures accumulate `consecutiveErrors` and eventually
+  * trigger worker termination via the `maxConsecutiveErrors` threshold.
+  *
+  * Before the fix, `consecutiveErrors` was reset after a successful poll but BEFORE the write,
+  * so a pattern of "poll ok, write fail" never accumulated errors and never triggered termination.
   */
-class WriteFailureCheckpointTest extends StreamReplicationTestFixture {
+class WriteFailureTerminationTest extends StreamReplicationTestFixture {
 
-  protected val targetTable = "WriteFailureCheckpointTarget"
-  protected val checkpointTable = "migrator_WriteFailureCheckpointSource"
+  protected val targetTable = "WriteFailureTermTarget"
+  protected val checkpointTable = "migrator_WriteFailureTermSource"
   override protected def createTargetTableOnSetup: Boolean = false
+
+  // Use a very small maxConsecutiveErrors so the test terminates quickly
+  private val maxErrors = 3
 
   private val sourceSettings = SourceSettings.DynamoDB(
     endpoint                      = Some(DynamoDBEndpoint("http://localhost", 8001)),
     region                        = Some("eu-central-1"),
     credentials                   = Some(AWSCredentials("dummy", "dummy", None)),
-    table                         = "WriteFailureCheckpointSource",
+    table                         = "WriteFailureTermSource",
     scanSegments                  = None,
     readThroughput                = None,
     throughputReadPercent         = None,
     maxMapTasks                   = None,
     streamingPollIntervalSeconds  = Some(1),
-    streamingMaxConsecutiveErrors = Some(10),
+    streamingMaxConsecutiveErrors = Some(maxErrors),
     streamingPollingPoolSize      = Some(2),
     streamingLeaseDurationMs      = Some(60000L)
   )
@@ -47,43 +53,39 @@ class WriteFailureCheckpointTest extends StreamReplicationTestFixture {
     throughputWritePercent      = None
   )
 
-  test("checkpoint is NOT written when BatchWriter fails (data-loss prevention)") {
+  test("sustained write failures trigger termination via maxConsecutiveErrors") {
     val poller = new TestStreamPoller
     poller.getStreamArnFn.set((_, _) => "arn:aws:dynamodb:us-east-1:000:table/t/stream/s")
 
-    val shard = Shard.builder().shardId("shard-fail-1").build()
+    val shard = Shard.builder().shardId("shard-term-1").build()
     val pollCount = new AtomicInteger(0)
 
     poller.listShardsFn.set((_, _) => Seq(shard))
 
-    // Return records with sequence numbers on first poll, then empty
+    // Every poll returns records so BatchWriter.run is invoked every cycle
     poller.getRecordsFn.set((_, _, _) => {
-      val count = pollCount.incrementAndGet()
-      if (count == 1) {
-        val record = Record
-          .builder()
-          .eventName("INSERT")
-          .dynamodb(
-            StreamRecord
-              .builder()
-              .keys(Map("id" -> AttributeValue.fromS("rec-1")).asJava)
-              .newImage(
-                Map(
-                  "id"    -> AttributeValue.fromS("rec-1"),
-                  "value" -> AttributeValue.fromS("val-1")
-                ).asJava
-              )
-              .sequenceNumber("seq-001")
-              .build()
-          )
-          .build()
-        (Seq(record), Some("next-iter"))
-      } else
-        (Seq.empty, Some("next-iter"))
+      pollCount.incrementAndGet()
+      val record = Record
+        .builder()
+        .eventName("INSERT")
+        .dynamodb(
+          StreamRecord
+            .builder()
+            .keys(Map("id" -> AttributeValue.fromS("rec-1")).asJava)
+            .newImage(
+              Map(
+                "id"    -> AttributeValue.fromS("rec-1"),
+                "value" -> AttributeValue.fromS("val-1")
+              ).asJava
+            )
+            .sequenceNumber(s"seq-${pollCount.get()}")
+            .build()
+        )
+        .build()
+      (Seq(record), Some("next-iter"))
     })
 
-    // Target table is not created (createTargetTableOnSetup=false),
-    // so BatchWriter.run() will throw when attempting to write.
+    // Target table does NOT exist, so BatchWriter.run() will throw on every cycle
     val tableDesc = TableDescription
       .builder()
       .tableName(targetTable)
@@ -99,18 +101,13 @@ class WriteFailureCheckpointTest extends StreamReplicationTestFixture {
     )
 
     try {
-      // Wait for a few poll cycles so the write failure has been attempted
-      Eventually(timeoutMs = 10000) {
-        pollCount.get() >= 2
-      }(s"Expected at least 2 poll cycles, got ${pollCount.get()}")
-
-      // The checkpoint should NOT have been advanced since the write failed.
-      // If no checkpoint was written, getCheckpoint returns None (no seq num recorded).
-      val checkpoint =
-        DefaultCheckpointManager.getCheckpoint(sourceDDb(), checkpointTable, "shard-fail-1")
+      // The worker should terminate after maxConsecutiveErrors write failures.
+      // With maxErrors=3 and pollInterval=1s, this should happen within ~10s.
+      val terminated = handle.awaitTermination(20, TimeUnit.SECONDS)
       assert(
-        checkpoint.isEmpty,
-        s"Checkpoint should not have been written after write failure, got: $checkpoint"
+        terminated,
+        s"Worker should have terminated after $maxErrors consecutive write failures, " +
+          s"but timed out. Poll count: ${pollCount.get()}"
       )
     } finally
       handle.stop()

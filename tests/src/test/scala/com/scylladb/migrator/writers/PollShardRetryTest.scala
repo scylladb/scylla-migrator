@@ -47,10 +47,10 @@ class PollShardRetryTest extends munit.FunSuite {
   test("pollShard: succeeds on first try") {
     val poller = new TestStreamPoller
     val records = Seq(makeRecord("001"))
-    poller.getRecordsFn = (_, _, _) => (records, Some("next-iter"))
+    poller.getRecordsFn.set((_, _, _) => (records, Some("next-iter")))
 
     val (shardId, recs, nextIter) =
-      DynamoStreamReplication.pollShard(nullClient, "shard-1", "iter-1", poller = poller)
+      StreamReplicationWorker.pollShard(nullClient, "shard-1", "iter-1", poller = poller)
     assertEquals(shardId, "shard-1")
     assertEquals(recs.size, 1)
     assertEquals(nextIter, Some("next-iter"))
@@ -59,14 +59,14 @@ class PollShardRetryTest extends munit.FunSuite {
   test("pollShard: retries on LimitExceededException then succeeds") {
     val poller = new TestStreamPoller
     var callCount = 0
-    poller.getRecordsFn = (_, _, _) => {
+    poller.getRecordsFn.set((_, _, _) => {
       callCount += 1
       if (callCount <= 2) throw makeDynamoException("LimitExceededException")
       (Seq(makeRecord("002")), Some("next"))
-    }
+    })
 
     val (_, recs, _) =
-      DynamoStreamReplication.pollShard(
+      StreamReplicationWorker.pollShard(
         nullClient,
         "shard-1",
         "iter-1",
@@ -80,14 +80,14 @@ class PollShardRetryTest extends munit.FunSuite {
   test("pollShard: retries on ProvisionedThroughputExceededException") {
     val poller = new TestStreamPoller
     var callCount = 0
-    poller.getRecordsFn = (_, _, _) => {
+    poller.getRecordsFn.set((_, _, _) => {
       callCount += 1
       if (callCount <= 1) throw makeDynamoException("ProvisionedThroughputExceededException")
       (Seq(makeRecord("003")), None)
-    }
+    })
 
     val (_, recs, nextIter) =
-      DynamoStreamReplication.pollShard(
+      StreamReplicationWorker.pollShard(
         nullClient,
         "shard-1",
         "iter-1",
@@ -102,13 +102,13 @@ class PollShardRetryTest extends munit.FunSuite {
   test("pollShard: exhausts retries and throws") {
     val poller = new TestStreamPoller
     var callCount = 0
-    poller.getRecordsFn = (_, _, _) => {
+    poller.getRecordsFn.set((_, _, _) => {
       callCount += 1
       throw makeDynamoException("LimitExceededException")
-    }
+    })
 
     val ex = intercept[DynamoDbException] {
-      DynamoStreamReplication.pollShard(
+      StreamReplicationWorker.pollShard(
         nullClient,
         "shard-1",
         "iter-1",
@@ -124,13 +124,13 @@ class PollShardRetryTest extends munit.FunSuite {
   test("pollShard: non-retryable DynamoDbException thrown immediately") {
     val poller = new TestStreamPoller
     var callCount = 0
-    poller.getRecordsFn = (_, _, _) => {
+    poller.getRecordsFn.set((_, _, _) => {
       callCount += 1
       throw makeDynamoException("ValidationException")
-    }
+    })
 
     intercept[DynamoDbException] {
-      DynamoStreamReplication.pollShard(
+      StreamReplicationWorker.pollShard(
         nullClient,
         "shard-1",
         "iter-1",
@@ -144,13 +144,13 @@ class PollShardRetryTest extends munit.FunSuite {
   test("pollShard: non-DynamoDB exception thrown immediately") {
     val poller = new TestStreamPoller
     var callCount = 0
-    poller.getRecordsFn = (_, _, _) => {
+    poller.getRecordsFn.set((_, _, _) => {
       callCount += 1
       throw new RuntimeException("network error")
-    }
+    })
 
     intercept[RuntimeException] {
-      DynamoStreamReplication.pollShard(
+      StreamReplicationWorker.pollShard(
         nullClient,
         "shard-1",
         "iter-1",
@@ -163,10 +163,10 @@ class PollShardRetryTest extends munit.FunSuite {
 
   test("pollShard: shard closed (nextIterator = None)") {
     val poller = new TestStreamPoller
-    poller.getRecordsFn = (_, _, _) => (Seq(makeRecord("004")), None)
+    poller.getRecordsFn.set((_, _, _) => (Seq(makeRecord("004")), None))
 
     val (shardId, recs, nextIter) =
-      DynamoStreamReplication.pollShard(nullClient, "shard-1", "iter-1", poller = poller)
+      StreamReplicationWorker.pollShard(nullClient, "shard-1", "iter-1", poller = poller)
     assertEquals(shardId, "shard-1")
     assertEquals(recs.size, 1)
     assertEquals(nextIter, None)

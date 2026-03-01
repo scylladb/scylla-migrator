@@ -1,7 +1,6 @@
 package com.scylladb.migrator.writers
 
 import com.scylladb.migrator.DynamoStreamPoller
-import com.scylladb.migrator.alternator.MigratorSuiteWithDynamoDBLocal
 import com.scylladb.migrator.config.{
   AWSCredentials,
   DynamoDBEndpoint,
@@ -44,10 +43,10 @@ import scala.jdk.CollectionConverters._
   *
   * Requires DynamoDB Local on port 8001 and Alternator on port 8000.
   */
-class MultiRunnerStreamReplicationTest extends MigratorSuiteWithDynamoDBLocal {
+class MultiRunnerStreamReplicationTest extends StreamReplicationTestFixture {
 
-  private val targetTable = "MultiRunnerTestTarget"
-  private lazy val checkpointTable =
+  protected val targetTable = "MultiRunnerTestTarget"
+  protected lazy val checkpointTable =
     DynamoStreamReplication.buildCheckpointTableName(makeSourceSettings())
 
   private def makeSourceSettings(
@@ -102,48 +101,6 @@ class MultiRunnerStreamReplicationTest extends MigratorSuiteWithDynamoDBLocal {
   private def makeShard(shardId: String): Shard =
     Shard.builder().shardId(shardId).build()
 
-  private def ensureTargetTable(): Unit = {
-    try
-      targetAlternator().deleteTable(
-        DeleteTableRequest.builder().tableName(targetTable).build()
-      )
-    catch { case _: Exception => () }
-
-    targetAlternator().createTable(
-      CreateTableRequest
-        .builder()
-        .tableName(targetTable)
-        .keySchema(KeySchemaElement.builder().attributeName("id").keyType(KeyType.HASH).build())
-        .attributeDefinitions(
-          AttributeDefinition
-            .builder()
-            .attributeName("id")
-            .attributeType(ScalarAttributeType.S)
-            .build()
-        )
-        .provisionedThroughput(
-          ProvisionedThroughput.builder().readCapacityUnits(25L).writeCapacityUnits(25L).build()
-        )
-        .build()
-    )
-    targetAlternator()
-      .waiter()
-      .waitUntilTableExists(DescribeTableRequest.builder().tableName(targetTable).build())
-  }
-
-  private def cleanupTables(): Unit = {
-    try
-      targetAlternator().deleteTable(
-        DeleteTableRequest.builder().tableName(targetTable).build()
-      )
-    catch { case _: Exception => () }
-    try
-      sourceDDb().deleteTable(
-        DeleteTableRequest.builder().tableName(checkpointTable).build()
-      )
-    catch { case _: Exception => () }
-  }
-
   private def scanTargetTable(): Seq[java.util.Map[String, AttributeValue]] = {
     val result = targetAlternator().scan(
       ScanRequest.builder().tableName(targetTable).build()
@@ -175,12 +132,12 @@ class MultiRunnerStreamReplicationTest extends MigratorSuiteWithDynamoDBLocal {
     val delivered = TrieMap.empty[String, AtomicBoolean]
     shards.foreach(s => delivered.put(s, new AtomicBoolean(false)))
 
-    poller.getStreamArnFn     = (_, _) => "arn:aws:dynamodb:us-east-1:000:table/t/stream/s"
-    poller.listShardsFn       = (_, _) => shards.map(makeShard)
-    poller.getShardIteratorFn = (_, _, shardId, _) => s"iter-$shardId"
-    poller.getShardIteratorAfterSequenceFn = (_, _, shardId, _) => s"iter-$shardId-resume"
+    poller.getStreamArnFn.set((_, _) => "arn:aws:dynamodb:us-east-1:000:table/t/stream/s")
+    poller.listShardsFn.set((_, _) => shards.map(makeShard))
+    poller.getShardIteratorFn.set((_, _, shardId, _) => s"iter-$shardId")
+    poller.getShardIteratorAfterSequenceFn.set((_, _, shardId, _) => s"iter-$shardId-resume")
 
-    poller.getRecordsFn = (_, iterator, _) => {
+    poller.getRecordsFn.set((_, iterator, _) => {
       // Extract shard id from iterator
       val shardId = shards.find(s => iterator.contains(s)).getOrElse("")
       val flag = delivered.getOrElse(shardId, new AtomicBoolean(true))
@@ -192,20 +149,9 @@ class MultiRunnerStreamReplicationTest extends MigratorSuiteWithDynamoDBLocal {
       } else {
         (Seq.empty, Some(s"next-iter-$shardId"))
       }
-    }
+    })
 
     poller
-  }
-
-  override def beforeEach(context: BeforeEach): Unit = {
-    super.beforeEach(context)
-    cleanupTables()
-    ensureTargetTable()
-  }
-
-  override def afterEach(context: AfterEach): Unit = {
-    cleanupTables()
-    super.afterEach(context)
   }
 
   test("parallel shard splitting: two runners process disjoint shards without loss") {
@@ -230,12 +176,14 @@ class MultiRunnerStreamReplicationTest extends MigratorSuiteWithDynamoDBLocal {
       poller = poller2
     )
 
-    Eventually(timeoutMs = 15000) {
-      scanTargetTable().size >= 12
-    }(s"Expected 12 items in target, got ${scanTargetTable().size}")
-
-    handle1.stop()
-    handle2.stop()
+    try {
+      Eventually(timeoutMs = 15000) {
+        scanTargetTable().size >= 12
+      }(s"Expected 12 items in target, got ${scanTargetTable().size}")
+    } finally {
+      handle1.stop()
+      handle2.stop()
+    }
 
     // Verify all 12 items present in target
     val targetItems = scanTargetTable()
@@ -287,12 +235,14 @@ class MultiRunnerStreamReplicationTest extends MigratorSuiteWithDynamoDBLocal {
       poller = poller2
     )
 
-    Eventually(timeoutMs = 15000) {
-      scanTargetTable().size >= 5
-    }(s"Expected 5 items in target, got ${scanTargetTable().size}")
-
-    handle1.stop()
-    handle2.stop()
+    try {
+      Eventually(timeoutMs = 15000) {
+        scanTargetTable().size >= 5
+      }(s"Expected 5 items in target, got ${scanTargetTable().size}")
+    } finally {
+      handle1.stop()
+      handle2.stop()
+    }
 
     // Verify exactly 5 items in target (no duplicates)
     val targetItems = scanTargetTable()
@@ -422,14 +372,16 @@ class MultiRunnerStreamReplicationTest extends MigratorSuiteWithDynamoDBLocal {
       Map.empty
     )
 
-    // Wait for runner 1 to process the first batch
-    Eventually(timeoutMs = 15000) {
-      targetAlternator()
-        .scan(ScanRequest.builder().tableName(failoverTargetTable).build())
-        .items()
-        .size() >= 5
-    }("Runner 1 did not process all 5 items in time")
-    handle1.stop()
+    try {
+      // Wait for runner 1 to process the first batch
+      Eventually(timeoutMs = 15000) {
+        targetAlternator()
+          .scan(ScanRequest.builder().tableName(failoverTargetTable).build())
+          .items()
+          .size() >= 5
+      }("Runner 1 did not process all 5 items in time")
+    } finally
+      handle1.stop()
 
     // Insert second batch of 5 items while runner 1 is stopped
     (6 to 10).foreach(i => putSourceItem(s"item-$i", s"value-$i"))
@@ -445,14 +397,16 @@ class MultiRunnerStreamReplicationTest extends MigratorSuiteWithDynamoDBLocal {
       Map.empty
     )
 
-    // Wait for runner 2 to process the second batch
-    Eventually(timeoutMs = 15000) {
-      targetAlternator()
-        .scan(ScanRequest.builder().tableName(failoverTargetTable).build())
-        .items()
-        .size() >= 10
-    }("Runner 2 did not process all 10 items in time")
-    handle2.stop()
+    try {
+      // Wait for runner 2 to process the second batch
+      Eventually(timeoutMs = 15000) {
+        targetAlternator()
+          .scan(ScanRequest.builder().tableName(failoverTargetTable).build())
+          .items()
+          .size() >= 10
+      }("Runner 2 did not process all 10 items in time")
+    } finally
+      handle2.stop()
 
     // Verify all 10 items present in target with correct values
     val targetItems = targetAlternator()

@@ -73,53 +73,39 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
           .build()
       )
 
-      val streamEvents: Seq[Option[BatchWriter.DynamoItem]] = Seq(
-        Some(
-          Map(
-            "id"                -> AttributeValue.fromS("toDelete"),
-            operationTypeColumn -> deleteOperation
-          ).asJava
-        ),
-        Some(
-          Map(
-            "id"                -> AttributeValue.fromS("toUpdate"),
-            "value"             -> AttributeValue.fromS("value2-updated"),
-            operationTypeColumn -> putOperation
-          ).asJava
-        ),
-        Some(
-          Map(
-            "id"                -> AttributeValue.fromS("toInsert"),
-            "value"             -> AttributeValue.fromS("value3"),
-            operationTypeColumn -> putOperation
-          ).asJava
-        ),
-        Some(
-          Map(
-            "id"                -> AttributeValue.fromS("keyPutDelete"),
-            "value"             -> AttributeValue.fromS("value4"),
-            operationTypeColumn -> putOperation
-          ).asJava
-        ),
-        Some(
-          Map(
-            "id"                -> AttributeValue.fromS("keyPutDelete"),
-            operationTypeColumn -> deleteOperation
-          ).asJava
-        ),
-        Some(
-          Map(
-            "id"                -> AttributeValue.fromS("keyDeletePut"),
-            operationTypeColumn -> deleteOperation
-          ).asJava
-        ),
-        Some(
-          Map(
-            "id"                -> AttributeValue.fromS("keyDeletePut"),
-            "value"             -> AttributeValue.fromS("value5"),
-            operationTypeColumn -> putOperation
-          ).asJava
-        )
+      val streamEvents: Seq[BatchWriter.DynamoItem] = Seq(
+        Map(
+          "id"                -> AttributeValue.fromS("toDelete"),
+          operationTypeColumn -> deleteOperation
+        ).asJava,
+        Map(
+          "id"                -> AttributeValue.fromS("toUpdate"),
+          "value"             -> AttributeValue.fromS("value2-updated"),
+          operationTypeColumn -> putOperation
+        ).asJava,
+        Map(
+          "id"                -> AttributeValue.fromS("toInsert"),
+          "value"             -> AttributeValue.fromS("value3"),
+          operationTypeColumn -> putOperation
+        ).asJava,
+        Map(
+          "id"                -> AttributeValue.fromS("keyPutDelete"),
+          "value"             -> AttributeValue.fromS("value4"),
+          operationTypeColumn -> putOperation
+        ).asJava,
+        Map(
+          "id"                -> AttributeValue.fromS("keyPutDelete"),
+          operationTypeColumn -> deleteOperation
+        ).asJava,
+        Map(
+          "id"                -> AttributeValue.fromS("keyDeletePut"),
+          operationTypeColumn -> deleteOperation
+        ).asJava,
+        Map(
+          "id"                -> AttributeValue.fromS("keyDeletePut"),
+          "value"             -> AttributeValue.fromS("value5"),
+          operationTypeColumn -> putOperation
+        ).asJava
       )
 
       val targetSettings = TargetSettings.DynamoDB(
@@ -197,14 +183,12 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
       .waiter()
       .waitUntilTableExists(DescribeTableRequest.builder().tableName(renamedTable).build())
 
-    val streamEvents: Seq[Option[BatchWriter.DynamoItem]] = Seq(
-      Some(
-        Map(
-          "id"                -> AttributeValue.fromS("k1"),
-          "oldName"           -> AttributeValue.fromS("val1"),
-          operationTypeColumn -> putOperation
-        ).asJava
-      )
+    val streamEvents: Seq[BatchWriter.DynamoItem] = Seq(
+      Map(
+        "id"                -> AttributeValue.fromS("k1"),
+        "oldName"           -> AttributeValue.fromS("val1"),
+        operationTypeColumn -> putOperation
+      ).asJava
     )
 
     val targetSettings = TargetSettings.DynamoDB(

@@ -1,6 +1,5 @@
 package com.scylladb.migrator.writers
 
-import com.scylladb.migrator.alternator.MigratorSuiteWithDynamoDBLocal
 import com.scylladb.migrator.config.{
   AWSCredentials,
   DynamoDBEndpoint,
@@ -10,7 +9,7 @@ import com.scylladb.migrator.config.{
 import software.amazon.awssdk.services.dynamodb.model._
 
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.{ AtomicBoolean, AtomicInteger }
 import scala.jdk.CollectionConverters._
 
 /** Tests for expired iterator recovery in pollOwnedShards.
@@ -19,10 +18,10 @@ import scala.jdk.CollectionConverters._
   * worker recovers by refreshing the iterator (from checkpoint or TRIM_HORIZON) and continues
   * processing.
   */
-class ExpiredIteratorRecoveryTest extends MigratorSuiteWithDynamoDBLocal {
+class ExpiredIteratorRecoveryTest extends StreamReplicationTestFixture {
 
-  private val targetTable = "ExpiredIterRecoveryTarget"
-  private val checkpointTable = "migrator_ExpiredIterRecoverySource"
+  protected val targetTable = "ExpiredIterRecoveryTarget"
+  protected val checkpointTable = "migrator_ExpiredIterRecoverySource"
 
   private val sourceSettings = SourceSettings.DynamoDB(
     endpoint                      = Some(DynamoDBEndpoint("http://localhost", 8001)),
@@ -50,69 +49,17 @@ class ExpiredIteratorRecoveryTest extends MigratorSuiteWithDynamoDBLocal {
     throughputWritePercent      = None
   )
 
-  private def ensureTargetTable(): Unit = {
-    try
-      targetAlternator().deleteTable(
-        DeleteTableRequest.builder().tableName(targetTable).build()
-      )
-    catch { case _: Exception => () }
-    targetAlternator().createTable(
-      CreateTableRequest
-        .builder()
-        .tableName(targetTable)
-        .keySchema(KeySchemaElement.builder().attributeName("id").keyType(KeyType.HASH).build())
-        .attributeDefinitions(
-          AttributeDefinition
-            .builder()
-            .attributeName("id")
-            .attributeType(ScalarAttributeType.S)
-            .build()
-        )
-        .provisionedThroughput(
-          ProvisionedThroughput.builder().readCapacityUnits(25L).writeCapacityUnits(25L).build()
-        )
-        .build()
-    )
-    targetAlternator()
-      .waiter()
-      .waitUntilTableExists(DescribeTableRequest.builder().tableName(targetTable).build())
-  }
-
-  private def cleanupTables(): Unit = {
-    try
-      targetAlternator().deleteTable(
-        DeleteTableRequest.builder().tableName(targetTable).build()
-      )
-    catch { case _: Exception => () }
-    try
-      sourceDDb().deleteTable(
-        DeleteTableRequest.builder().tableName(checkpointTable).build()
-      )
-    catch { case _: Exception => () }
-  }
-
-  override def beforeEach(context: BeforeEach): Unit = {
-    super.beforeEach(context)
-    cleanupTables()
-    ensureTargetTable()
-  }
-
-  override def afterEach(context: AfterEach): Unit = {
-    cleanupTables()
-    super.afterEach(context)
-  }
-
   test("recovers from ExpiredIteratorException by refreshing iterator from checkpoint") {
     val poller = new TestStreamPoller
-    poller.getStreamArnFn = (_, _) => "arn:aws:dynamodb:us-east-1:000:table/t/stream/s"
+    poller.getStreamArnFn.set((_, _) => "arn:aws:dynamodb:us-east-1:000:table/t/stream/s")
 
     val shard = Shard.builder().shardId("shard-expired-1").build()
-    poller.listShardsFn = (_, _) => Seq(shard)
+    poller.listShardsFn.set((_, _) => Seq(shard))
 
     val getRecordsCallCount = new AtomicInteger(0)
 
     // First call throws ExpiredIteratorException, subsequent calls succeed with empty records
-    poller.getRecordsFn = (_, iterator, _) => {
+    poller.getRecordsFn.set((_, iterator, _) => {
       val callNum = getRecordsCallCount.incrementAndGet()
       if (callNum == 1) {
         // Simulate an expired iterator - DynamoDB SDK throws DynamoDbException with this error code
@@ -129,14 +76,14 @@ class ExpiredIteratorRecoveryTest extends MigratorSuiteWithDynamoDBLocal {
           .build()
       }
       (Seq.empty, Some("refreshed-iter"))
-    }
+    })
 
     // getShardIterator should be called as fallback after the expired iterator
-    var shardIteratorRequested = false
-    poller.getShardIteratorFn = (_, _, _, iterType) => {
-      shardIteratorRequested = true
+    val shardIteratorRequested = new AtomicBoolean(false)
+    poller.getShardIteratorFn.set((_, _, _, iterType) => {
+      shardIteratorRequested.set(true)
       "fallback-trim-horizon-iter"
-    }
+    })
 
     val tableDesc = targetAlternator()
       .describeTable(DescribeTableRequest.builder().tableName(targetTable).build())
@@ -150,25 +97,31 @@ class ExpiredIteratorRecoveryTest extends MigratorSuiteWithDynamoDBLocal {
       poller = poller
     )
 
-    Eventually(timeoutMs = 10000) {
-      getRecordsCallCount.get() >= 2
-    }(
-      s"Expected at least 2 getRecords calls (1 expired + 1 recovered), got ${getRecordsCallCount.get()}"
-    )
+    try {
+      Eventually(timeoutMs = 10000) {
+        getRecordsCallCount.get() >= 2
+      }(
+        s"Expected at least 2 getRecords calls (1 expired + 1 recovered), got ${getRecordsCallCount.get()}"
+      )
 
-    handle.stop()
+      assert(
+        shardIteratorRequested.get(),
+        "Expected getShardIterator to be called as fallback after expired iterator"
+      )
+    } finally
+      handle.stop()
   }
 
   test("recovers from ExpiredIteratorException with TRIM_HORIZON when checkpoint lookup fails") {
     val poller = new TestStreamPoller
-    poller.getStreamArnFn = (_, _) => "arn:aws:dynamodb:us-east-1:000:table/t/stream/s"
+    poller.getStreamArnFn.set((_, _) => "arn:aws:dynamodb:us-east-1:000:table/t/stream/s")
 
     val shard = Shard.builder().shardId("shard-expired-2").build()
-    poller.listShardsFn = (_, _) => Seq(shard)
+    poller.listShardsFn.set((_, _) => Seq(shard))
 
     val getRecordsCallCount = new AtomicInteger(0)
 
-    poller.getRecordsFn = (_, _, _) => {
+    poller.getRecordsFn.set((_, _, _) => {
       val callNum = getRecordsCallCount.incrementAndGet()
       if (callNum == 1)
         throw DynamoDbException
@@ -183,18 +136,17 @@ class ExpiredIteratorRecoveryTest extends MigratorSuiteWithDynamoDBLocal {
           )
           .build()
       (Seq.empty, Some("refreshed-iter"))
-    }
+    })
 
     // getShardIteratorAfterSequence fails (simulating no valid checkpoint)
-    poller.getShardIteratorAfterSequenceFn =
-      (_, _, _, _) => throw new RuntimeException("No valid sequence number")
+    poller.getShardIteratorAfterSequenceFn.set((_, _, _, _) => throw new RuntimeException("No valid sequence number"))
 
     // Should fall back to TRIM_HORIZON
-    var trimHorizonRequested = false
-    poller.getShardIteratorFn = (_, _, _, iterType) => {
-      if (iterType == ShardIteratorType.TRIM_HORIZON) trimHorizonRequested = true
+    val trimHorizonRequested = new AtomicBoolean(false)
+    poller.getShardIteratorFn.set((_, _, _, iterType) => {
+      if (iterType == ShardIteratorType.TRIM_HORIZON) trimHorizonRequested.set(true)
       "trim-horizon-iter"
-    }
+    })
 
     val tableDesc = targetAlternator()
       .describeTable(DescribeTableRequest.builder().tableName(targetTable).build())
@@ -208,10 +160,16 @@ class ExpiredIteratorRecoveryTest extends MigratorSuiteWithDynamoDBLocal {
       poller = poller
     )
 
-    Eventually(timeoutMs = 10000) {
-      getRecordsCallCount.get() >= 2
-    }(s"Expected recovery after expired iterator, got ${getRecordsCallCount.get()} calls")
+    try {
+      Eventually(timeoutMs = 10000) {
+        getRecordsCallCount.get() >= 2
+      }(s"Expected recovery after expired iterator, got ${getRecordsCallCount.get()} calls")
 
-    handle.stop()
+      assert(
+        trimHorizonRequested.get(),
+        "Expected TRIM_HORIZON fallback when checkpoint lookup fails"
+      )
+    } finally
+      handle.stop()
   }
 }
