@@ -142,6 +142,11 @@ private[writers] class StreamReplicationWorker(
       // Step 1: Poll all owned shards in parallel.
       val pollResults = pollOwnedShards()
 
+      // Snapshot sequence numbers so we can revert on write failure.
+      // This prevents failed records' sequence numbers from leaking into
+      // checkpoint writes on subsequent empty-record cycles.
+      val prevSeqNums = shardSequenceNumbers
+
       // Process poll results
       val (allItems, closedShards) = processPollResults(pollResults)
 
@@ -173,6 +178,10 @@ private[writers] class StreamReplicationWorker(
 
         // Write SHARD_END sentinel for closed shards
         markClosedShards(closedShards)
+      } else {
+        // Revert sequence numbers so the failed batch's positions aren't
+        // persisted in a future empty-record cycle's checkpoint write.
+        shardSequenceNumbers = prevSeqNums
       }
 
       // Reset error counter only after ALL steps (poll, write, checkpoint) succeeded.
