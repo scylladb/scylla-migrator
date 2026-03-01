@@ -4,33 +4,18 @@ import com.scylladb.migrator.{ DynamoStreamPoller, DynamoUtils, StreamPollerOps 
 import com.scylladb.migrator.config.{ SourceSettings, TargetSettings }
 import org.apache.log4j.LogManager
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
-import software.amazon.awssdk.services.dynamodb.model.{
-  DynamoDbException,
-  Record,
-  TableDescription
-}
+import software.amazon.awssdk.services.dynamodb.model.TableDescription
 import software.amazon.awssdk.services.dynamodb.streams.DynamoDbStreamsClient
 
 import java.util.concurrent.{ CountDownLatch, ExecutorService, Executors, ThreadFactory, TimeUnit }
+import java.util.concurrent.atomic.AtomicBoolean
 import scala.concurrent.ExecutionContext
-import scala.jdk.CollectionConverters._
 
 object DynamoStreamReplication {
   private val log = LogManager.getLogger("com.scylladb.migrator.writers.DynamoStreamReplication")
 
   /** Default maximum consecutive polling failures before stopping stream replication. */
   private val defaultMaxConsecutiveErrors = 50
-
-  /** Backoff parameters for pollShard retries: initial delay, max delay. */
-  private val pollShardInitialBackoffMs = 200L
-  private val pollShardMaxBackoffMs = 5000L
-
-  /** DynamoDB Streams error codes that are safe to retry with backoff. */
-  private val retryableErrorCodes = Set(
-    "LimitExceededException",
-    "InternalServerError",
-    "ProvisionedThroughputExceededException"
-  )
 
   /** Default lease duration in milliseconds. */
   private val defaultLeaseDurationMs = 60000L
@@ -39,16 +24,34 @@ object DynamoStreamReplication {
     * the endpoint and region to avoid collisions when migrating tables with the same name from
     * different endpoints.
     */
+  /** Compute a short hex hash (4 bytes / 8 hex chars) of the given input using SHA-256. */
+  private def shortHash(input: String): String = {
+    val digest = java.security.MessageDigest.getInstance("SHA-256")
+    digest.digest(input.getBytes("UTF-8")).take(4).map(b => f"${b & 0xff}%02x").mkString
+  }
+
+  /** DynamoDB table names must be 3-255 characters. */
+  private val maxTableNameLength = 255
+
   private[writers] def buildCheckpointTableName(src: SourceSettings.DynamoDB): String = {
     val endpointStr = src.endpoint.map(_.renderEndpoint).getOrElse("")
     val regionStr = src.region.getOrElse("")
     val suffix = if (endpointStr.nonEmpty || regionStr.nonEmpty) {
-      val digest = java.security.MessageDigest.getInstance("SHA-256")
-      val hashBytes = digest.digest((endpointStr + "|" + regionStr).getBytes("UTF-8"))
-      val hash = hashBytes.take(4).map(b => f"${b & 0xff}%02x").mkString
-      s"_$hash"
+      s"_${shortHash(endpointStr + "|" + regionStr)}"
     } else ""
-    s"migrator_${src.table}$suffix"
+    val prefix = "migrator_"
+    // DynamoDB table names allow only [a-zA-Z0-9_.-]
+    val sanitizedTable = src.table.replaceAll("[^a-zA-Z0-9_.-]", "_")
+    val maxSourceTableLen = maxTableNameLength - prefix.length - suffix.length
+    val truncatedTable =
+      if (sanitizedTable.length > maxSourceTableLen) {
+        // Include a hash of the full table name to avoid collisions when two
+        // tables share a long prefix that would produce the same truncated name.
+        val tableHash = shortHash(src.table)
+        val tableHashSuffix = s"_$tableHash"
+        sanitizedTable.take(maxSourceTableLen - tableHashSuffix.length) + tableHashSuffix
+      } else sanitizedTable
+    s"$prefix$truncatedTable$suffix"
   }
 
   /** Groups the thread pools used by stream replication for cleaner lifecycle management. */
@@ -78,6 +81,9 @@ object DynamoStreamReplication {
     /** JVM shutdown hook reference, set after construction so it can be deregistered on stop(). */
     @volatile private[writers] var shutdownHook: Option[Thread] = None
 
+    /** Guard against concurrent stop() calls (e.g. explicit stop + shutdown hook race). */
+    private val stopped = new AtomicBoolean(false)
+
     /** Block until stream replication stops due to sustained errors. */
     def awaitTermination(): Unit = latch.await()
 
@@ -91,31 +97,41 @@ object DynamoStreamReplication {
       * immediately claim them without waiting for lease expiry.
       */
     def stop(): Unit = {
+      if (!stopped.compareAndSet(false, true)) return
       // Deregister the JVM shutdown hook to prevent double-stop
       shutdownHook.foreach { hook =>
         try Runtime.getRuntime.removeShutdownHook(hook)
         catch { case _: IllegalStateException => () } // JVM already shutting down
       }
+      // Release all owned leases first so they're instantly claimable by other
+      // workers, before waiting for executors to terminate (which can take up
+      // to 70s and risks being force-killed during JVM shutdown).
       executors.scheduler.shutdown()
       executors.leaseRenewalScheduler.shutdown()
-      executors.pollingPool.shutdown()
+      // Shut down the polling pool early so in-flight futures (from a running
+      // pollAndProcess on the scheduler thread) get interrupted promptly rather
+      // than blocking Await.result for up to pollFutureTimeoutSeconds (60s).
+      executors.pollingPool.shutdownNow()
+      for (shardId <- ownedShards())
+        try {
+          leaseId.checkpointMgr.releaseLease(
+            leaseId.checkpointClient,
+            leaseId.checkpointTableName,
+            shardId,
+            leaseId.workerId
+          )
+          log.info(s"Released lease for shard $shardId on shutdown")
+        } catch {
+          case e: Exception =>
+            log.warn(s"Failed to release lease for shard $shardId on shutdown", e)
+        }
       // Wait for in-flight work to complete; force-stop if timeout expires
       if (!executors.scheduler.awaitTermination(30, TimeUnit.SECONDS))
         executors.scheduler.shutdownNow()
       if (!executors.leaseRenewalScheduler.awaitTermination(10, TimeUnit.SECONDS))
         executors.leaseRenewalScheduler.shutdownNow()
-      if (!executors.pollingPool.awaitTermination(30, TimeUnit.SECONDS))
+      if (!executors.pollingPool.awaitTermination(10, TimeUnit.SECONDS))
         executors.pollingPool.shutdownNow()
-      // Release all owned leases so they're instantly claimable
-      for (shardId <- ownedShards()) {
-        leaseId.checkpointMgr.releaseLease(
-          leaseId.checkpointClient,
-          leaseId.checkpointTableName,
-          shardId,
-          leaseId.workerId
-        )
-        log.info(s"Released lease for shard $shardId on shutdown")
-      }
       // Close SDK clients to release HTTP connection pools
       clients.foreach { c =>
         try c.close()
@@ -173,8 +189,16 @@ object DynamoStreamReplication {
     src.streamApiCallAttemptTimeoutSeconds.foreach { v =>
       require(v > 0, s"streamApiCallAttemptTimeoutSeconds must be positive, got $v")
     }
+    src.streamingPollingPoolSize.foreach { v =>
+      require(v > 0, s"streamingPollingPoolSize must be positive, got $v")
+    }
 
-    val metrics = new StreamMetrics(src.table, src.region, enableCloudWatch)
+    val metrics = new StreamMetrics(
+      src.table,
+      src.region,
+      enableCloudWatch,
+      src.finalCredentials.map(_.toProvider)
+    )
 
     val sourceClient =
       DynamoUtils.buildDynamoClient(
@@ -188,8 +212,8 @@ object DynamoStreamReplication {
         src.endpoint,
         src.finalCredentials.map(_.toProvider),
         src.region,
-        src.streamApiCallTimeoutSeconds.getOrElse(30),
-        src.streamApiCallAttemptTimeoutSeconds.getOrElse(10)
+        src.streamApiCallTimeoutSeconds,
+        src.streamApiCallAttemptTimeoutSeconds
       )
 
     val targetClient =
@@ -200,6 +224,58 @@ object DynamoStreamReplication {
         Seq.empty
       )
 
+    // All clients are created; wrap the rest in try/catch to close them on failure.
+    val allClients: Seq[AutoCloseable] = Seq(sourceClient, streamsClient, targetClient, metrics)
+    try
+      startStreamingWithClients(
+        src,
+        target,
+        targetTableDesc,
+        renamesMap,
+        poller,
+        checkpointMgr,
+        sourceClient,
+        streamsClient,
+        targetClient,
+        metrics,
+        allClients,
+        batchIntervalSeconds,
+        maxConsecutiveErrors,
+        leaseDurationMs,
+        maxRecordsPerPoll,
+        maxRecordsPerSecond,
+        pollFutureTimeoutSeconds
+      )
+    catch {
+      case e: Exception =>
+        allClients.foreach { c =>
+          try c.close()
+          catch { case ex: Exception => log.warn("Error closing client during cleanup", ex) }
+        }
+        throw e
+    }
+  }
+
+  private def startStreamingWithClients(
+    src: SourceSettings.DynamoDB,
+    target: TargetSettings.DynamoDB,
+    targetTableDesc: TableDescription,
+    renamesMap: Map[String, String],
+    poller: StreamPollerOps,
+    checkpointMgr: CheckpointManager,
+    sourceClient: DynamoDbClient,
+    streamsClient: DynamoDbStreamsClient,
+    targetClient: DynamoDbClient,
+    metrics: StreamMetrics,
+    allClients: Seq[AutoCloseable],
+    batchIntervalSeconds: Int,
+    maxConsecutiveErrors: Int,
+    leaseDurationMs: Long,
+    maxRecordsPerPoll: Option[Int],
+    maxRecordsPerSecond: Option[Int],
+    pollFutureTimeoutSeconds: Int
+  ): StreamHandle = {
+
     val streamArn = poller.getStreamArn(sourceClient, src.table)
     log.info(s"Stream ARN: $streamArn")
 
@@ -208,15 +284,16 @@ object DynamoStreamReplication {
         try {
           val hostname = java.net.InetAddress.getLocalHost.getHostName
           // Hash hostname to avoid leaking infrastructure names in shared checkpoint table
-          val digest = java.security.MessageDigest.getInstance("SHA-256")
-          val hashBytes = digest.digest(hostname.getBytes("UTF-8"))
-          hashBytes.take(4).map(b => f"${b & 0xff}%02x").mkString
+          shortHash(hostname)
         } catch { case _: Exception => "unknown" }
       s"$host-${java.util.UUID.randomUUID()}"
     }
     log.info(s"Worker ID: $workerId")
 
     val checkpointTableName = buildCheckpointTableName(src)
+    // Intentionally alias sourceClient: the checkpoint table lives in the same
+    // account/region as the source table. The client is closed once via the
+    // `clients` seq passed to StreamHandle (no double-close).
     val checkpointClient = sourceClient
     checkpointMgr.createCheckpointTable(checkpointClient, checkpointTableName)
     log.info(s"Checkpoint table: $checkpointTableName")
@@ -267,7 +344,7 @@ object DynamoStreamReplication {
     leaseRenewalScheduler.scheduleWithFixedDelay(
       () =>
         try
-          for (shardId <- worker.shardIterators.keySet().asScala)
+          for (shardId <- worker.ownedShardIds)
             try
               checkpointMgr.renewLeaseAndCheckpoint(
                 checkpointClient,
@@ -313,9 +390,9 @@ object DynamoStreamReplication {
     val handle = new StreamHandle(
       executorResources,
       terminationLatch,
-      Seq(sourceClient, streamsClient, targetClient, metrics),
+      allClients,
       leaseIdentity,
-      () => worker.shardIterators.keySet().asScala.toSet
+      () => worker.ownedShardIds
     )
 
     val hook = new Thread(s"dynamo-stream-shutdown-$workerId") {
@@ -330,51 +407,4 @@ object DynamoStreamReplication {
     handle
   }
 
-  /** Poll a single shard with retry and exponential backoff for rate-limiting errors.
-    *
-    * Note: uses `Thread.sleep` for retry backoff (200ms-5000ms), blocking the calling pool thread.
-    * This is acceptable because the pool is sized for parallel shard polling and the sleep
-    * durations are short. Converting to async would require `Future`-based composition throughout
-    * the polling pipeline.
-    */
-  @annotation.tailrec
-  private[writers] def pollShard(
-    streamsClient: DynamoDbStreamsClient,
-    shardId: String,
-    iterator: String,
-    maxRetries: Int = 3,
-    poller: StreamPollerOps = DynamoStreamPoller,
-    maxRecordsPerPoll: Option[Int] = None,
-    attempt: Int = 0
-  ): (String, Seq[Record], Option[String]) =
-    try {
-      val (records, nextIter) =
-        poller.getRecords(streamsClient, iterator, maxRecordsPerPoll)
-      (shardId, records, nextIter)
-    } catch {
-      case e: DynamoDbException
-          if e.awsErrorDetails() != null &&
-            retryableErrorCodes.contains(
-              e.awsErrorDetails().errorCode()
-            ) =>
-        val nextAttempt = attempt + 1
-        if (nextAttempt > maxRetries) throw e
-        val backoffMs =
-          math.min(pollShardInitialBackoffMs * (1L << nextAttempt), pollShardMaxBackoffMs)
-        log.warn(
-          s"Retryable error on shard $shardId " +
-            s"(attempt $nextAttempt/$maxRetries), " +
-            s"backing off ${backoffMs}ms"
-        )
-        Thread.sleep(backoffMs)
-        pollShard(
-          streamsClient,
-          shardId,
-          iterator,
-          maxRetries,
-          poller,
-          maxRecordsPerPoll,
-          nextAttempt
-        )
-    }
 }

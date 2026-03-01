@@ -48,7 +48,7 @@ import scala.util.{ Failure, Success, Try }
 import scala.jdk.OptionConverters._
 
 object DynamoUtils {
-  val log = LogManager.getLogger("com.scylladb.migrator.DynamoUtils")
+  private val log = LogManager.getLogger("com.scylladb.migrator.DynamoUtils")
   private val RemoveConsumedCapacityConfig = "scylla.migrator.remove_consumed_capacity"
 
   class RemoveConsumedCapacityInterceptor extends ExecutionInterceptor {
@@ -209,40 +209,76 @@ object DynamoUtils {
       )
 
     try {
-      sourceClient
-        .updateTable(
-          UpdateTableRequest
-            .builder()
-            .tableName(source.table)
-            .streamSpecification(
-              StreamSpecification
-                .builder()
-                .streamEnabled(true)
-                .streamViewType(StreamViewType.NEW_IMAGE)
-                .build()
-            )
-            .build()
-        )
+      try
+        sourceClient
+          .updateTable(
+            UpdateTableRequest
+              .builder()
+              .tableName(source.table)
+              .streamSpecification(
+                StreamSpecification
+                  .builder()
+                  .streamEnabled(true)
+                  .streamViewType(StreamViewType.NEW_IMAGE)
+                  .build()
+              )
+              .build()
+          )
+      catch {
+        case e: software.amazon.awssdk.services.dynamodb.model.DynamoDbException
+            if e.awsErrorDetails() != null &&
+              e.awsErrorDetails().errorCode() == "ValidationException" &&
+              e.getMessage != null &&
+              e.getMessage.toLowerCase.contains("already") =>
+          log.info(s"Stream on table ${source.table} is already enabled, skipping updateTable")
+      }
 
+      val maxAttempts = 60 // 5 minutes at 5-second intervals
       var done = false
+      var attempt = 0
       while (!done) {
-        val tableDesc =
-          sourceClient.describeTable(DescribeTableRequest.builder().tableName(source.table).build())
-        val latestStreamArn = tableDesc.table.latestStreamArn
-        val describeStream =
-          sourceStreamsClient.describeStream(
-            DescribeStreamRequest.builder().streamArn(latestStreamArn).build()
+        if (Thread.interrupted())
+          throw new InterruptedException(
+            s"Interrupted while waiting for stream on table ${source.table} to become ENABLED"
           )
+        attempt += 1
+        if (attempt > maxAttempts)
+          throw new RuntimeException(
+            s"Stream on table ${source.table} did not reach ENABLED status after $maxAttempts attempts"
+          )
+        try {
+          val tableDesc =
+            sourceClient.describeTable(
+              DescribeTableRequest.builder().tableName(source.table).build()
+            )
+          val latestStreamArn = tableDesc.table.latestStreamArn
+          val describeStream =
+            sourceStreamsClient.describeStream(
+              DescribeStreamRequest.builder().streamArn(latestStreamArn).build()
+            )
 
-        val streamStatus = describeStream.streamDescription.streamStatus
-        if (streamStatus == StreamStatus.ENABLED) {
-          log.info("Stream enabled successfully")
-          done = true
-        } else {
-          log.info(
-            s"Stream not yet enabled (status ${streamStatus}); waiting for 5 seconds and retrying"
-          )
-          Thread.sleep(5000)
+          val streamStatus = describeStream.streamDescription.streamStatus
+          if (streamStatus == StreamStatus.ENABLED) {
+            log.info("Stream enabled successfully")
+            done = true
+          } else {
+            log.info(
+              s"Stream not yet enabled (status ${streamStatus}); waiting for 5 seconds and retrying (attempt $attempt/$maxAttempts)"
+            )
+            Thread.sleep(5000)
+          }
+        } catch {
+          case _: ResourceNotFoundException =>
+            throw new RuntimeException(
+              s"Table ${source.table} not found while waiting for stream to become ENABLED"
+            )
+          case e: Exception =>
+            val backoffMs = math.min(5000L * (1L << math.min(attempt, 4)), 30000L)
+            log.warn(
+              s"Error checking stream status (attempt $attempt/$maxAttempts), " +
+                s"retrying in ${backoffMs}ms: ${e.getMessage}"
+            )
+            Thread.sleep(backoffMs)
         }
       }
     } finally {
@@ -264,19 +300,30 @@ object DynamoUtils {
     builder.overrideConfiguration(conf.build()).build()
   }
 
+  private val defaultApiCallTimeoutSeconds = 30
+  private val defaultApiCallAttemptTimeoutSeconds = 10
+
   def buildDynamoStreamsClient(
     endpoint: Option[DynamoDBEndpoint],
     creds: Option[AwsCredentialsProvider],
     region: Option[String],
-    apiCallTimeoutSeconds: Int = 30,
-    apiCallAttemptTimeoutSeconds: Int = 10
+    apiCallTimeoutSeconds: Option[Int] = None,
+    apiCallAttemptTimeoutSeconds: Option[Int] = None
   ): DynamoDbStreamsClient = {
     val builder =
       AwsUtils.configureClientBuilder(DynamoDbStreamsClient.builder(), endpoint, region, creds)
     val conf = ClientOverrideConfiguration
       .builder()
-      .apiCallTimeout(java.time.Duration.ofSeconds(apiCallTimeoutSeconds.toLong))
-      .apiCallAttemptTimeout(java.time.Duration.ofSeconds(apiCallAttemptTimeoutSeconds.toLong))
+      .apiCallTimeout(
+        java.time.Duration.ofSeconds(
+          apiCallTimeoutSeconds.getOrElse(defaultApiCallTimeoutSeconds).toLong
+        )
+      )
+      .apiCallAttemptTimeout(
+        java.time.Duration.ofSeconds(
+          apiCallAttemptTimeoutSeconds.getOrElse(defaultApiCallAttemptTimeoutSeconds).toLong
+        )
+      )
       .build()
     builder.overrideConfiguration(conf).build()
   }

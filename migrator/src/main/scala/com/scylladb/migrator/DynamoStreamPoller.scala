@@ -8,6 +8,7 @@ import software.amazon.awssdk.services.dynamodb.model.{
   DescribeTableRequest,
   GetRecordsRequest,
   GetShardIteratorRequest,
+  OperationType,
   Record,
   Shard,
   ShardIteratorType,
@@ -55,16 +56,23 @@ object DynamoStreamPoller extends StreamPollerOps {
   def getStreamArn(
     client: DynamoDbClient,
     tableName: String
-  ): String = {
-    val response =
-      client.describeTable(DescribeTableRequest.builder().tableName(tableName).build())
-    val arn = response.table().latestStreamArn()
-    if (arn == null)
-      throw new RuntimeException(
-        s"Table $tableName does not have a stream enabled"
-      )
-    arn
-  }
+  ): String =
+    try {
+      val response =
+        client.describeTable(DescribeTableRequest.builder().tableName(tableName).build())
+      val arn = response.table().latestStreamArn()
+      if (arn == null)
+        throw new RuntimeException(
+          s"Table $tableName does not have a stream enabled"
+        )
+      arn
+    } catch {
+      case e: software.amazon.awssdk.services.dynamodb.model.ResourceNotFoundException =>
+        throw new RuntimeException(
+          s"Failed to discover stream ARN: table $tableName does not exist",
+          e
+        )
+    }
 
   /** List all shards for a given stream ARN. */
   def listShards(
@@ -143,7 +151,7 @@ object DynamoStreamPoller extends StreamPollerOps {
     limit.foreach(l => builder.limit(l))
     val response = streamsClient.getRecords(builder.build())
     val records = response.records().asScala.toSeq
-    val nextIterator = Option(response.nextShardIterator())
+    val nextIterator = Option(response.nextShardIterator()).filter(_.nonEmpty)
     (records, nextIterator)
   }
 
@@ -156,11 +164,11 @@ object DynamoStreamPoller extends StreamPollerOps {
     putMarker: AttributeValue,
     deleteMarker: AttributeValue
   ): Option[util.Map[String, AttributeValue]] = {
-    val eventName = record.eventName().toString
+    val eventName = record.eventName()
     val streamRecord: StreamRecord = record.dynamodb()
 
     eventName match {
-      case "INSERT" | "MODIFY" =>
+      case OperationType.INSERT | OperationType.MODIFY =>
         val item = new util.HashMap[String, AttributeValue]()
         if (streamRecord.newImage() != null)
           item.putAll(streamRecord.newImage())
@@ -169,7 +177,7 @@ object DynamoStreamPoller extends StreamPollerOps {
         item.put(operationTypeColumn, putMarker)
         Some(item)
 
-      case "REMOVE" =>
+      case OperationType.REMOVE =>
         val item = new util.HashMap[String, AttributeValue]()
         if (streamRecord.keys() != null)
           item.putAll(streamRecord.keys())

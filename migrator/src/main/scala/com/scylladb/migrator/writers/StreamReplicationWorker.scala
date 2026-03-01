@@ -5,7 +5,6 @@ import com.scylladb.migrator.config.TargetSettings
 import org.apache.log4j.LogManager
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
 import software.amazon.awssdk.services.dynamodb.model.{
-  AttributeValue,
   DynamoDbException,
   Record,
   ShardIteratorType,
@@ -13,10 +12,9 @@ import software.amazon.awssdk.services.dynamodb.model.{
 }
 import software.amazon.awssdk.services.dynamodb.streams.DynamoDbStreamsClient
 
-import java.util.concurrent.{ ConcurrentHashMap, CountDownLatch }
+import java.util.concurrent.{ ConcurrentHashMap, CountDownLatch, TimeUnit }
 import scala.concurrent.{ Await, ExecutionContext, Future }
 import scala.concurrent.duration.Duration
-import java.util.concurrent.TimeUnit
 import scala.jdk.CollectionConverters._
 
 /** Encapsulates the mutable state and polling logic for stream replication.
@@ -73,7 +71,13 @@ private[writers] class StreamReplicationWorker(
   // ---------------------------------------------------------------------------
 
   // -- Shard tracking --
-  private[writers] val shardIterators = new ConcurrentHashMap[String, String]()
+  private val shardIterators = new ConcurrentHashMap[String, String]()
+
+  /** Returns the set of shard IDs currently owned by this worker. Thread-safe: reads from the
+    * ConcurrentHashMap.
+    */
+  private[writers] def ownedShardIds: Set[String] =
+    shardIterators.keySet().asScala.toSet
   private var shardSequenceNumbers = Map.empty[String, String]
   private var cachedShards = Seq.empty[software.amazon.awssdk.services.dynamodb.model.Shard]
   private var shardListRefreshCounter = 0
@@ -82,6 +86,7 @@ private[writers] class StreamReplicationWorker(
 
   // -- Error tracking --
   private var consecutiveErrors = 0
+  @volatile private var terminated = false
 
   // -- Rate limiter (token bucket) --
   private var rateLimitTokens = maxRecordsPerSecond.getOrElse(Int.MaxValue).toLong
@@ -118,11 +123,21 @@ private[writers] class StreamReplicationWorker(
     * exceptions increment `consecutiveErrors`; after `maxConsecutiveErrors` the worker signals
     * termination via the latch.
     */
-  def pollAndProcess(): Unit =
+  def pollAndProcess(): Unit = {
+    if (terminated) return
     try {
       val cycleStartMs = System.currentTimeMillis()
 
       refillRateLimitTokens()
+
+      // Skip polling when rate limit tokens are depleted; tokens will recover
+      // via refillRateLimitTokens() on the next cycle.
+      if (maxRecordsPerSecond.isDefined && rateLimitTokens <= 0) {
+        log.debug(
+          s"Rate limit enforced: skipping poll cycle (token deficit: ${-rateLimitTokens})"
+        )
+        return
+      }
 
       // Step 1: Poll all owned shards in parallel.
       val pollResults = pollOwnedShards()
@@ -136,17 +151,16 @@ private[writers] class StreamReplicationWorker(
       // Step 2b: Clean up old checkpoint rows
       cleanupClosedShards(closedShards)
 
-      // Reset error counter on success
-      if (consecutiveErrors > 0) {
-        log.info(s"Recovered after $consecutiveErrors consecutive errors")
-        consecutiveErrors = 0
-      }
-
       var writeSucceeded = true
       if (allItems.nonEmpty)
         try
           BatchWriter.run(allItems, target, renamesMap, targetTableDesc, targetClient)
         catch {
+          case e: BatchWriteExhaustedException =>
+            writeSucceeded = false
+            metrics.writeFailures.incrementAndGet()
+            metrics.deadLetterItems.addAndGet(e.unprocessedCount.toLong)
+            log.error("Failed to write batch to target, skipping checkpoint to avoid data loss", e)
           case e: Exception =>
             writeSucceeded = false
             metrics.writeFailures.incrementAndGet()
@@ -159,6 +173,26 @@ private[writers] class StreamReplicationWorker(
 
         // Write SHARD_END sentinel for closed shards
         markClosedShards(closedShards)
+      }
+
+      // Reset error counter only after ALL steps (poll, write, checkpoint) succeeded.
+      // This ensures that sustained write failures accumulate and eventually trigger
+      // termination, rather than being masked by successful polls.
+      if (!writeSucceeded) {
+        consecutiveErrors += 1
+        if (consecutiveErrors >= maxConsecutiveErrors) {
+          log.error(
+            s"$maxConsecutiveErrors consecutive failures (including write errors), " +
+              "stopping stream replication"
+          )
+          terminated = true
+          terminationLatch.countDown()
+          return
+        } else if (consecutiveErrors % 10 == 0)
+          log.warn(s"Sustained failures ($consecutiveErrors consecutive, latest: write failure)")
+      } else if (consecutiveErrors > 0) {
+        log.info(s"Recovered after $consecutiveErrors consecutive errors")
+        consecutiveErrors = 0
       }
 
       // Rate limiting
@@ -175,17 +209,21 @@ private[writers] class StreamReplicationWorker(
             s"$maxConsecutiveErrors consecutive polling failures, stopping stream replication",
             e
           )
+          terminated = true
           terminationLatch.countDown()
         } else if (consecutiveErrors % 10 == 0)
           log.error(s"Sustained polling failures ($consecutiveErrors consecutive)", e)
         else
           log.warn(s"Error polling DynamoDB stream (failure $consecutiveErrors)", e)
     }
+  }
 
   private def refillRateLimitTokens(): Unit =
     maxRecordsPerSecond.foreach { maxRate =>
       val now = System.currentTimeMillis()
-      val elapsed = now - lastRateLimitRefill
+      // Cap elapsed to 1 second to prevent overflow in the multiplication
+      // when the system was paused for a long time (e.g., GC, debugging).
+      val elapsed = math.min(now - lastRateLimitRefill, 1000L)
       rateLimitTokens = math.min(
         maxRate.toLong,
         rateLimitTokens + (maxRate.toLong * elapsed / 1000L)
@@ -195,22 +233,20 @@ private[writers] class StreamReplicationWorker(
 
   private def pollOwnedShards(): Seq[(String, Seq[Record], Option[String])] =
     if (!shardIterators.isEmpty) {
+      // Snapshot the sequence numbers before dispatching futures so that the
+      // recover blocks (which run on pollingEc threads) read an immutable copy
+      // rather than the scheduler-owned var.
+      val seqNumSnapshot = shardSequenceNumbers
       val futures =
         shardIterators.asScala.toSeq.map { case (shardId, iterator) =>
           Future(
-            DynamoStreamReplication.pollShard(
-              streamsClient,
-              shardId,
-              iterator,
-              poller            = poller,
-              maxRecordsPerPoll = maxRecordsPerPoll
-            )
+            pollShard(shardId, iterator)
           ).recover {
             case e: DynamoDbException
                 if e.awsErrorDetails() != null &&
                   e.awsErrorDetails().errorCode() == "ExpiredIteratorException" =>
               log.warn(s"Expired iterator for shard $shardId, refreshing from checkpoint")
-              val refreshedIter = shardSequenceNumbers.get(shardId) match {
+              val refreshedIter = seqNumSnapshot.get(shardId) match {
                 case Some(seqNum) =>
                   try
                     poller.getShardIteratorAfterSequence(
@@ -253,15 +289,24 @@ private[writers] class StreamReplicationWorker(
               (shardId, Seq.empty[Record], Some(refreshedIter))
             case e: Exception =>
               log.warn(s"Failed to poll shard $shardId: ${e.getMessage}")
-              (shardId, Seq.empty[Record], None)
+              // Preserve the existing iterator so the shard is not mistakenly
+              // treated as closed (nextIterator=None means SHARD_END).
+              (shardId, Seq.empty[Record], Some(iterator))
           }
         }
       val combined = Future.sequence(futures)
       try Await.result(combined, Duration(pollFutureTimeoutSeconds, TimeUnit.SECONDS))
       catch {
         case e: Exception =>
-          log.warn(s"Poll timed out for some shards: ${e.getMessage}")
-          futures.flatMap(_.value.collect { case scala.util.Success(result) => result })
+          val completed = futures.flatMap(_.value.collect { case scala.util.Success(r) => r })
+          val completedShardIds = completed.map(_._1).toSet
+          val timedOutShardIds =
+            shardIterators.keySet().asScala.toSet -- completedShardIds
+          log.warn(
+            s"Poll timed out after ${pollFutureTimeoutSeconds}s for shards: " +
+              s"${timedOutShardIds.mkString(", ")} (${completed.size}/${futures.size} completed)"
+          )
+          completed
       }
     } else Seq.empty
 
@@ -269,13 +314,10 @@ private[writers] class StreamReplicationWorker(
 
   private def processPollResults(
     pollResults: Seq[(String, Seq[Record], Option[String])]
-  ): (
-    scala.collection.mutable.ArrayBuffer[Option[DynamoItem]],
-    scala.collection.mutable.Set[String]
-  ) = {
+  ): (Seq[DynamoItem], Set[String]) = {
     val totalRecords = pollResults.map(_._2.size).sum
     val allItems =
-      new scala.collection.mutable.ArrayBuffer[Option[DynamoItem]](totalRecords)
+      new scala.collection.mutable.ArrayBuffer[DynamoItem](totalRecords)
     val updatedIterators =
       scala.collection.mutable.Map.empty[String, String]
     val updatedSeqNums =
@@ -284,12 +326,14 @@ private[writers] class StreamReplicationWorker(
     val closedShards = scala.collection.mutable.Set.empty[String]
     for ((shardId, records, nextIter) <- pollResults) {
       for (record <- records) {
-        allItems += poller.recordToItem(
-          record,
-          BatchWriter.operationTypeColumn,
-          BatchWriter.putOperation,
-          BatchWriter.deleteOperation
-        )
+        poller
+          .recordToItem(
+            record,
+            BatchWriter.operationTypeColumn,
+            BatchWriter.putOperation,
+            BatchWriter.deleteOperation
+          )
+          .foreach(allItems += _)
         val seqNum = record.dynamodb().sequenceNumber()
         if (seqNum != null)
           updatedSeqNums(shardId) = seqNum
@@ -308,11 +352,11 @@ private[writers] class StreamReplicationWorker(
     updatedIterators.foreach { case (k, v) => shardIterators.put(k, v) }
     shardSequenceNumbers = updatedSeqNums.toMap
 
-    (allItems, closedShards)
+    (allItems.toSeq, closedShards.toSet)
   }
 
   private def discoverAndClaimShards(
-    closedShards: scala.collection.mutable.Set[String]
+    closedShards: Set[String]
   ): Unit = {
     shardListRefreshCounter += 1
     val timeSinceLastRefresh = System.currentTimeMillis() - lastShardListRefreshMs
@@ -378,6 +422,12 @@ private[writers] class StreamReplicationWorker(
                 Some(iter)
               case Some(_) =>
                 log.info(s"Shard ${shard.shardId()} already fully consumed, skipping")
+                checkpointMgr.releaseLease(
+                  checkpointClient,
+                  checkpointTableName,
+                  shard.shardId(),
+                  workerId
+                )
                 None
               case None =>
                 Some(
@@ -399,7 +449,7 @@ private[writers] class StreamReplicationWorker(
   }
 
   private def cleanupClosedShards(
-    closedShards: scala.collection.mutable.Set[String]
+    closedShards: Set[String]
   ): Unit = {
     val activeShardIds = cachedShards.map(_.shardId()).toSet
     closedShardAbsentCycles = closedShardAbsentCycles.map {
@@ -413,34 +463,19 @@ private[writers] class StreamReplicationWorker(
     }
     for (shardId <- toCleanup)
       try {
-        checkpointClient.deleteItem(
-          software.amazon.awssdk.services.dynamodb.model.DeleteItemRequest
-            .builder()
-            .tableName(checkpointTableName)
-            .key(
-              Map(checkpointMgr.leaseKeyColumn -> AttributeValue.fromS(shardId)).asJava
-            )
-            .conditionExpression("#ckpt = :shardEnd AND #owner = :me")
-            .expressionAttributeNames(
-              Map(
-                "#ckpt"  -> checkpointMgr.checkpointColumn,
-                "#owner" -> checkpointMgr.leaseOwnerColumn
-              ).asJava
-            )
-            .expressionAttributeValues(
-              Map(
-                ":shardEnd" -> AttributeValue.fromS(checkpointMgr.shardEndSentinel),
-                ":me"       -> AttributeValue.fromS(workerId)
-              ).asJava
-            )
-            .build()
+        val deleted = checkpointMgr.deleteClosedShardCheckpoint(
+          checkpointClient,
+          checkpointTableName,
+          shardId,
+          workerId
         )
-        log.info(s"Cleaned up checkpoint row for closed shard $shardId")
-      } catch {
-        case _: software.amazon.awssdk.services.dynamodb.model.ConditionalCheckFailedException =>
+        if (deleted)
+          log.info(s"Cleaned up checkpoint row for closed shard $shardId")
+        else
           log.debug(
             s"Skipping cleanup of shard $shardId: condition not met (reclaimed by another worker)"
           )
+      } catch {
         case e: Exception =>
           log.warn(s"Failed to clean up checkpoint for shard $shardId", e)
       }
@@ -453,63 +488,70 @@ private[writers] class StreamReplicationWorker(
     }
     if (shardsToCheckpoint.isEmpty) return
 
-    val futures = shardsToCheckpoint.map { case (shardId, seqNum) =>
-      Future {
+    // Run checkpoints sequentially on the scheduler thread to avoid contending
+    // with shard polling on the pollingEc pool.  The number of checkpoints per
+    // cycle is bounded by the shard count, and each checkpoint is a single
+    // conditional DynamoDB write with short retry backoff, so sequential
+    // execution does not meaningfully delay the next poll cycle.
+    for ((shardId, seqNum) <- shardsToCheckpoint) {
+      val leaseHeld =
+        try
+          checkpointMgr.renewLeaseAndCheckpoint(
+            checkpointClient,
+            checkpointTableName,
+            shardId,
+            workerId,
+            Some(seqNum),
+            leaseDurationMs
+          )
+        catch {
+          case e: Exception =>
+            log.warn(s"Checkpoint write failed for shard $shardId: ${e.getMessage}")
+            metrics.checkpointFailures.incrementAndGet()
+            true // keep tracking the shard; the next cycle will retry
+        }
+      if (!leaseHeld) {
+        metrics.checkpointFailures.incrementAndGet()
+        log.warn(s"Lost lease for shard $shardId during checkpoint, removing from tracking")
+        shardIterators.remove(shardId)
+        shardSequenceNumbers = shardSequenceNumbers - shardId
+      }
+    }
+  }
+
+  private def markClosedShards(
+    closedShards: Set[String]
+  ): Unit =
+    for (shardId <- closedShards)
+      try {
+        log.info(s"Shard $shardId closed, writing ${checkpointMgr.shardEndSentinel} checkpoint")
         val leaseHeld = checkpointMgr.renewLeaseAndCheckpoint(
           checkpointClient,
           checkpointTableName,
           shardId,
           workerId,
-          Some(seqNum),
+          Some(checkpointMgr.shardEndSentinel),
           leaseDurationMs
         )
-        (shardId, leaseHeld)
-      }
-    }
-    val results =
-      try
-        Await.result(Future.sequence(futures), Duration(pollFutureTimeoutSeconds, TimeUnit.SECONDS))
-      catch {
+        if (!leaseHeld)
+          log.warn(s"Lost lease for closed shard $shardId, another worker will handle it")
+        shardSequenceNumbers = shardSequenceNumbers - shardId
+      } catch {
         case e: Exception =>
-          log.warn(s"Checkpoint writes timed out: ${e.getMessage}")
-          futures.flatMap(_.value.collect { case scala.util.Success(r) => r })
+          log.warn(s"Failed to mark shard $shardId as closed: ${e.getMessage}")
+          metrics.checkpointFailures.incrementAndGet()
       }
-    for ((shardId, leaseHeld) <- results if !leaseHeld) {
-      metrics.checkpointFailures.incrementAndGet()
-      log.warn(s"Lost lease for shard $shardId during checkpoint, removing from tracking")
-      shardIterators.remove(shardId)
-      shardSequenceNumbers = shardSequenceNumbers - shardId
-    }
-  }
-
-  private def markClosedShards(
-    closedShards: scala.collection.mutable.Set[String]
-  ): Unit =
-    for (shardId <- closedShards) {
-      log.info(s"Shard $shardId closed, writing ${checkpointMgr.shardEndSentinel} checkpoint")
-      val leaseHeld = checkpointMgr.renewLeaseAndCheckpoint(
-        checkpointClient,
-        checkpointTableName,
-        shardId,
-        workerId,
-        Some(checkpointMgr.shardEndSentinel),
-        leaseDurationMs
-      )
-      if (!leaseHeld)
-        log.warn(s"Lost lease for closed shard $shardId, another worker will handle it")
-      shardSequenceNumbers = shardSequenceNumbers - shardId
-    }
 
   private def applyRateLimiting(
-    allItems: scala.collection.mutable.ArrayBuffer[Option[DynamoItem]]
+    allItems: Seq[DynamoItem]
   ): Unit = {
-    val recordsThisCycle = allItems.count(_.isDefined)
+    val recordsThisCycle = allItems.size
     if (maxRecordsPerSecond.isDefined) {
       rateLimitTokens -= recordsThisCycle
       // Token deficit is carried forward and recovered via refillRateLimitTokens()
       // on the next cycle, avoiding Thread.sleep on the scheduler thread.
       if (rateLimitTokens < 0)
-        log.info(
+        log.debug(
           s"Rate limiting: token deficit of ${-rateLimitTokens}, " +
             s"will recover on next cycle (limit: ${maxRecordsPerSecond.get} records/s)"
         )
@@ -517,7 +559,7 @@ private[writers] class StreamReplicationWorker(
   }
 
   private def updateMetrics(
-    allItems: scala.collection.mutable.ArrayBuffer[Option[DynamoItem]],
+    allItems: Seq[DynamoItem],
     pollResults: Seq[(String, Seq[Record], Option[String])],
     cycleElapsedMs: Long
   ): Unit = {
@@ -528,7 +570,7 @@ private[writers] class StreamReplicationWorker(
       )
     }
 
-    val recordsThisCycle = allItems.count(_.isDefined)
+    val recordsThisCycle = allItems.size
     totalRecordsProcessed += recordsThisCycle
     pollCycleCount += 1
     metrics.recordsProcessed.set(totalRecordsProcessed)
@@ -564,4 +606,80 @@ private[writers] class StreamReplicationWorker(
       metrics.publishToCloudWatch()
     }
   }
+
+  private def pollShard(
+    shardId: String,
+    iterator: String
+  ): (String, Seq[Record], Option[String]) =
+    StreamReplicationWorker.pollShard(
+      streamsClient,
+      shardId,
+      iterator,
+      poller            = poller,
+      maxRecordsPerPoll = maxRecordsPerPoll
+    )
+}
+
+private[writers] object StreamReplicationWorker {
+
+  private val log = LogManager.getLogger("com.scylladb.migrator.writers.StreamReplicationWorker")
+
+  /** Backoff parameters for pollShard retries: initial delay, max delay. */
+  private val pollShardInitialBackoffMs = 200L
+  private val pollShardMaxBackoffMs = 5000L
+  private val retryableErrorCodes = CheckpointManager.retryableErrorCodes
+
+  /** Poll a single shard with retry and exponential backoff for rate-limiting errors.
+    *
+    * Note: uses `Thread.sleep` for retry backoff (200ms-5000ms), blocking the calling pool thread.
+    * This is acceptable because the pool is sized for parallel shard polling and the sleep
+    * durations are short. Converting to async would require `Future`-based composition throughout
+    * the polling pipeline.
+    */
+  // Note: recursive call is inside try/catch which prevents @tailrec optimization.
+  // Stack depth is bounded by maxRetries (default 3), so this is safe.
+  private[writers] def pollShard(
+    streamsClient: DynamoDbStreamsClient,
+    shardId: String,
+    iterator: String,
+    maxRetries: Int = 3,
+    poller: StreamPollerOps,
+    maxRecordsPerPoll: Option[Int] = None,
+    attempt: Int = 0
+  ): (String, Seq[Record], Option[String]) =
+    try {
+      val (records, nextIter) =
+        poller.getRecords(streamsClient, iterator, maxRecordsPerPoll)
+      (shardId, records, nextIter)
+    } catch {
+      case e: DynamoDbException
+          if e.awsErrorDetails() != null &&
+            retryableErrorCodes.contains(
+              e.awsErrorDetails().errorCode()
+            ) =>
+        val nextAttempt = attempt + 1
+        if (nextAttempt > maxRetries) throw e
+        val backoffMs =
+          math.min(pollShardInitialBackoffMs * (1L << nextAttempt), pollShardMaxBackoffMs)
+        log.warn(
+          s"Retryable error on shard $shardId " +
+            s"(attempt $nextAttempt/$maxRetries), " +
+            s"backing off ${backoffMs}ms"
+        )
+        try Thread.sleep(backoffMs)
+        catch {
+          case _: InterruptedException =>
+            Thread.currentThread().interrupt()
+            throw e
+        }
+        pollShard(
+          streamsClient,
+          shardId,
+          iterator,
+          maxRetries,
+          poller,
+          maxRecordsPerPoll,
+          nextAttempt
+        )
+    }
 }

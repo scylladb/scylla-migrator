@@ -53,6 +53,16 @@ import scala.jdk.CollectionConverters._
   * on this trait rather than importing a concrete companion object, making it testable in
   * isolation.
   */
+object CheckpointManager {
+
+  /** DynamoDB Streams error codes that are safe to retry with backoff. */
+  val retryableErrorCodes: Set[String] = Set(
+    "LimitExceededException",
+    "InternalServerError",
+    "ProvisionedThroughputExceededException"
+  )
+}
+
 trait CheckpointManager {
 
   /** Column names matching the KCL checkpoint table schema, plus lease columns. */
@@ -108,6 +118,13 @@ trait CheckpointManager {
     shardId: String,
     workerId: String
   ): Unit
+
+  def deleteClosedShardCheckpoint(
+    client: DynamoDbClient,
+    tableName: String,
+    shardId: String,
+    workerId: String
+  ): Boolean
 }
 
 /** Default implementation of [[CheckpointManager]] backed by DynamoDB conditional writes. */
@@ -125,12 +142,7 @@ object DefaultCheckpointManager extends CheckpointManager {
 
   override val shardEndSentinel = "SHARD_END"
 
-  /** DynamoDB Streams error codes that are safe to retry with backoff. */
-  private val retryableErrorCodes = Set(
-    "LimitExceededException",
-    "InternalServerError",
-    "ProvisionedThroughputExceededException"
-  )
+  private val retryableErrorCodes = CheckpointManager.retryableErrorCodes
 
   override def createCheckpointTable(client: DynamoDbClient, tableName: String): Unit =
     try {
@@ -281,9 +293,14 @@ object DefaultCheckpointManager extends CheckpointManager {
       Some(checkpoint)
     } catch {
       case _: ConditionalCheckFailedException => None
-      case e: Exception =>
-        log.warn(s"Failed to claim shard $shardId", e)
+      case e: DynamoDbException
+          if e.awsErrorDetails() != null &&
+            retryableErrorCodes.contains(e.awsErrorDetails().errorCode()) =>
+        log.warn(s"Transient error claiming shard $shardId, will retry next cycle", e)
         None
+      case e: Exception =>
+        log.error(s"Non-retryable error claiming shard $shardId", e)
+        throw e
     }
 
   override def renewLeaseAndCheckpoint(
@@ -431,10 +448,47 @@ object DefaultCheckpointManager extends CheckpointManager {
       )
     catch {
       case e: Exception =>
-        log.warn(s"Failed to release lease for shard $shardId", e)
+        log.error(s"Failed to release lease for shard $shardId", e)
     }
 
-  /** Retry with random backoff for throttling and transient DynamoDB errors.
+  override def deleteClosedShardCheckpoint(
+    client: DynamoDbClient,
+    tableName: String,
+    shardId: String,
+    workerId: String
+  ): Boolean =
+    try {
+      client.deleteItem(
+        software.amazon.awssdk.services.dynamodb.model.DeleteItemRequest
+          .builder()
+          .tableName(tableName)
+          .key(
+            Map(leaseKeyColumn -> AttributeValue.fromS(shardId)).asJava
+          )
+          .conditionExpression("#ckpt = :shardEnd AND #owner = :me")
+          .expressionAttributeNames(
+            Map(
+              "#ckpt"  -> checkpointColumn,
+              "#owner" -> leaseOwnerColumn
+            ).asJava
+          )
+          .expressionAttributeValues(
+            Map(
+              ":shardEnd" -> AttributeValue.fromS(shardEndSentinel),
+              ":me"       -> AttributeValue.fromS(workerId)
+            ).asJava
+          )
+          .build()
+      )
+      true
+    } catch {
+      case _: ConditionalCheckFailedException => false
+      case e: Exception                       => throw e
+    }
+
+  /** Retry with exponential backoff and jitter for throttling and transient DynamoDB errors.
+    *
+    * Uses "full jitter" strategy: sleep = random(0, min(maxBackOff, baseBackOff * 2^attempt)).
     *
     * Note: uses `Thread.sleep` for backoff, blocking the calling thread. The max backoff is
     * typically 100ms (for checkpoint operations), making the blocking impact negligible.
@@ -444,26 +498,37 @@ object DefaultCheckpointManager extends CheckpointManager {
     expression: => T,
     numRetriesLeft: Int,
     maxBackOffMillis: Int,
-    random: scala.util.Random = scala.util.Random
+    random: scala.util.Random = scala.util.Random,
+    attempt: Int = 0
   ): T =
     scala.util.Try(expression) match {
       case scala.util.Success(x) => x
       case scala.util.Failure(e) =>
         e match {
+          case ie: InterruptedException =>
+            Thread.currentThread().interrupt()
+            throw ie
           case ddbEx: DynamoDbException
               if numRetriesLeft > 1 &&
                 ddbEx.awsErrorDetails() != null &&
                 retryableErrorCodes.contains(
                   ddbEx.awsErrorDetails().errorCode()
                 ) =>
+            val exponentialCap =
+              math.min(maxBackOffMillis, (maxBackOffMillis.toLong / 4) * (1L << attempt)).toInt
             val backOffMillis =
-              random.nextInt(maxBackOffMillis)
-            Thread.sleep(backOffMillis)
+              if (exponentialCap <= 0) 0 else random.nextInt(exponentialCap)
+            try Thread.sleep(backOffMillis)
+            catch {
+              case _: InterruptedException =>
+                Thread.currentThread().interrupt()
+                throw ddbEx
+            }
             log.warn(
-              s"Retryable exception, backing off ${backOffMillis}ms",
+              s"Retryable exception, backing off ${backOffMillis}ms (attempt ${attempt + 1})",
               e
             )
-            retryRandom(expression, numRetriesLeft - 1, maxBackOffMillis, random)
+            retryRandom(expression, numRetriesLeft - 1, maxBackOffMillis, random, attempt + 1)
           case _ =>
             throw e
         }
