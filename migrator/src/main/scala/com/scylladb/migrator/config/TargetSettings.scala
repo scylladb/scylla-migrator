@@ -41,6 +41,22 @@ object TargetSettings {
       AwsUtils.computeFinalCredentials(credentials, endpoint, region)
   }
 
+  case class Parquet(
+    path: String,
+    compression: String = "snappy",
+    mode: String = "error"
+  ) extends TargetSettings
+  object Parquet {
+    val validCompressionCodecs: Set[String] =
+      Set("none", "uncompressed", "snappy", "gzip", "lzo", "brotli", "lz4", "zstd")
+    val validModes: Set[String] =
+      Set("error", "overwrite", "append", "ignore")
+  }
+
+  case class DynamoDBS3Export(
+    path: String
+  ) extends TargetSettings
+
   implicit val decoder: Decoder[TargetSettings] =
     Decoder.instance { cursor =>
       cursor.get[String]("type").flatMap {
@@ -48,6 +64,47 @@ object TargetSettings {
           deriveDecoder[Scylla].apply(cursor)
         case "dynamodb" | "dynamo" =>
           deriveDecoder[DynamoDB].apply(cursor)
+        case "parquet" =>
+          for {
+            path        <- cursor.get[String]("path")
+            compression <- cursor.getOrElse[String]("compression")("snappy")
+            mode        <- cursor.getOrElse[String]("mode")("error")
+            _ <- Either.cond(
+                   path.trim.nonEmpty,
+                   (),
+                   DecodingFailure("Parquet target 'path' must not be empty", cursor.history)
+                 )
+            _ <- Either.cond(
+                   Parquet.validCompressionCodecs.contains(compression.toLowerCase),
+                   (),
+                   DecodingFailure(
+                     s"Invalid Parquet compression codec '$compression'. " +
+                       s"Valid values: ${Parquet.validCompressionCodecs.toSeq.sorted.mkString(", ")}",
+                     cursor.history
+                   )
+                 )
+            _ <- Either.cond(
+                   Parquet.validModes.contains(mode.toLowerCase),
+                   (),
+                   DecodingFailure(
+                     s"Invalid Parquet write mode '$mode'. " +
+                       s"Valid values: ${Parquet.validModes.toSeq.sorted.mkString(", ")}",
+                     cursor.history
+                   )
+                 )
+          } yield Parquet(path.trim, compression.toLowerCase, mode.toLowerCase)
+        case "dynamodb-s3-export" =>
+          for {
+            path <- cursor.get[String]("path")
+            _ <- Either.cond(
+                   path.trim.nonEmpty,
+                   (),
+                   DecodingFailure(
+                     "DynamoDB S3 Export target 'path' must not be empty",
+                     cursor.history
+                   )
+                 )
+          } yield DynamoDBS3Export(path.trim)
         case otherwise =>
           Left(DecodingFailure(s"Invalid target type: ${otherwise}", cursor.history))
       }
@@ -60,5 +117,14 @@ object TargetSettings {
 
       case t: DynamoDB =>
         deriveEncoder[DynamoDB].encodeObject(t).add("type", Json.fromString("dynamodb")).asJson
+
+      case t: Parquet =>
+        deriveEncoder[Parquet].encodeObject(t).add("type", Json.fromString("parquet")).asJson
+
+      case t: DynamoDBS3Export =>
+        deriveEncoder[DynamoDBS3Export]
+          .encodeObject(t)
+          .add("type", Json.fromString("dynamodb-s3-export"))
+          .asJson
     }
 }

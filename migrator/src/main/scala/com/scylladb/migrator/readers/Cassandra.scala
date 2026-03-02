@@ -156,6 +156,26 @@ object Cassandra {
         }
     }
 
+  /** Convert Cassandra-specific types to standard Spark types.
+    *
+    * Handles UTF8Strings, UDTValues, TupleValues, and collections thereof. These conversions are
+    * done in the SourceRelation connector of the DataFrame API but need to be replicated here since
+    * we use the RDD API.
+    */
+  val convertValue: Any => Any = {
+    case x: UTF8String => x.toString
+    case set: Set[_]   => set.map(convertValue)
+    case list: List[_] => list.map(convertValue)
+    case map: Map[_, _] =>
+      map.map { case (k, v) =>
+        convertValue(k) -> convertValue(v)
+      }
+    case ab: ArrayBuffer[_] => ab.map(convertValue)
+    case udt: UDTValue      => Row.fromSeq(udt.columnValues.map(convertValue))
+    case tuple: TupleValue  => Row.fromSeq(tuple.values.map(convertValue))
+    case x                  => x
+  }
+
   def indexFields(
     currentFieldNames: List[String],
     origFieldNames: List[String],
@@ -280,30 +300,7 @@ object Cassandra {
     val rdd = finalCassandraRDD
       .asInstanceOf[RDD[Row]]
       .map { row =>
-        // We need to handle three conversions here that are not done for us:
-        // - UTF8Strings to plain Strings
-        // - UDTValue to Row
-        // - TupleValue to Row
-        //
-        // We're using the RDD API of the Cassandra connector, and these conversions are
-        // done in the SourceRelation connector of the Dataframe API. So we have to replicate
-        // them here. Future versions of the migrator will use the DataFrame API directly to
-        // avoid this replication.
-        lazy val convertRowTypes: Any => Any = {
-          case x: UTF8String => x.toString
-          case set: Set[_]   => set.map(convertRowTypes)
-          case list: List[_] => list.map(convertRowTypes)
-          case map: Map[_, _] =>
-            map.map { case (k, v) =>
-              convertRowTypes(k) -> convertRowTypes(v)
-            }
-          case ab: ArrayBuffer[_] => ab.map(convertRowTypes)
-          case udt: UDTValue      => Row.fromSeq(udt.columnValues.map(convertRowTypes))
-          case tuple: TupleValue  => Row.fromSeq(tuple.values.map(convertRowTypes))
-          case x                  => x
-        }
-
-        Row.fromSeq(row.toSeq.map(convertRowTypes))
+        Row.fromSeq(row.toSeq.map(convertValue))
       }
 
     val resultingDataframe = adjustDataframeForTimestampPreservation(
