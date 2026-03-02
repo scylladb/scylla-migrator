@@ -7,6 +7,8 @@ import com.scylladb.migrator.{
 }
 import com.datastax.oss.driver.api.querybuilder.QueryBuilder
 
+import java.time.Duration
+
 /** End-to-end throughput benchmark for Parquet -> Scylla import.
   *
   * Source: Parquet at /app/parquet/bench_e2e Target: ScyllaDB (port 9042)
@@ -41,13 +43,12 @@ class ParquetToScyllaE2EBenchmark extends E2EBenchmarkSuite(sourcePort = 9042) {
       SparkUtils.successfullyPerformMigration("bench-e2e-parquet-to-scylla.yaml")
       val durationMs = System.currentTimeMillis() - startTime
 
-      val countResult = targetScylla()
-        .execute(
-          QueryBuilder
-            .selectFrom(keyspace, targetTable)
-            .countAll()
-            .build()
-        )
+      val countStmt = QueryBuilder
+        .selectFrom(keyspace, targetTable)
+        .countAll()
+        .build()
+        .setTimeout(Duration.ofMinutes(5))
+      val countResult = targetScylla().execute(countStmt)
       val targetRowCount = countResult.one().getLong(0)
       assertEquals(targetRowCount, rowCount.toLong, "Row count mismatch for Parquet->Scylla")
 

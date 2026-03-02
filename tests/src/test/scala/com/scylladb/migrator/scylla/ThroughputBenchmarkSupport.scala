@@ -3,6 +3,8 @@ package com.scylladb.migrator.scylla
 import com.scylladb.migrator.{ BenchmarkDataGenerator, SparkUtils, ThroughputReporter }
 import com.datastax.oss.driver.api.querybuilder.{ QueryBuilder, SchemaBuilder }
 
+import java.time.Duration
+
 /** Shared throughput benchmark logic for CQL-based benchmark suites. */
 trait ThroughputBenchmarkSupport { self: MigratorSuite =>
 
@@ -22,13 +24,12 @@ trait ThroughputBenchmarkSupport { self: MigratorSuite =>
       SparkUtils.successfullyPerformMigration(configFile)
       val durationMs = System.currentTimeMillis() - startTime
 
-      val countResult = targetScylla()
-        .execute(
-          QueryBuilder
-            .selectFrom(keyspace, tableName)
-            .countAll()
-            .build()
-        )
+      val countStmt = QueryBuilder
+        .selectFrom(keyspace, tableName)
+        .countAll()
+        .build()
+        .setTimeout(Duration.ofMinutes(5))
+      val countResult = targetScylla().execute(countStmt)
       val targetRowCount = countResult.one().getLong(0)
       assertEquals(targetRowCount, rowCount.toLong, s"Row count mismatch for $scenario")
 

@@ -18,6 +18,7 @@ target:
   type: parquet
   path: /app/parquet/bench_e2e_cass
   compression: gzip
+  mode: overwrite
 
 savepoints:
   path: /app/savepoints
