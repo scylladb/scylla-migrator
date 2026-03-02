@@ -1,5 +1,171 @@
 package com.scylladb.migrator.config
 
+import io.circe._
+import io.circe.generic.semiauto._
+
+/**
+ * Source settings discriminated union - extended with MariaDB support.
+ * 
+ * This file extends the existing SourceSettings to add MariaDB as a source type.
+ * In the actual scylla-migrator codebase, this would be merged with the existing
+ * SourceSettings.scala file.
+ */
+object SourceSettings {
+  
+  /**
+   * MariaDB source configuration.
+   * Used for migrating from MariaDB/MySQL to ScyllaDB.
+   */
+  case class MariaDB(
+    host: String,
+    port: Int = 3306,
+    credentials: MariaDBCredentials,
+    database: String,
+    table: String,
+    sslOptions: Option[MariaDBSslOptions] = None,
+    connectionPoolSize: Int = 4,
+    connectionTimeoutMs: Int = 30000,
+    readTimeoutMs: Int = 300000,
+    useBackupStage: Boolean = true,
+    streamBinlog: Boolean = true,
+    serverId: Option[String] = None,
+    splitCount: Int = 256,
+    fetchSize: Int = 1000
+  )
+  
+  object MariaDB {
+    implicit val decoder: Decoder[MariaDB] = deriveDecoder[MariaDB]
+    implicit val encoder: Encoder[MariaDB] = deriveEncoder[MariaDB]
+    
+    /**
+     * Convert to MariaDBSourceSettings for use with NativeBridge
+     */
+    def toSourceSettings(m: MariaDB): MariaDBSourceSettings = 
+      MariaDBSourceSettings(
+        host = m.host,
+        port = m.port,
+        credentials = m.credentials,
+        database = m.database,
+        table = m.table,
+        sslOptions = m.sslOptions,
+        connectionPoolSize = m.connectionPoolSize,
+        connectionTimeoutMs = m.connectionTimeoutMs,
+        readTimeoutMs = m.readTimeoutMs,
+        useBackupStage = m.useBackupStage,
+        streamBinlog = m.streamBinlog,
+        serverId = m.serverId,
+        splitCount = m.splitCount,
+        fetchSize = m.fetchSize
+      )
+  }
+  
+  /**
+   * Extended source type discriminator that includes MariaDB.
+   * 
+   * In the actual implementation, this would be added to the existing
+   * SourceSettings sealed trait in the scylla-migrator codebase.
+   */
+  sealed trait SourceType
+  object SourceType {
+    case object Cassandra extends SourceType
+    case object Parquet extends SourceType  
+    case object DynamoDB extends SourceType
+    case object MariaDB extends SourceType
+    
+    implicit val decoder: Decoder[SourceType] = Decoder.decodeString.emap {
+      case "cassandra" => Right(Cassandra)
+      case "parquet" => Right(Parquet)
+      case "dynamodb" => Right(DynamoDB)
+      case "mariadb" => Right(MariaDB)
+      case other => Left(s"Unknown source type: $other")
+    }
+    
+    implicit val encoder: Encoder[SourceType] = Encoder.encodeString.contramap {
+      case Cassandra => "cassandra"
+      case Parquet => "parquet"
+      case DynamoDB => "dynamodb"
+      case MariaDB => "mariadb"
+    }
+  }
+}
+
+/**
+ * Target settings extension with explicit ScyllaDB case class.
+ * In the actual codebase, this exists in TargetSettings.scala
+ */
+object TargetSettings {
+  
+  case class Scylla(
+    host: String,
+    port: Int = 9042,
+    localDC: Option[String] = None,
+    credentials: Option[Credentials] = None,
+    sslOptions: Option[SSLOptions] = None,
+    keyspace: String,
+    table: String,
+    connections: Int = 16,
+    consistencyLevel: String = "LOCAL_QUORUM",
+    stripTrailingZerosForDecimals: Boolean = false,
+    writeTTLInS: Option[Int] = None,
+    writeWritetimestampInuS: Option[Long] = None
+  )
+  
+  case class Credentials(
+    username: String,
+    password: String
+  )
+  
+  case class SSLOptions(
+    clientAuthEnabled: Boolean = false,
+    enabled: Boolean = false,
+    trustStorePassword: Option[String] = None,
+    trustStorePath: Option[String] = None,
+    trustStoreType: String = "JKS",
+    keyStorePassword: Option[String] = None,
+    keyStorePath: Option[String] = None,
+    keyStoreType: String = "JKS",
+    enabledAlgorithms: List[String] = List.empty,
+    protocol: String = "TLS"
+  )
+  
+  object Scylla {
+    implicit val credentialsDecoder: Decoder[Credentials] = deriveDecoder[Credentials]
+    implicit val credentialsEncoder: Encoder[Credentials] = deriveEncoder[Credentials]
+    implicit val sslDecoder: Decoder[SSLOptions] = deriveDecoder[SSLOptions]
+    implicit val sslEncoder: Encoder[SSLOptions] = deriveEncoder[SSLOptions]
+    implicit val decoder: Decoder[Scylla] = deriveDecoder[Scylla]
+    implicit val encoder: Encoder[Scylla] = deriveEncoder[Scylla]
+  }
+}
+
+/**
+ * Column rename configuration
+ */
+case class ColumnRename(
+  from: String,
+  to: String
+)
+
+object ColumnRename {
+  implicit val decoder: Decoder[ColumnRename] = deriveDecoder[ColumnRename]
+  implicit val encoder: Encoder[ColumnRename] = deriveEncoder[ColumnRename]
+}
+
+/**
+ * Renames configuration
+ */
+case class Renames(
+  keyspace: Option[String] = None,
+  table: Option[String] = None,
+  columns: List[ColumnRename] = List.empty
+)
+
+object Renames {
+  implicit val decoder: Decoder[Renames] = deriveDecoder[Renames]
+  implicit val encoder: Encoder[Renames] = deriveEncoder[Renames]
+}
+package com.scylladb.migrator.config
+
 import cats.implicits._
 import com.scylladb.migrator.AwsUtils
 import io.circe.syntax._

@@ -1,3 +1,166 @@
+import sbt._
+import sbt.Keys._
+
+// =============================================================================
+// ScyllaDB Migrator with MariaDB Support - Build Configuration
+// =============================================================================
+
+lazy val root = (project in file("."))
+  .settings(
+    name := "scylla-migrator",
+    organization := "com.scylladb",
+    version := "0.1.0-SNAPSHOT",
+    scalaVersion := "2.13.12",
+    
+    // Spark compatibility
+    libraryDependencies ++= Seq(
+      // Spark core dependencies (provided by Spark cluster)
+      "org.apache.spark" %% "spark-core" % sparkVersion % "provided",
+      "org.apache.spark" %% "spark-sql" % sparkVersion % "provided",
+      "org.apache.spark" %% "spark-streaming" % sparkVersion % "provided",
+      
+      // JSON parsing with Circe
+      "io.circe" %% "circe-core" % circeVersion,
+      "io.circe" %% "circe-generic" % circeVersion,
+      "io.circe" %% "circe-parser" % circeVersion,
+      "io.circe" %% "circe-yaml" % "0.14.2",
+      
+      // ScyllaDB Spark Connector
+      "com.datastax.spark" %% "spark-cassandra-connector" % sparkCassandraConnectorVersion,
+      
+      // Logging
+      "org.slf4j" % "slf4j-api" % "2.0.9",
+      "ch.qos.logback" % "logback-classic" % "1.4.14" % "runtime",
+      
+      // Testing
+      "org.scalatest" %% "scalatest" % "3.2.17" % Test,
+      "org.scalamock" %% "scalamock" % "5.2.0" % Test
+    ),
+    
+    // Assembly settings for fat JAR
+    assembly / assemblyJarName := s"scylla-migrator-assembly-${version.value}.jar",
+    assembly / assemblyMergeStrategy := {
+      case PathList("META-INF", "services", _*) => MergeStrategy.concat
+      case PathList("META-INF", _*) => MergeStrategy.discard
+      case "reference.conf" => MergeStrategy.concat
+      case x if x.endsWith(".proto") => MergeStrategy.first
+      case x if x.endsWith(".properties") => MergeStrategy.first
+      case x if x.endsWith("module-info.class") => MergeStrategy.discard
+      case x =>
+        val oldStrategy = (assembly / assemblyMergeStrategy).value
+        oldStrategy(x)
+    },
+    
+    // Exclude Spark and Hadoop from fat JAR (provided by cluster)
+    assembly / assemblyExcludedJars := {
+      val cp = (assembly / fullClasspath).value
+      cp filter { jar =>
+        val name = jar.data.getName
+        name.startsWith("spark-") || 
+        name.startsWith("hadoop-") ||
+        name.startsWith("scala-library")
+      }
+    },
+    
+    // Scala compiler options
+    scalacOptions ++= Seq(
+      "-deprecation",
+      "-encoding", "UTF-8",
+      "-feature",
+      "-unchecked",
+      "-Xlint:_",
+      "-Ywarn-dead-code",
+      "-Ywarn-numeric-widen"
+    ),
+    
+    // JVM options
+    javaOptions ++= Seq(
+      "-Xmx4g",
+      "-XX:+UseG1GC"
+    ),
+    
+    // Native library configuration
+    // The JNI library must be in java.library.path at runtime
+    fork := true,
+    javaOptions += s"-Djava.library.path=${baseDirectory.value}/native/build"
+  )
+
+// =============================================================================
+// Version Constants
+// =============================================================================
+
+lazy val sparkVersion = "3.5.1"
+lazy val circeVersion = "0.14.6"
+lazy val sparkCassandraConnectorVersion = "3.5.0"
+
+// =============================================================================
+// Custom Tasks
+// =============================================================================
+
+// Task to build native library
+lazy val buildNative = taskKey[Unit]("Build native C++ library")
+buildNative := {
+  import scala.sys.process._
+  val nativeDir = baseDirectory.value / "native"
+  val buildDir = nativeDir / "build"
+  
+  // Create build directory
+  buildDir.mkdirs()
+  
+  // Run CMake and Make
+  val cmakeResult = Process(
+    Seq("cmake", "-DCMAKE_BUILD_TYPE=Release", ".."),
+    buildDir
+  ).!
+  
+  if (cmakeResult != 0) {
+    throw new RuntimeException("CMake configuration failed")
+  }
+  
+  val makeResult = Process(
+    Seq("make", "-j4"),
+    buildDir
+  ).!
+  
+  if (makeResult != 0) {
+    throw new RuntimeException("Native library build failed")
+  }
+  
+  streams.value.log.info("Native library built successfully")
+}
+
+// Ensure native library is built before assembly
+assembly := (assembly dependsOn buildNative).value
+
+// =============================================================================
+// Project Layout
+// =============================================================================
+
+// migrator/
+//   src/main/scala/
+//     com/scylladb/migrator/
+//       Migrator.scala                    - Main entry point
+//       MariaDBMigrator.scala             - MariaDB migration logic
+//       config/
+//         MariaDBSourceSettings.scala     - MariaDB config types
+//         MigratorConfig.scala            - Main config parser
+//         SourceSettings.scala            - Source type definitions
+//       mariadb/
+//         NativeBridge.scala              - JNI bindings
+//   src/test/scala/
+//     com/scylladb/migrator/
+//       MariaDBMigratorSpec.scala         - Tests
+// 
+// native/
+//   include/
+//     mariadb_scylla_migrator.h           - Main C++ API
+//     mariadb_scylla_migrator_jni.h       - JNI declarations
+//   src/
+//     mariadb_connection.cpp              - MariaDB operations
+//     scylladb_connection.cpp             - ScyllaDB operations
+//     migrator.cpp                        - Orchestration
+//     jni_bridge.cpp                      - JNI implementations
+//   CMakeLists.txt                        - Build configuration
 import sbt.librarymanagement.InclExclRule
 
 // The AWS SDK version, the Spark version, and the Hadoop version must be compatible together
