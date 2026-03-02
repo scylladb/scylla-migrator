@@ -92,7 +92,10 @@ jobs:
         run: make test-integration
         env:
           COVERAGE: ${{ github.event_name == 'push' && 'true' || 'false' }}
+      - name: Run E2E sanity tests
+        run: make test-benchmark-e2e-sanity
       - name: Stop services
+        if: always()
         run: make stop-services
       - name: Upload coverage report
         if: github.event_name == 'push'

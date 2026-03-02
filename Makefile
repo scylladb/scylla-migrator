@@ -6,7 +6,7 @@ SHELL := bash
         spark-image start-services stop-services wait-for-services \
         test test-unit test-integration test-integration-aws \
         test-benchmark test-benchmark-jmh test-benchmark-jmh-quick \
-        test-benchmark-e2e \
+        test-benchmark-e2e test-benchmark-e2e-sanity \
         test-benchmark-e2e-cassandra-scylla test-benchmark-e2e-scylla-scylla test-benchmark-e2e-dynamodb-alternator \
         test-benchmark-e2e-scylla-parquet test-benchmark-e2e-parquet-scylla \
         test-benchmark-e2e-cassandra-parquet \
@@ -155,6 +155,9 @@ test-benchmark: start-services ## Start services and run all benchmarks (JMH + E
 	$(MAKE) wait-for-services
 	$(MAKE) test-benchmark-jmh
 	$(MAKE) test-benchmark-e2e
+
+test-benchmark-e2e-sanity: ## Run E2E sanity suite (small row counts, ~2min, for CI)
+	$(Q)$(MAKE) test-benchmark-e2e E2E_CQL_ROWS=1000 E2E_DDB_ROWS=100
 
 test-benchmark-e2e: ## Run all E2E throughput benchmarks (requires services)
 	# Sequential execution is required: parquet-scylla depends on scylla-parquet output,
