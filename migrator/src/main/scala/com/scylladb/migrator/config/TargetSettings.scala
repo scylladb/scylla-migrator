@@ -70,23 +70,23 @@ object TargetSettings {
             compression <- cursor.getOrElse[String]("compression")("snappy")
             mode        <- cursor.getOrElse[String]("mode")("error")
             _ <- Either.cond(
-              Parquet.validCompressionCodecs.contains(compression.toLowerCase),
-              (),
-              DecodingFailure(
-                s"Invalid Parquet compression codec '$compression'. " +
-                  s"Valid values: ${Parquet.validCompressionCodecs.toSeq.sorted.mkString(", ")}",
-                cursor.history
-              )
-            )
+                   Parquet.validCompressionCodecs.contains(compression.toLowerCase),
+                   (),
+                   DecodingFailure(
+                     s"Invalid Parquet compression codec '$compression'. " +
+                       s"Valid values: ${Parquet.validCompressionCodecs.toSeq.sorted.mkString(", ")}",
+                     cursor.history
+                   )
+                 )
             _ <- Either.cond(
-              Parquet.validModes.contains(mode.toLowerCase),
-              (),
-              DecodingFailure(
-                s"Invalid Parquet write mode '$mode'. " +
-                  s"Valid values: ${Parquet.validModes.toSeq.sorted.mkString(", ")}",
-                cursor.history
-              )
-            )
+                   Parquet.validModes.contains(mode.toLowerCase),
+                   (),
+                   DecodingFailure(
+                     s"Invalid Parquet write mode '$mode'. " +
+                       s"Valid values: ${Parquet.validModes.toSeq.sorted.mkString(", ")}",
+                     cursor.history
+                   )
+                 )
           } yield Parquet(path, compression.toLowerCase, mode.toLowerCase)
         case "dynamodb-s3-export" =>
           deriveDecoder[DynamoDBS3Export].apply(cursor)

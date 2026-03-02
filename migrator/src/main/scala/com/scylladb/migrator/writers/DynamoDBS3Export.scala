@@ -171,7 +171,10 @@ object DynamoDBS3Export {
       try k -> encodeAttributeValueJson(v)
       catch {
         case e: Exception =>
-          throw new IllegalArgumentException(s"Failed to encode attribute '${k}': ${e.getMessage}", e)
+          throw new IllegalArgumentException(
+            s"Failed to encode attribute '${k}': ${e.getMessage}",
+            e
+          )
       }
     }
     Json.obj("Item" -> Json.fromJsonObject(JsonObject.fromIterable(fields))).noSpaces
@@ -202,7 +205,8 @@ object DynamoDBS3Export {
     else if (av.hasL)
       Json.obj("L" -> Json.fromValues(av.l().asScala.map(encodeAttributeValueJson)))
     else if (av.hasM) {
-      val fields = av.m().asScala.toSeq.sortBy(_._1).map { case (k, v) => k -> encodeAttributeValueJson(v) }
+      val fields =
+        av.m().asScala.toSeq.sortBy(_._1).map { case (k, v) => k -> encodeAttributeValueJson(v) }
       Json.obj("M" -> Json.fromJsonObject(JsonObject.fromIterable(fields)))
     } else if (av.nul() != null && av.nul()) Json.obj("NULL" -> Json.fromBoolean(true))
     else if (av.bool() != null) Json.obj("BOOL" -> Json.fromBoolean(av.bool()))
