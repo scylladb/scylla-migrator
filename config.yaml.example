@@ -104,6 +104,41 @@ source:
 #
 #   # how many tasks per executor?
 #   maxMapTasks: 1
+#
+#   # --- Stream replication tuning (only relevant when target.streamChanges is true) ---
+#
+#   # How often to poll DynamoDB Streams for new records (seconds). Default: 5.
+#   # streamingPollIntervalSeconds: 5
+#
+#   # Maximum consecutive poll failures before stopping stream replication. Default: 50.
+#   # streamingMaxConsecutiveErrors: 50
+#
+#   # Thread pool size for polling shards in parallel. Default: max(4, available CPUs).
+#   # streamingPollingPoolSize: 4
+#
+#   # Lease duration in milliseconds. If a worker doesn't renew within this window,
+#   # other workers can claim the shard. Default: 60000 (60 seconds).
+#   # streamingLeaseDurationMs: 60000
+#
+#   # Maximum records to fetch per GetRecords call. Default: DynamoDB default (1000).
+#   # streamingMaxRecordsPerPoll: 1000
+#
+#   # Maximum records processed per second across all shards. Default: unlimited.
+#   # streamingMaxRecordsPerSecond: 5000
+#
+#   # Publish stream replication metrics to CloudWatch. Default: false.
+#   # Requires valid AWS credentials in the source region.
+#   # streamingEnableCloudWatchMetrics: false
+#
+#   # Overall timeout for DynamoDB Streams API calls (seconds). Default: 30.
+#   # streamApiCallTimeoutSeconds: 30
+#
+#   # Per-attempt timeout for DynamoDB Streams API calls (seconds). Default: 10.
+#   # streamApiCallAttemptTimeoutSeconds: 10
+#
+#   # Timeout for awaiting parallel shard poll results (seconds). Default: 60.
+#   # Increase if the polling pool is saturated and polls take longer than expected.
+#   # streamingPollFutureTimeoutSeconds: 60
 
 # Example for loading from a DynamoDB S3 export (see https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/S3DataExport.Output.html)
 # source:

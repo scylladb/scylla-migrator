@@ -40,7 +40,7 @@ object DynamoDBS3Export {
           S3Client.builder(),
           source.endpoint,
           source.region,
-          source.finalCredentials.map(_.toProvider)
+          source.finalCredentials
         )
     for (usePathStyleAccess <- source.usePathStyleAccess)
       s3ClientBuilder.forcePathStyle(usePathStyleAccess)
@@ -204,8 +204,6 @@ object DynamoDBS3Export {
 
     lazy val attributeValueDecoder: Decoder[AttributeValue] = Decoder.decodeJsonObject.map {
       jsonObject =>
-        import com.scylladb.migrator.AttributeValueUtils._
-
         (jsonObject.toMap.head match {
           case ("S", value)    => value.as[String].map(AttributeValue.fromS)
           case ("N", value)    => value.as[String].map(AttributeValue.fromN)

@@ -178,7 +178,7 @@ class DynamoUtilsTest extends munit.FunSuite {
     DynamoUtils.setDynamoDBJobConf(
       jobConf,
       None,
-      Some(DynamoDBEndpoint("http://localhost", 8000)),
+      Some(DynamoDBEndpoint("localhost", 8000)),
       None,
       None,
       None
@@ -195,7 +195,9 @@ class DynamoUtilsTest extends munit.FunSuite {
 
   test("AWS credentials are set on the JobConf") {
     val jobConf = new JobConf()
-    val creds = AWSCredentials("ak", "sk", Some("token"))
+    val creds = software.amazon.awssdk.auth.credentials.StaticCredentialsProvider.create(
+      software.amazon.awssdk.auth.credentials.AwsSessionCredentials.create("ak", "sk", "token")
+    )
     DynamoUtils.setDynamoDBJobConf(jobConf, None, None, None, None, Some(creds))
     assertEquals(jobConf.get(DynamoDBConstants.DYNAMODB_ACCESS_KEY_CONF), "ak")
     assertEquals(jobConf.get(DynamoDBConstants.DYNAMODB_SECRET_KEY_CONF), "sk")

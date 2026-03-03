@@ -1,7 +1,7 @@
 source:
   type: dynamodb
   endpoint:
-    host: http://dynamodb
+    host: dynamodb
     port: 8000
   region: us-west-1
   credentials:
@@ -12,7 +12,7 @@ source:
 target:
   type: dynamodb
   endpoint:
-    host: http://scylla
+    host: scylla
     port: 8001
   region: us-west-1
   credentials:

@@ -60,16 +60,15 @@ class StreamedItemsTest extends MigratorSuiteWithAWS {
       PutItemRequest.builder().tableName(tableName).item(item2Data.asJava).build()
     )
 
-    // Check that the added item has also been migrated
+    // Check that the added item has also been migrated.
+    // BatchWriter strips the internal _dynamo_op_type column before writing to the target,
+    // so only the original item data should be present.
     awaitAtMost(60.seconds) {
       targetAlternator()
         .getItem(GetItemRequest.builder().tableName(tableName).key(keys2.asJava).build())
         .tap { itemResult =>
           assert(itemResult.hasItem, "Second item not found in the target database")
-          assertEquals(
-            itemResult.item.asScala.toMap,
-            item2Data + ("_dynamo_op_type" -> AttributeValue.fromBool(true))
-          )
+          assertEquals(itemResult.item.asScala.toMap, item2Data)
         }
     }
 
@@ -117,16 +116,14 @@ class StreamedItemsTest extends MigratorSuiteWithAWS {
         PutItemRequest.builder().tableName(tableName).item(item2Data.asJava).build()
       )
 
-      // Check that only the second item has been migrated
+      // Check that only the second item has been migrated.
+      // BatchWriter strips the internal _dynamo_op_type column before writing.
       awaitAtMost(60.seconds) {
         targetAlternator()
           .getItem(GetItemRequest.builder().tableName(tableName).key(keys2.asJava).build())
           .tap { itemResult =>
             assert(itemResult.hasItem, "Second item not found in the target database")
-            assertEquals(
-              itemResult.item.asScala.toMap,
-              item2Data + ("_dynamo_op_type" -> AttributeValue.fromBool(true))
-            )
+            assertEquals(itemResult.item.asScala.toMap, item2Data)
           }
       }
       targetAlternator()

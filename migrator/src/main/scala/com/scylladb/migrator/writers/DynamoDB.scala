@@ -34,7 +34,7 @@ object DynamoDB {
       if (partition.nonEmpty) {
         val dynamoDB = DynamoUtils.buildDynamoClient(
           target.endpoint,
-          target.finalCredentials.map(_.toProvider),
+          target.finalCredentials,
           target.region,
           Seq.empty
         )

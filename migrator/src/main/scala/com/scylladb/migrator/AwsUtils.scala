@@ -4,15 +4,31 @@ import com.scylladb.migrator.config.DynamoDBEndpoint
 import software.amazon.awssdk.auth.credentials.{
   AwsBasicCredentials,
   AwsCredentialsProvider,
-  AwsSessionCredentials,
   StaticCredentialsProvider
 }
 import software.amazon.awssdk.awscore.client.builder.AwsClientBuilder
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.sts.StsClient
+import software.amazon.awssdk.services.sts.auth.StsAssumeRoleCredentialsProvider
 import software.amazon.awssdk.services.sts.model.AssumeRoleRequest
 
 import java.net.URI
+
+/** An [[AwsCredentialsProvider]] that also closes the underlying [[StsClient]] when it is closed.
+  * This prevents resource leaks in long-running jobs.
+  */
+class CloseableStsCredentialsProvider(
+  stsClient: StsClient,
+  delegate: StsAssumeRoleCredentialsProvider
+) extends AwsCredentialsProvider with AutoCloseable {
+  override def resolveCredentials() = delegate.resolveCredentials()
+  override def identityType() = delegate.identityType()
+  override def resolveIdentity() = delegate.resolveIdentity()
+  override def close(): Unit = {
+    delegate.close()
+    stsClient.close()
+  }
+}
 
 object AwsUtils {
 
@@ -32,64 +48,47 @@ object AwsUtils {
     builder
   }
 
-  /** Compute the final AWS credentials to use to call any AWS API.
+  /** Compute the final AWS credentials provider to use to call any AWS API.
     *
     * The credentials provided in the configuration may require acquiring temporary credentials by
-    * delegation (“AssumeRole” in AWS jargon).
+    * delegation (“AssumeRole” in AWS jargon). In that case, an [[StsAssumeRoleCredentialsProvider]]
+    * is returned, which automatically refreshes the temporary credentials before they expire. This
+    * is critical for long-running stream replication jobs that run continuously for days/weeks.
     */
   def computeFinalCredentials(
     maybeConfiguredCredentials: Option[config.AWSCredentials],
     endpoint: Option[DynamoDBEndpoint],
     region: Option[String]
-  ): Option[AWSCredentials] =
+  ): Option[AwsCredentialsProvider] =
     maybeConfiguredCredentials.map { configuredCredentials =>
-      val baseCredentials =
-        AWSCredentials(configuredCredentials.accessKey, configuredCredentials.secretKey, None)
+      val baseProvider =
+        StaticCredentialsProvider.create(
+          AwsBasicCredentials
+            .create(configuredCredentials.accessKey, configuredCredentials.secretKey)
+        )
       configuredCredentials.assumeRole match {
-        case None => baseCredentials
+        case None => baseProvider
         case Some(role) =>
           val stsClient =
             configureClientBuilder(
               StsClient.builder(),
               endpoint,
               region,
-              Some(
-                StaticCredentialsProvider.create(
-                  AwsBasicCredentials
-                    .create(configuredCredentials.accessKey, configuredCredentials.secretKey)
-                )
-              )
+              Some(baseProvider)
             ).build()
-          val response =
-            stsClient.assumeRole(
+          val assumeRoleProvider = StsAssumeRoleCredentialsProvider
+            .builder()
+            .stsClient(stsClient)
+            .refreshRequest(
               AssumeRoleRequest
                 .builder()
                 .roleArn(role.arn)
                 .roleSessionName(role.getSessionName)
                 .build()
             )
-          val assumedCredentials = response.credentials
-          AWSCredentials(
-            assumedCredentials.accessKeyId,
-            assumedCredentials.secretAccessKey,
-            Some(assumedCredentials.sessionToken)
-          )
+            .build()
+          new CloseableStsCredentialsProvider(stsClient, assumeRoleProvider)
       }
     }
-
-}
-
-/** Bare AWS credentials */
-case class AWSCredentials(accessKey: String, secretKey: String, maybeSessionToken: Option[String]) {
-
-  /** Convenient method to use our credentials with the AWS SDK */
-  def toProvider: AwsCredentialsProvider = {
-    val staticCredentials =
-      maybeSessionToken match {
-        case Some(sessionToken) => AwsSessionCredentials.create(accessKey, secretKey, sessionToken)
-        case None               => AwsBasicCredentials.create(accessKey, secretKey)
-      }
-    StaticCredentialsProvider.create(staticCredentials)
-  }
 
 }

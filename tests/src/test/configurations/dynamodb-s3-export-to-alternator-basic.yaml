@@ -4,7 +4,7 @@ source:
   manifestKey: dynamodb-export/AWSDynamoDB/01715685260608-c488b4e1/manifest-summary.json
   region: eu-central-1
   endpoint:
-    host: http://s3
+    host: s3
     port: 4566
   credentials:
     accessKey: dummy
@@ -24,7 +24,7 @@ target:
   table: BasicTest
   region: dummy
   endpoint:
-    host: http://scylla
+    host: scylla
     port: 8000
   credentials:
     accessKey: dummy
