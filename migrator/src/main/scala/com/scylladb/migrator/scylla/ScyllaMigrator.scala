@@ -6,10 +6,11 @@ import com.datastax.spark.connector.writer.TokenRangeAccumulator
 import com.scylladb.migrator.SavepointsManager
 import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
 import com.scylladb.migrator.readers.{ ParquetSavepointsManager, TimestampColumns }
-import com.scylladb.migrator.writers
+import com.scylladb.migrator.{ readers, writers }
 import org.apache.log4j.LogManager
 import org.apache.spark.sql.{ DataFrame, SparkSession }
 
+import scala.util.Using
 import scala.util.control.NonFatal
 
 case class SourceDataFrame(
@@ -120,6 +121,39 @@ object ScyllaMigrator extends ScyllaMigratorBase {
     }
 
   protected override def shouldCloseManager(manager: SavepointsManager): Boolean = true
+
+  def migrateToParquet(
+    source: SourceSettings.Cassandra,
+    target: TargetSettings.Parquet,
+    migratorConfig: MigratorConfig
+  )(implicit spark: SparkSession): Unit = {
+    val sourceDF = readers.Cassandra.readDataframe(
+      spark,
+      source,
+      source.preserveTimestamps,
+      migratorConfig.getSkipTokenRangesOrEmptySet,
+      skipExplosion = true
+    )
+    val dfForParquet =
+      if (sourceDF.timestampColumns.isDefined)
+        TimestampColumns.renameForParquet(sourceDF.dataFrame)
+      else
+        sourceDF.dataFrame
+    Using.resource(
+      CqlParquetSavepointsManager(migratorConfig, sourceDF, spark.sparkContext)
+    ) { savepointsManager =>
+      try
+        writers.Parquet.writeDataframe(target, dfForParquet)
+      catch {
+        case NonFatal(e) =>
+          log.error(
+            "Caught error while writing Parquet. Will create a savepoint before exiting",
+            e
+          )
+      } finally
+        savepointsManager.dumpMigrationState("final")
+    }
+  }
 }
 
 class ScyllaParquetMigrator(savepointsManager: ParquetSavepointsManager)

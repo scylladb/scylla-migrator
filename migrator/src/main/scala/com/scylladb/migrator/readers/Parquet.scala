@@ -75,7 +75,18 @@ object Parquet {
       spark.sparkContext.addSparkListener(listener)
 
       try {
-        val sourceDF = SourceDataFrame(df, None, savepointsSupported = false)
+        val sourceDF = if (TimestampColumns.hasPerColumnMetaInParquet(df.schema)) {
+          log.info(
+            "Detected per-column CQL timestamp metadata in Parquet schema. " +
+              "Performing row explosion for TTL/writetime preservation."
+          )
+          val renamed = TimestampColumns.renameFromParquet(df)
+          val (explodedDf, timestampColumns) =
+            Cassandra.explodeDataframeFromPerColumnMeta(spark, renamed)
+          SourceDataFrame(explodedDf, Some(timestampColumns), savepointsSupported = false)
+        } else {
+          SourceDataFrame(df, None, savepointsSupported = false)
+        }
 
         log.info("Created DataFrame from Parquet source")
 

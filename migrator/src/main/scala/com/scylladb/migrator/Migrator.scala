@@ -43,23 +43,7 @@ object Migrator {
         case (parquetSource: SourceSettings.Parquet, scyllaTarget: TargetSettings.Scylla) =>
           readers.Parquet.migrateToScylla(migratorConfig, parquetSource, scyllaTarget)(spark)
         case (cqlSource: SourceSettings.Cassandra, parquetTarget: TargetSettings.Parquet) =>
-          if (cqlSource.preserveTimestamps)
-            log.warn(
-              "preserveTimestamps is enabled but Parquet target does not support CQL TTL/writetime metadata. " +
-                "The additional timestamp columns will be included in the Parquet schema but may not be useful."
-            )
-          if (migratorConfig.skipTokenRanges.exists(_.nonEmpty))
-            log.warn(
-              "skipTokenRanges is set but may not behave as expected with a Parquet target, " +
-                "since Parquet output is not token-range-aware."
-            )
-          val sourceDF = readers.Cassandra.readDataframe(
-            spark,
-            cqlSource,
-            cqlSource.preserveTimestamps,
-            migratorConfig.getSkipTokenRangesOrEmptySet
-          )
-          writers.Parquet.writeDataframe(parquetTarget, sourceDF.dataFrame)
+          ScyllaMigrator.migrateToParquet(cqlSource, parquetTarget, migratorConfig)
         case (dynamoSource: SourceSettings.DynamoDB, alternatorTarget: TargetSettings.DynamoDB) =>
           AlternatorMigrator.migrateFromDynamoDB(dynamoSource, alternatorTarget, migratorConfig)
         case (
