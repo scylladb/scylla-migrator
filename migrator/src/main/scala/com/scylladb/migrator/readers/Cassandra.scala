@@ -156,6 +156,26 @@ object Cassandra {
         }
     }
 
+  /** Convert Cassandra-specific types to standard Spark types.
+    *
+    * Handles UTF8Strings, UDTValues, TupleValues, and collections thereof. These conversions are
+    * done in the SourceRelation connector of the DataFrame API but need to be replicated here since
+    * we use the RDD API.
+    */
+  val convertValue: Any => Any = {
+    case x: UTF8String => x.toString
+    case set: Set[_]   => set.map(convertValue)
+    case list: List[_] => list.map(convertValue)
+    case map: Map[_, _] =>
+      map.map { case (k, v) =>
+        convertValue(k) -> convertValue(v)
+      }
+    case ab: ArrayBuffer[_] => ab.map(convertValue)
+    case udt: UDTValue      => Row.fromSeq(udt.columnValues.map(convertValue))
+    case tuple: TupleValue  => Row.fromSeq(tuple.values.map(convertValue))
+    case x                  => x
+  }
+
   def indexFields(
     currentFieldNames: List[String],
     origFieldNames: List[String],
@@ -219,11 +239,92 @@ object Cassandra {
 
     }
 
+  /** Infer primary key and regular column ordinals from the schema, based on the naming convention
+    * used by `createSelection`: regular columns have companion `_ttl` and `_writetime` columns.
+    */
+  def indexFieldsFromSchema(
+    schema: StructType
+  ): (Map[String, Int], Map[String, (Int, Int, Int)]) = {
+    val fieldNames = schema.fields.map(_.name).toList
+    val fieldIndices = fieldNames.zipWithIndex.toMap
+
+    val regularColumnNames = fieldNames.filter { name =>
+      !name.endsWith("_ttl") && !name.endsWith("_writetime") &&
+      fieldIndices.contains(s"${name}_ttl") && fieldIndices.contains(s"${name}_writetime")
+    }
+
+    val regularKeyIndices = regularColumnNames.map { name =>
+      name -> (fieldIndices(name), fieldIndices(s"${name}_ttl"), fieldIndices(s"${name}_writetime"))
+    }.toMap
+
+    val metaColumnNames =
+      regularColumnNames.flatMap(name => Set(s"${name}_ttl", s"${name}_writetime")).toSet
+    val primaryKeyIndices = fieldNames
+      .filter(name => !regularKeyIndices.contains(name) && !metaColumnNames.contains(name))
+      .map(name => name -> fieldIndices(name))
+      .toMap
+
+    (primaryKeyIndices, regularKeyIndices)
+  }
+
+  /** Perform the row explosion on a DataFrame with per-column `_ttl`/`_writetime` columns.
+    *
+    * This is used when reading from Parquet files that contain per-column timestamp metadata, to
+    * produce a DataFrame suitable for writing to Scylla via `saveToCassandra()`.
+    *
+    * The explosion groups columns by their (TTL, writetime) pair and produces one row per group,
+    * using `CassandraOption.Unset` for columns not in the current group.
+    *
+    * @return
+    *   a tuple of the exploded DataFrame and the `TimestampColumns` describing the consolidated
+    *   `ttl` and `writetime` columns.
+    */
+  def explodeDataframeFromPerColumnMeta(
+    spark: SparkSession,
+    df: DataFrame
+  ): (DataFrame, TimestampColumns) = {
+    val (primaryKeyOrdinals, regularKeyOrdinals) = indexFieldsFromSchema(df.schema)
+
+    val metaColumns =
+      regularKeyOrdinals.keys.flatMap(name => Set(s"${name}_ttl", s"${name}_writetime")).toSet
+    val origSchema = StructType(df.schema.fields.filterNot(f => metaColumns.contains(f.name)))
+
+    val timestampColumns = TimestampColumns("ttl", "writetime")
+
+    val broadcastPrimaryKeyOrdinals = spark.sparkContext.broadcast(primaryKeyOrdinals)
+    val broadcastRegularKeyOrdinals = spark.sparkContext.broadcast(regularKeyOrdinals)
+    val broadcastSchema = spark.sparkContext.broadcast(origSchema)
+    val finalSchema = StructType(
+      origSchema.fields ++
+        Seq(StructField("ttl", IntegerType, true), StructField("writetime", LongType, true))
+    )
+
+    log.info("Schema after explosion from per-column metadata:")
+    log.info(finalSchema.treeString)
+
+    val resultDf = df.flatMap {
+      explodeRow(
+        _,
+        broadcastSchema.value,
+        broadcastPrimaryKeyOrdinals.value,
+        broadcastRegularKeyOrdinals.value
+      )
+    }(Encoders.row(finalSchema))
+
+    (resultDf, timestampColumns)
+  }
+
+  /** @param skipExplosion
+    *   when `true`, return the raw DataFrame with per-column `_ttl`/`_writetime` columns (standard
+    *   Spark types) instead of the exploded DataFrame with `CassandraOption` types. Use this for
+    *   writing to Parquet.
+    */
   def readDataframe(
     spark: SparkSession,
     source: SourceSettings.Cassandra,
     preserveTimes: Boolean,
-    tokenRangesToSkip: Set[(Token[_], Token[_])]
+    tokenRangesToSkip: Set[(Token[_], Token[_])],
+    skipExplosion: Boolean = false
   ): SourceDataFrame = {
     val connector = Connectors.sourceConnector(spark.sparkContext.getConf, source)
     val consistencyLevel = source.consistencyLevel match {
@@ -280,40 +381,22 @@ object Cassandra {
     val rdd = finalCassandraRDD
       .asInstanceOf[RDD[Row]]
       .map { row =>
-        // We need to handle three conversions here that are not done for us:
-        // - UTF8Strings to plain Strings
-        // - UDTValue to Row
-        // - TupleValue to Row
-        //
-        // We're using the RDD API of the Cassandra connector, and these conversions are
-        // done in the SourceRelation connector of the Dataframe API. So we have to replicate
-        // them here. Future versions of the migrator will use the DataFrame API directly to
-        // avoid this replication.
-        lazy val convertRowTypes: Any => Any = {
-          case x: UTF8String => x.toString
-          case set: Set[_]   => set.map(convertRowTypes)
-          case list: List[_] => list.map(convertRowTypes)
-          case map: Map[_, _] =>
-            map.map { case (k, v) =>
-              convertRowTypes(k) -> convertRowTypes(v)
-            }
-          case ab: ArrayBuffer[_] => ab.map(convertRowTypes)
-          case udt: UDTValue      => Row.fromSeq(udt.columnValues.map(convertRowTypes))
-          case tuple: TupleValue  => Row.fromSeq(tuple.values.map(convertRowTypes))
-          case x                  => x
-        }
-
-        Row.fromSeq(row.toSeq.map(convertRowTypes))
+        Row.fromSeq(row.toSeq.map(convertValue))
       }
 
-    val resultingDataframe = adjustDataframeForTimestampPreservation(
-      spark,
-      spark.createDataFrame(rdd, selection.schema),
-      selection.timestampColumns,
-      origSchema,
-      tableDef
-    )
+    val rawDataframe = spark.createDataFrame(rdd, selection.schema)
 
-    SourceDataFrame(resultingDataframe, selection.timestampColumns, true)
+    if (skipExplosion) {
+      SourceDataFrame(rawDataframe, selection.timestampColumns, true)
+    } else {
+      val resultingDataframe = adjustDataframeForTimestampPreservation(
+        spark,
+        rawDataframe,
+        selection.timestampColumns,
+        origSchema,
+        tableDef
+      )
+      SourceDataFrame(resultingDataframe, selection.timestampColumns, true)
+    }
   }
 }

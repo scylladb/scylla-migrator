@@ -3,6 +3,7 @@ package com.scylladb.migrator.scylla
 import com.datastax.oss.driver.api.querybuilder.SchemaBuilder
 import com.github.mjakubowski84.parquet4s.ParquetWriter
 import com.scylladb.migrator.CassandraUtils.dropAndRecreateTable
+import com.scylladb.migrator.TestFileUtils
 import org.apache.parquet.hadoop.ParquetFileWriter
 
 import java.nio.file.{ Files, Path, Paths }
@@ -127,20 +128,10 @@ abstract class ParquetMigratorSuite extends MigratorSuite(sourcePort = 0) {
 
   private def ensureEmptyDirectory(directory: Path): Unit = {
     if (Files.exists(directory)) {
-      Using.resource(Files.list(directory)) { stream =>
-        stream.iterator().asScala.foreach(deleteRecursively)
-      }
+      val children = directory.toFile.listFiles()
+      if (children != null) children.foreach(TestFileUtils.deleteRecursive)
     }
     Files.createDirectories(directory)
-  }
-
-  private def deleteRecursively(path: Path): Unit = {
-    if (Files.isDirectory(path)) {
-      Using.resource(Files.list(path)) { stream =>
-        stream.iterator().asScala.foreach(deleteRecursively)
-      }
-    }
-    Files.deleteIfExists(path)
   }
 
 }
