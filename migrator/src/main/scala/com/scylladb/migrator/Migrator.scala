@@ -50,9 +50,7 @@ object Migrator {
               dynamoSource: SourceSettings.DynamoDB,
               s3ExportTarget: TargetSettings.DynamoDBS3Export
             ) =>
-          val (sourceRDD, sourceTableDesc) =
-            readers.DynamoDB.readRDD(spark, dynamoSource, migratorConfig.skipSegments)
-          writers.DynamoDBS3Export.writeRDD(s3ExportTarget, sourceRDD, Some(sourceTableDesc))
+          AlternatorMigrator.migrateToS3Export(dynamoSource, s3ExportTarget, migratorConfig)
         case (
               s3Source: SourceSettings.DynamoDBS3Export,
               alternatorTarget: TargetSettings.DynamoDB

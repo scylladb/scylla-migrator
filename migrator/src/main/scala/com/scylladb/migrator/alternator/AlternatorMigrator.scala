@@ -29,6 +29,28 @@ object AlternatorMigrator {
     migrate(sourceRDD, sourceTableDesc, maybeStreamedSource, target, migratorConfig)
   }
 
+  def migrateToS3Export(
+    source: SourceSettings.DynamoDB,
+    target: TargetSettings.DynamoDBS3Export,
+    migratorConfig: MigratorConfig
+  )(implicit spark: SparkSession): Unit = {
+    val (sourceRDD, sourceTableDesc) =
+      readers.DynamoDB.readRDD(spark, source, migratorConfig.skipSegments)
+    Using.resource(DynamoDbSavepointsManager(migratorConfig, sourceRDD, spark.sparkContext)) {
+      savepointsManager =>
+        try
+          writers.DynamoDBS3Export.writeRDD(target, sourceRDD, Some(sourceTableDesc))
+        catch {
+          case NonFatal(e) =>
+            log.error(
+              "Caught error while writing DynamoDB S3 Export. Will create a savepoint before exiting",
+              e
+            )
+        } finally
+          savepointsManager.dumpMigrationState("final")
+    }
+  }
+
   def migrateFromS3Export(
     source: SourceSettings.DynamoDBS3Export,
     target: TargetSettings.DynamoDB,
