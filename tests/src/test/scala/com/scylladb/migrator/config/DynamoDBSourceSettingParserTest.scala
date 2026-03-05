@@ -1,7 +1,12 @@
 package com.scylladb.migrator.config
 
-import com.scylladb.migrator.config.SourceSettings.DynamoDBS3Export.{AttributeDefinition, AttributeType, KeySchema, KeyType}
-import io.circe.{DecodingFailure, yaml}
+import com.scylladb.migrator.config.SourceSettings.DynamoDBS3Export.{
+  AttributeDefinition,
+  AttributeType,
+  KeySchema,
+  KeyType
+}
+import io.circe.{ yaml, DecodingFailure }
 
 class DynamoDBSourceSettingParserTest extends munit.FunSuite {
 
@@ -26,7 +31,7 @@ class DynamoDBSourceSettingParserTest extends munit.FunSuite {
         |""".stripMargin
 
     val expectedSettings = SourceSettings.DynamoDBS3Export(
-      bucket = "foobar",
+      bucket      = "foobar",
       manifestKey = "my-export/AWSDynamoDB/01715094384115-f0e55399/manifest-summary.json",
       tableDescription = SourceSettings.DynamoDBS3Export.TableDescription(
         attributeDefinitions = Seq(
@@ -39,9 +44,9 @@ class DynamoDBSourceSettingParserTest extends munit.FunSuite {
           KeySchema("foo", KeyType.Range)
         )
       ),
-      endpoint = None,
-      region = None,
-      credentials = None,
+      endpoint           = None,
+      region             = None,
+      credentials        = None,
       usePathStyleAccess = None
     )
 
@@ -63,7 +68,9 @@ class DynamoDBSourceSettingParserTest extends munit.FunSuite {
         |      type: HASH
         |""".stripMargin
 
-    interceptMessage[DecodingFailure]("DecodingFailure at .tableDescription.attributeDefinitions[0].type: Unknown attribute type number") {
+    interceptMessage[DecodingFailure](
+      "DecodingFailure at .tableDescription.attributeDefinitions[0].type: Unknown attribute type number"
+    ) {
       parseSourceSettings(config)
     }
   }
@@ -72,7 +79,7 @@ class DynamoDBSourceSettingParserTest extends munit.FunSuite {
     yaml.parser
       .parse(yamlContent)
       .flatMap(_.as[SourceSettings]) match {
-      case Left(error) => throw error
+      case Left(error)                                    => throw error
       case Right(source: SourceSettings.DynamoDBS3Export) => source
       case Right(other) => fail(s"Failed to parse source settings. Got ${other}.")
     }

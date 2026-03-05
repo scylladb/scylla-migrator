@@ -32,27 +32,38 @@ object Migrator {
 
     try {
       (migratorConfig.source, migratorConfig.target) match {
-        case (cassandraSource: SourceSettings.Cassandra, scyllaTarget: TargetSettings.Scylla) =>
+        case (cqlSource: SourceSettings.Cassandra, scyllaTarget: TargetSettings.Scylla) =>
           val sourceDF = readers.Cassandra.readDataframe(
             spark,
-            cassandraSource,
-            cassandraSource.preserveTimestamps,
-            migratorConfig.getSkipTokenRangesOrEmptySet)
+            cqlSource,
+            cqlSource.preserveTimestamps,
+            migratorConfig.getSkipTokenRangesOrEmptySet
+          )
           ScyllaMigrator.migrate(migratorConfig, scyllaTarget, sourceDF)
         case (parquetSource: SourceSettings.Parquet, scyllaTarget: TargetSettings.Scylla) =>
           readers.Parquet.migrateToScylla(migratorConfig, parquetSource, scyllaTarget)(spark)
+        case (cqlSource: SourceSettings.Cassandra, parquetTarget: TargetSettings.Parquet) =>
+          ScyllaMigrator.migrateToParquet(cqlSource, parquetTarget, migratorConfig)
         case (dynamoSource: SourceSettings.DynamoDB, alternatorTarget: TargetSettings.DynamoDB) =>
           AlternatorMigrator.migrateFromDynamoDB(dynamoSource, alternatorTarget, migratorConfig)
         case (
-            s3Source: SourceSettings.DynamoDBS3Export,
-            alternatorTarget: TargetSettings.DynamoDB) =>
+              dynamoSource: SourceSettings.DynamoDB,
+              s3ExportTarget: TargetSettings.DynamoDBS3Export
+            ) =>
+          AlternatorMigrator.migrateToS3Export(dynamoSource, s3ExportTarget, migratorConfig)
+        case (
+              s3Source: SourceSettings.DynamoDBS3Export,
+              alternatorTarget: TargetSettings.DynamoDB
+            ) =>
           AlternatorMigrator.migrateFromS3Export(s3Source, alternatorTarget, migratorConfig)
-        case _ =>
-          sys.error("Unsupported combination of source and target.")
+        case (source, target) =>
+          sys.error(
+            s"Unsupported combination of source and target: " +
+              s"${source.getClass.getSimpleName} -> ${target.getClass.getSimpleName}"
+          )
       }
-    } finally {
+    } finally
       spark.stop()
-    }
   }
 
 }

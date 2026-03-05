@@ -25,7 +25,8 @@ object DynamoDB {
   def readRDD(
     spark: SparkSession,
     source: SourceSettings.DynamoDB,
-    skipSegments: Option[Set[Int]]): (RDD[(Text, DynamoDBItemWritable)], TableDescription) =
+    skipSegments: Option[Set[Int]]
+  ): (RDD[(Text, DynamoDBItemWritable)], TableDescription) =
     readRDD(
       spark,
       source.endpoint,
@@ -40,21 +41,21 @@ object DynamoDB {
       source.removeConsumedCapacity.getOrElse(false)
     )
 
-  /**
-    * Overload of `readRDD` that does not depend on `SourceSettings.DynamoDB`
+  /** Overload of `readRDD` that does not depend on `SourceSettings.DynamoDB`
     */
-  def readRDD(spark: SparkSession,
-              endpoint: Option[DynamoDBEndpoint],
-              credentials: Option[AWSCredentials],
-              region: Option[String],
-              table: String,
-              scanSegments: Option[Int],
-              maxMapTasks: Option[Int],
-              readThroughput: Option[Int],
-              throughputReadPercent: Option[Float],
-              skipSegments: Option[Set[Int]],
-              removeConsumedCapacity: Boolean = false)
-    : (RDD[(Text, DynamoDBItemWritable)], TableDescription) = {
+  def readRDD(
+    spark: SparkSession,
+    endpoint: Option[DynamoDBEndpoint],
+    credentials: Option[AWSCredentials],
+    region: Option[String],
+    table: String,
+    scanSegments: Option[Int],
+    maxMapTasks: Option[Int],
+    readThroughput: Option[Int],
+    throughputReadPercent: Option[Float],
+    skipSegments: Option[Set[Int]],
+    removeConsumedCapacity: Boolean = false
+  ): (RDD[(Text, DynamoDBItemWritable)], TableDescription) = {
 
     val dynamoDbClient =
       DynamoUtils.buildDynamoClient(
@@ -100,7 +101,8 @@ object DynamoDB {
         jobConf,
         classOf[DynamoDBInputFormat],
         classOf[Text],
-        classOf[DynamoDBItemWritable])
+        classOf[DynamoDBItemWritable]
+      )
     (rdd, tableDescription)
   }
 
@@ -144,23 +146,27 @@ object DynamoDB {
     setOptionalConf(
       jobConf,
       DynamoDBConstants.TABLE_SIZE_BYTES,
-      Option(description.tableSizeBytes).map(_.toString))
+      Option(description.tableSizeBytes).map(_.toString)
+    )
     val throughput = readThroughput match {
       case Some(value) =>
         log.info(
-          s"Setting up Hadoop job to read the table using a configured throughput of ${value} RCU(s)")
+          s"Setting up Hadoop job to read the table using a configured throughput of ${value} RCU(s)"
+        )
         value
       case None =>
         val value = DynamoUtils.tableReadThroughput(description)
         log.info(
-          s"Setting up Hadoop job to read the table using a computed throughput of ${value} RCU(s)")
+          s"Setting up Hadoop job to read the table using a computed throughput of ${value} RCU(s)"
+        )
         value
     }
     jobConf.set(DynamoDBConstants.READ_THROUGHPUT, throughput.toString)
     setOptionalConf(
       jobConf,
       DynamoDBConstants.THROUGHPUT_READ_PERCENT,
-      throughputReadPercent.map(_.toString))
+      throughputReadPercent.map(_.toString)
+    )
     setOptionalConf(
       jobConf,
       DynamoDBConstants.EXCLUDED_SCAN_SEGMENTS,

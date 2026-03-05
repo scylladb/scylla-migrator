@@ -1,0 +1,29 @@
+name: Security Scan
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'Dockerfile'
+      - 'dockerfiles/**'
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - 'dockerfiles/**'
+  schedule:
+    - cron: '0 6 * * 1'
+
+jobs:
+  trivy-fs:
+    name: Trivy filesystem scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          exit-code: 1

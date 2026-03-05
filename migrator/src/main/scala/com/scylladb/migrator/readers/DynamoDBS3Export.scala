@@ -16,10 +16,10 @@ import software.amazon.awssdk.services.dynamodb.model.{
   BillingMode,
   BillingModeSummary,
   KeySchemaElement,
+  KeyType => DdbKeyType,
   ProvisionedThroughputDescription,
   ScalarAttributeType,
-  TableDescription,
-  KeyType => DdbKeyType
+  TableDescription
 }
 import software.amazon.awssdk.services.s3.S3Client
 import software.amazon.awssdk.services.s3.model.GetObjectRequest
@@ -28,6 +28,7 @@ import java.util.Base64
 import java.util.zip.GZIPInputStream
 import scala.io.Source
 import scala.jdk.CollectionConverters._
+import scala.util.Using
 
 object DynamoDBS3Export {
 
@@ -42,72 +43,95 @@ object DynamoDBS3Export {
           source.region,
           source.finalCredentials.map(_.toProvider)
         )
-    for (usePathStyleAccess <- source.usePathStyleAccess) {
+    for (usePathStyleAccess <- source.usePathStyleAccess)
       s3ClientBuilder.forcePathStyle(usePathStyleAccess)
-    }
     s3ClientBuilder.build()
   }
 
-  /**
-    * Read the DynamoDB S3 Export data as described here:
+  /** Read the DynamoDB S3 Export data as described here:
     * [[https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/S3DataExport.Output.html]]
     */
-  def readRDD(source: SourceSettings.DynamoDBS3Export)(
-    implicit spark: SparkContext): (RDD[Map[String, AttributeValue]], TableDescription) = {
+  def readRDD(
+    source: SourceSettings.DynamoDBS3Export
+  )(implicit spark: SparkContext): (RDD[Map[String, AttributeValue]], TableDescription) = {
 
-    val s3Client = buildS3Client(source)
-
-    // The entry point is a single file containing a manifest summary
-    val summary =
-      decode[ManifestSummary](
-        Source
-          .fromInputStream(
-            s3Client
-              .getObjectAsBytes(
-                GetObjectRequest.builder().bucket(source.bucket).key(source.manifestKey).build())
-              .asInputStream()
-          )
-          .mkString
-      ).fold(error => sys.error(s"Unable to read the export manifest summary: ${error}"), identity)
-
-    for (exportType <- summary.exportType) {
-      if (exportType != fullExportType) {
-        sys.error(s"Unsupported export type: ${summary.exportType.get}")
-      }
+    // Resolve S3 keys relative to the manifest summary's parent directory.
+    // The writer produces relative paths (e.g., "manifest-files.json", "data/00000.json.gz"),
+    // but when uploaded under a prefix the absolute key differs.
+    val manifestKeyPrefix = {
+      val idx = source.manifestKey.lastIndexOf('/')
+      if (idx >= 0) source.manifestKey.substring(0, idx + 1) else ""
     }
+    def resolveKey(key: String): String =
+      if (manifestKeyPrefix.isEmpty || key.startsWith(manifestKeyPrefix)) key
+      else manifestKeyPrefix + key
 
-    if (summary.outputFormat != dynamoDBJsonFormat) {
-      sys.error(s"Unsupported export format: ${summary.outputFormat}")
-    }
-
-    log.info(s"Found DynamoDB S3 export containing ${summary.itemCount} items")
-
-    // The manifest summary links to the “manifest files”, which lists all the JSON files containing
-    // the actual data. The “manifest files” is a text file where each line contains a JSON object
-    // describing a single file containing the actual data.
-    val manifestFiles =
-      Source
-        .fromInputStream(
-          s3Client
-            .getObjectAsBytes(
-              GetObjectRequest
-                .builder()
-                .bucket(source.bucket)
-                .key(summary.manifestFilesS3Key)
-                .build())
-            .asInputStream()
-        )
-        .getLines()
-        .toSeq // Load all the manifest files to fail early in case of issue
-        .map { manifestFileJson =>
-          // Parse each line as JSON and decode the relevant information
-          decode[ManifestFile](manifestFileJson).fold(
-            error =>
-              sys.error(
-                s"Unable to parse the manifest file ${summary.manifestFilesS3Key}: ${error}"),
+    val (summary, manifestFiles) = {
+      val s3Client = buildS3Client(source)
+      try {
+        val summary =
+          decode[ManifestSummary](
+            Using.resource(
+              Source.fromInputStream(
+                s3Client
+                  .getObjectAsBytes(
+                    GetObjectRequest
+                      .builder()
+                      .bucket(source.bucket)
+                      .key(source.manifestKey)
+                      .build()
+                  )
+                  .asInputStream()
+              )
+            )(_.mkString)
+          ).fold(
+            error => sys.error(s"Unable to read the export manifest summary: ${error}"),
             identity
           )
+
+        for (exportType <- summary.exportType)
+          if (exportType != fullExportType) {
+            sys.error(s"Unsupported export type: ${summary.exportType.get}")
+          }
+
+        if (summary.outputFormat != dynamoDBJsonFormat) {
+          sys.error(s"Unsupported export format: ${summary.outputFormat}")
         }
+
+        log.info(s"Found DynamoDB S3 export containing ${summary.itemCount} items")
+
+        // The manifest summary links to the "manifest files", which lists all the JSON files
+        // containing the actual data. The "manifest files" is a text file where each line contains
+        // a JSON object describing a single file containing the actual data.
+        val manifestFiles =
+          Using.resource(
+            Source.fromInputStream(
+              s3Client
+                .getObjectAsBytes(
+                  GetObjectRequest
+                    .builder()
+                    .bucket(source.bucket)
+                    .key(resolveKey(summary.manifestFilesS3Key))
+                    .build()
+                )
+                .asInputStream()
+            )
+          )(
+            _.getLines().toSeq // Load all the manifest files to fail early in case of issue
+              .map { manifestFileJson =>
+                decode[ManifestFile](manifestFileJson).fold(
+                  error =>
+                    sys.error(
+                      s"Unable to parse the manifest file ${summary.manifestFilesS3Key}: ${error}"
+                    ),
+                  identity
+                )
+              }
+          )
+
+        (summary, manifestFiles)
+      } finally s3Client.close()
+    }
 
     // Load as efficiently as possible all the files that contain the actual data
     // Based on https://medium.com/@fmonteiro.alex/improving-apache-spark-processing-performance-when-reading-small-files-dd240ea4be6d
@@ -116,70 +140,81 @@ object DynamoDBS3Export {
         .parallelize(manifestFiles)
         .mapPartitions { manifestFilesPartition =>
           val s3Client = buildS3Client(source)
+          val openSources = new java.util.ArrayList[Source]()
+          org.apache.spark.TaskContext.get().addTaskCompletionListener[Unit] { _ =>
+            openSources.forEach(_.close())
+            s3Client.close()
+          }
           manifestFilesPartition.flatMap { manifestFile =>
-            Source
-              .fromInputStream(
-                new GZIPInputStream(
-                  s3Client
-                    .getObjectAsBytes(
-                      GetObjectRequest
-                        .builder()
-                        .bucket(source.bucket)
-                        .key(manifestFile.dataFileS3Key)
-                        .build())
-                    .asInputStream()
-                ))
-              .getLines()
+            val src = Source.fromInputStream(
+              new GZIPInputStream(
+                s3Client
+                  .getObjectAsBytes(
+                    GetObjectRequest
+                      .builder()
+                      .bucket(source.bucket)
+                      .key(resolveKey(manifestFile.dataFileS3Key))
+                      .build()
+                  )
+                  .asInputStream()
+              )
+            )
+            openSources.add(src)
+            src.getLines()
           }
         }
-        .map(decode(_)(itemDecoder)
-          .fold(error => sys.error(s"Error while decoding item data: ${error}"), identity))
+        .map(
+          decode(_)(itemDecoder)
+            .fold(error => sys.error(s"Error while decoding item data: ${error}"), identity)
+        )
 
-    // Make up a table description although we don’t have an actual table as a source but a data export
+    // Make up a table description although we don't have an actual table as a source but a data export
     val tableDescription =
       TableDescription
         .builder()
         .keySchema(
-          source.tableDescription.keySchema.map(
-            key =>
-              KeySchemaElement
-                .builder()
-                .attributeName(key.name)
-                .keyType(key.`type` match {
-                  case KeyType.Hash  => DdbKeyType.HASH
-                  case KeyType.Range => DdbKeyType.RANGE
-                })
-                .build()
+          source.tableDescription.keySchema.map(key =>
+            KeySchemaElement
+              .builder()
+              .attributeName(key.name)
+              .keyType(key.`type` match {
+                case KeyType.Hash  => DdbKeyType.HASH
+                case KeyType.Range => DdbKeyType.RANGE
+              })
+              .build()
           ): _*
         )
         .attributeDefinitions(
-          source.tableDescription.attributeDefinitions.map(
-            attr =>
-              AttributeDefinition
-                .builder()
-                .attributeName(attr.name)
-                .attributeType(attr.`type` match {
-                  case AttributeType.S => ScalarAttributeType.S
-                  case AttributeType.N => ScalarAttributeType.N
-                  case AttributeType.B => ScalarAttributeType.B
-                })
-                .build()
+          source.tableDescription.attributeDefinitions.map(attr =>
+            AttributeDefinition
+              .builder()
+              .attributeName(attr.name)
+              .attributeType(attr.`type` match {
+                case AttributeType.S => ScalarAttributeType.S
+                case AttributeType.N => ScalarAttributeType.N
+                case AttributeType.B => ScalarAttributeType.B
+              })
+              .build()
           ): _*
         )
         .provisionedThroughput(ProvisionedThroughputDescription.builder().build())
-        .billingModeSummary(BillingModeSummary
-          .builder()
-          .billingMode(source.tableDescription.billingMode.getOrElse(BillingMode.PAY_PER_REQUEST))
-          .build())
+        .billingModeSummary(
+          BillingModeSummary
+            .builder()
+            .billingMode(source.tableDescription.billingMode.getOrElse(BillingMode.PAY_PER_REQUEST))
+            .build()
+        )
         .build()
 
     (rdd, tableDescription)
   }
 
-  case class ManifestSummary(manifestFilesS3Key: String,
-                             itemCount: Long,
-                             exportType: Option[String],
-                             outputFormat: String)
+  case class ManifestSummary(
+    manifestFilesS3Key: String,
+    itemCount: Long,
+    exportType: Option[String],
+    outputFormat: String
+  )
   object ManifestSummary {
     implicit val jsonDecoder: Decoder[ManifestSummary] = deriveDecoder[ManifestSummary]
   }

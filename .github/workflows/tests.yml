@@ -6,42 +6,175 @@ on:
     paths:
       - '**.scala'
       - '**.sbt'
+      - 'Makefile'
+      - 'Dockerfile'
+      - 'dockerfiles/**'
+      - 'docker-compose-tests.yml'
+      - '.github/workflows/**'
+
   pull_request:
     paths:
       - '**.scala'
       - '**.sbt'
+      - 'Makefile'
+      - 'Dockerfile'
+      - 'dockerfiles/**'
+      - 'docker-compose-tests.yml'
+      - '.github/workflows/**'
 
 jobs:
-  test:
-    name: Test
+  lint:
+    name: Check formatting
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - name: Cache Docker images
-        uses: ScribeMD/docker-cache@0.5.0
-        with:
-          key: docker-${{ runner.os }}-${{ hashFiles('docker-compose-tests.yml') }}
-      - uses: actions/setup-java@v3
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 8
           cache: sbt
       - uses: sbt/setup-sbt@v1
-      - name: Build migrator
-        run: ./build.sh
-      - name: Set up services
+      - name: Check formatting
+        run: make lint
+
+  build:
+    name: Build
+    uses: ./.github/workflows/build.yml
+
+  test-unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 8
+          cache: sbt
+      - uses: sbt/setup-sbt@v1
+      - name: Cache SBT compilation artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            target/
+            migrator/target/scala-2.13/classes/
+            tests/target/scala-2.13/classes/
+            spark-kinesis-dynamodb/target/scala-2.13/classes/
+            project/target/
+          key: sbt-target-${{ runner.os }}-${{ hashFiles('**/*.scala', '**/*.sbt', 'project/build.properties') }}
+          restore-keys: |
+            sbt-target-${{ runner.os }}-
+      - name: Run unit tests
+        run: make test-unit
+
+  test-integration-scylla:
+    name: Integration tests (Scylla)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 8
+          cache: sbt
+      - uses: sbt/setup-sbt@v1
+      - name: Restore Spark Docker image cache
+        id: spark-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/spark-image.tar
+          key: spark-image-${{ hashFiles('dockerfiles/spark/**') }}
+      - name: Load cached Spark image
+        if: steps.spark-cache.outputs.cache-hit == 'true'
+        run: docker load < /tmp/spark-image.tar
+      - name: Pre-create JAR directory and start services
         run: |
-          sudo chmod -R 777 ./tests/docker/scylla ./tests/docker/scylla-source
-          docker compose -f docker-compose-tests.yml up -d
-          .github/wait-for-port.sh 8000 # ScyllaDB Alternator
-          .github/wait-for-port.sh 8001 # DynamoDB
-          .github/wait-for-port.sh 4566 # S3
-          .github/wait-for-cql.sh scylla
-          .github/wait-for-cql.sh cassandra
-          .github/wait-for-cql.sh scylla-source
-          .github/wait-for-port.sh 8080 # Spark master
-          .github/wait-for-port.sh 8081 # Spark worker
-      - name: Run tests locally
-        run: sbt "testOnly -- --exclude-categories=com.scylladb.migrator.AWS"
+          mkdir -p migrator/target/scala-2.13
+          make start-services-scylla
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Download assembly JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: migrator-jar
+          path: migrator/target/scala-2.13/
+      - name: Wait for services
+        run: make wait-for-services-scylla
+      - name: Dump container logs on failure
+        if: failure()
+        run: make dump-logs
+      - name: Run Scylla integration tests
+        run: make test-integration-scylla
+        env:
+          COVERAGE: ${{ github.event_name == 'push' && 'true' || 'false' }}
       - name: Stop services
-        run: docker compose -f docker-compose-tests.yml down
+        run: make stop-services
+      - name: Save Spark image to cache
+        if: steps.spark-cache.outputs.cache-hit != 'true'
+        run: docker save spark-migrator -o /tmp/spark-image.tar
+      - name: Upload coverage report
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-scylla
+          path: |
+            tests/target/scala-2.13/scoverage-report/
+            migrator/target/scala-2.13/scoverage-report/
+
+  test-integration-alternator:
+    name: Integration tests (Alternator)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 8
+          cache: sbt
+      - uses: sbt/setup-sbt@v1
+      - name: Restore Spark Docker image cache
+        id: spark-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/spark-image.tar
+          key: spark-image-${{ hashFiles('dockerfiles/spark/**') }}
+      - name: Load cached Spark image
+        if: steps.spark-cache.outputs.cache-hit == 'true'
+        run: docker load < /tmp/spark-image.tar
+      - name: Pre-create JAR directory and start services
+        run: |
+          mkdir -p migrator/target/scala-2.13
+          make start-services-alternator
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Download assembly JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: migrator-jar
+          path: migrator/target/scala-2.13/
+      - name: Wait for services
+        run: make wait-for-services-alternator
+      - name: Dump container logs on failure
+        if: failure()
+        run: make dump-logs
+      - name: Run Alternator integration tests
+        run: make test-integration-alternator
+        env:
+          COVERAGE: ${{ github.event_name == 'push' && 'true' || 'false' }}
+      - name: Stop services
+        run: make stop-services
+      - name: Save Spark image to cache
+        if: steps.spark-cache.outputs.cache-hit != 'true'
+        run: docker save spark-migrator -o /tmp/spark-image.tar
+      - name: Upload coverage report
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-alternator
+          path: |
+            tests/target/scala-2.13/scoverage-report/
+            migrator/target/scala-2.13/scoverage-report/

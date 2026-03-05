@@ -63,7 +63,9 @@ class CassandraRowComparisonTest extends munit.FunSuite {
         cassandraRowComparisonFailure(
           item,
           Some(otherItem),
-          List(Item.DifferingFieldValues(List("foo")))))
+          List(Item.DifferingFieldValues(List("foo")))
+        )
+      )
     assertEquals(result, expected)
   }
 
@@ -73,13 +75,15 @@ class CassandraRowComparisonTest extends munit.FunSuite {
         Map(
           "foo" -> 123.456,
           "bar" -> 789.012
-        ))
+        )
+      )
     val otherNumericalItem =
       CassandraRow.fromMap(
         Map(
           "foo" -> 123.457, // +0.001
           "bar" -> 789.112 // +0.1
-        ))
+        )
+      )
     val result =
       compareItems(
         numericalItem,
@@ -92,7 +96,9 @@ class CassandraRowComparisonTest extends munit.FunSuite {
         cassandraRowComparisonFailure(
           numericalItem,
           Some(otherNumericalItem),
-          List(Item.DifferingFieldValues(List("bar")))))
+          List(Item.DifferingFieldValues(List("bar")))
+        )
+      )
     assertEquals(result, expected)
   }
 

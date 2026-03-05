@@ -152,9 +152,9 @@ class ParquetLegacyModeTest extends ParquetMigratorSuite {
       "Row count should still be 1 (overwritten, not skipped)"
     )
 
-    // The key difference from new mode: no file was marked as "processed"
-    // In new mode, the second run would log "No Parquet files to process"
-    // In legacy mode, it re-reads and re-processes everything
+  // The key difference from new mode: no file was marked as "processed"
+  // In new mode, the second run would log "No Parquet files to process"
+  // In legacy mode, it re-reads and re-processes everything
   }
 
   withTableAndSavepoints("comparison", "comparison-data", "comparison-savepoints").test(
@@ -192,7 +192,10 @@ class ParquetLegacyModeTest extends ParquetMigratorSuite {
       .build()
 
     // Capture results from legacy mode
-    val legacyResults = targetScylla().execute(selectAllStatement).all().asScala
+    val legacyResults = targetScylla()
+      .execute(selectAllStatement)
+      .all()
+      .asScala
       .map { row =>
         TestRecord(
           row.getString("id"),
@@ -212,7 +215,10 @@ class ParquetLegacyModeTest extends ParquetMigratorSuite {
     successfullyPerformMigration("parquet-to-scylla-newmode-comparison.yaml")
 
     // Capture results from new mode
-    val newModeResults = targetScylla().execute(selectAllStatement).all().asScala
+    val newModeResults = targetScylla()
+      .execute(selectAllStatement)
+      .all()
+      .asScala
       .map { row =>
         TestRecord(
           row.getString("id"),
@@ -221,7 +227,6 @@ class ParquetLegacyModeTest extends ParquetMigratorSuite {
         )
       }
       .toSet
-
 
     assertEquals(
       newModeResults,
@@ -232,26 +237,25 @@ class ParquetLegacyModeTest extends ParquetMigratorSuite {
 
   FunFixture
     .map2(withTable("singlefile"), withParquetDir("legacy"))
-    .test("Legacy mode migrates single file correctly") {
-      case (tableName, parquetRoot) =>
-        val parquetDir = parquetRoot.resolve("legacy")
-        Files.createDirectories(parquetDir)
+    .test("Legacy mode migrates single file correctly") { case (tableName, parquetRoot) =>
+      val parquetDir = parquetRoot.resolve("legacy")
+      Files.createDirectories(parquetDir)
 
-        // Single file scenario
-        writeParquetTestFile(
-          parquetDir.resolve("single.parquet"),
-          List(TestRecord("only-one", "single-file", 42))
-        )
+      // Single file scenario
+      writeParquetTestFile(
+        parquetDir.resolve("single.parquet"),
+        List(TestRecord("only-one", "single-file", 42))
+      )
 
-        successfullyPerformMigration("parquet-to-scylla-legacy-singlefile.yaml")
+      successfullyPerformMigration("parquet-to-scylla-legacy-singlefile.yaml")
 
-        val selectAllStatement = QueryBuilder
-          .selectFrom(keyspace, tableName)
-          .all()
-          .build()
+      val selectAllStatement = QueryBuilder
+        .selectFrom(keyspace, tableName)
+        .all()
+        .build()
 
-        val rows = targetScylla().execute(selectAllStatement).all().asScala
-        assertEquals(rows.size, 1, "Should migrate the single row")
-        assertEquals(rows.head.getString("id"), "only-one")
+      val rows = targetScylla().execute(selectAllStatement).all().asScala
+      assertEquals(rows.size, 1, "Should migrate the single row")
+      assertEquals(rows.head.getString("id"), "only-one")
     }
 }

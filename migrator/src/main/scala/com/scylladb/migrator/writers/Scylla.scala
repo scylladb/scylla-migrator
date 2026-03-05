@@ -40,13 +40,11 @@ object Scylla {
       sourcePkName -> dfFieldNamesLower.get(sourcePkName.toLowerCase(Locale.ROOT))
     }
 
-    val resolvedSourcePkNames = resolution.collect {
-      case (_, Some(dfFieldName)) =>
-        dfFieldName
+    val resolvedSourcePkNames = resolution.collect { case (_, Some(dfFieldName)) =>
+      dfFieldName
     }
-    val unresolvedSourcePkNames = resolution.collect {
-      case (sourcePkName, None) =>
-        sourcePkName
+    val unresolvedSourcePkNames = resolution.collect { case (sourcePkName, None) =>
+      sourcePkName
     }
     val fieldIndices = resolvedSourcePkNames.map(dfSchema.fieldIndex).toArray
 
@@ -69,7 +67,8 @@ object Scylla {
         s"Cannot resolve all primary key columns from the source DataFrame. " +
           s"Resolved: [${resolved}], unresolved: [${unresolved}]. " +
           s"Check that column names in the source data match the target table, " +
-          s"or configure renames accordingly.")
+          s"or configure renames accordingly."
+      )
     }
 
   private[writers] def dropRowsWithNullPrimaryKeys(
@@ -88,7 +87,8 @@ object Scylla {
     renames: List[Rename],
     df: DataFrame,
     timestampColumns: Option[TimestampColumns],
-    tokenRangeAccumulator: Option[TokenRangeAccumulator])(implicit spark: SparkSession): Unit = {
+    tokenRangeAccumulator: Option[TokenRangeAccumulator]
+  )(implicit spark: SparkSession): Unit = {
     val connector = Connectors.targetConnector(spark.sparkContext.getConf, target)
 
     val consistencyLevel = target.consistencyLevel match {
@@ -100,17 +100,19 @@ object Scylla {
     }
     if (consistencyLevel.toString == target.consistencyLevel) {
       log.info(
-        s"Using consistencyLevel [${consistencyLevel}] for TARGET based on target config [${target.consistencyLevel}]")
+        s"Using consistencyLevel [${consistencyLevel}] for TARGET based on target config [${target.consistencyLevel}]"
+      )
     } else {
       log.info(
-        s"Using DEFAULT consistencyLevel [${consistencyLevel}] for TARGET based on unrecognized target config [${target.consistencyLevel}]")
+        s"Using DEFAULT consistencyLevel [${consistencyLevel}] for TARGET based on unrecognized target config [${target.consistencyLevel}]"
+      )
     }
 
     val tempWriteConf = WriteConf
       .fromSparkConf(spark.sparkContext.getConf)
       .copy(consistencyLevel = consistencyLevel)
 
-    val writeConf = {
+    val writeConf =
       if (timestampColumns.nonEmpty) {
         tempWriteConf.copy(
           ttl = timestampColumns.map(_.ttl).fold(TTLOption.defaultValue)(TTLOption.perRow),
@@ -126,21 +128,21 @@ object Scylla {
         }
         if (target.writeWritetimestampInuS.nonEmpty) {
           hardcodedTempWriteConf = hardcodedTempWriteConf.copy(
-            timestamp = TimestampOption.constant(target.writeWritetimestampInuS.get))
+            timestamp = TimestampOption.constant(target.writeWritetimestampInuS.get)
+          )
         }
         hardcodedTempWriteConf
       } else {
         tempWriteConf
       }
-    }
 
     // Similarly to createDataFrame, when using withColumnRenamed, Spark tries
     // to re-encode the dataset. Instead we just use the modified schema from this
     // DataFrame; the access to the rows is positional anyway and the field names
     // are only used to construct the columns part of the INSERT statement.
     val renamedSchema = renames
-      .foldLeft(df) {
-        case (acc, Rename(from, to)) => acc.withColumnRenamed(from, to)
+      .foldLeft(df) { case (acc, Rename(from, to)) =>
+        acc.withColumnRenamed(from, to)
       }
       .schema
 
@@ -148,7 +150,8 @@ object Scylla {
     log.info(renamedSchema.treeString)
 
     val columnSelector = SomeColumns(
-      ArraySeq.unsafeWrapArray(renamedSchema.fields.map(_.name: ColumnRef)): _*)
+      ArraySeq.unsafeWrapArray(renamedSchema.fields.map(_.name: ColumnRef)): _*
+    )
 
     // Retrieve the target table schema to identify primary key columns
     val tableDef =
@@ -165,7 +168,8 @@ object Scylla {
     val pkFieldIndices = pkResolution.fieldIndices
     log.info(
       s"Primary key columns in target table: ${targetPkNames.mkString(", ")}; " +
-        s"corresponding source columns: ${pkColumnsInDf.mkString(", ")}")
+        s"corresponding source columns: ${pkColumnsInDf.mkString(", ")}"
+    )
 
     val nullPkRowsDropped =
       spark.sparkContext.longAccumulator("Rows dropped due to null primary key")
@@ -199,7 +203,8 @@ object Scylla {
     if (nullPkRowsDropped.value > 0) {
       log.warn(
         s"Dropped ${nullPkRowsDropped.value} rows with null primary key values " +
-          s"(columns: ${targetPkNames.mkString(", ")})")
+          s"(columns: ${targetPkNames.mkString(", ")})"
+      )
     }
   }
 

@@ -7,11 +7,11 @@ Tests are implemented in the `tests` sbt submodule. They simulate the submission
 1. Build the migrator fat-jar and its dependencies
 
    ~~~ sh
-   ./build.sh
+   make build
    ~~~
-   
+
 2. Set up the testing stack with Docker
-   
+
    ~~~ sh
    docker compose -f docker-compose-tests.yml up
    ~~~

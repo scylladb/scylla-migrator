@@ -5,12 +5,6 @@ import com.scylladb.migrator.scylla.SourceDataFrame
 import org.apache.log4j.LogManager
 import org.apache.spark.sql.SparkSession
 
-/**
-  * Parquet reader implementation without savepoint tracking.
-  *
-  * This implementation provides simple Parquet file reading without file-level savepoint tracking.
-  * Enable via configuration: `savepoints.enableParquetFileTracking = false`
-  */
 object ParquetWithoutSavepoints {
   val log = LogManager.getLogger("com.scylladb.migrator.readers.ParquetWithoutSavepoints")
 
@@ -22,6 +16,17 @@ object ParquetWithoutSavepoints {
     val df = spark.read.parquet(source.path)
     log.info(s"Loaded Parquet DataFrame with ${df.rdd.getNumPartitions} partitions")
 
-    SourceDataFrame(df, None, savepointsSupported = false)
+    if (TimestampColumns.hasPerColumnMetaInParquet(df.schema)) {
+      log.info(
+        "Detected per-column CQL timestamp metadata in Parquet schema. " +
+          "Performing row explosion for TTL/writetime preservation."
+      )
+      val renamed = TimestampColumns.renameFromParquet(df)
+      val (explodedDf, timestampColumns) =
+        Cassandra.explodeDataframeFromPerColumnMeta(spark, renamed)
+      SourceDataFrame(explodedDf, Some(timestampColumns), savepointsSupported = false)
+    } else {
+      SourceDataFrame(df, None, savepointsSupported = false)
+    }
   }
 }
