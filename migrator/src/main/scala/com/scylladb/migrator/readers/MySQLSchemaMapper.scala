@@ -62,7 +62,11 @@ object MySQLSchemaMapper {
         case BinaryType if isSingleByteBinary(df, field.name) =>
           log.info(
             s"Converting single-byte binary column '${field.name}' to BooleanType (likely MySQL BIT(1))")
-          result = result.withColumn(field.name, col(field.name).getItem(0).cast(BooleanType))
+          result = result.withColumn(
+            field.name,
+            when(col(field.name).isNull, lit(null).cast(BooleanType))
+              .otherwise(conv(hex(col(field.name)), 16, 10).cast(IntegerType) =!= 0)
+          )
 
         case dt: DecimalType if dt.scale == 0 && dt.precision > 19 =>
           log.info(
