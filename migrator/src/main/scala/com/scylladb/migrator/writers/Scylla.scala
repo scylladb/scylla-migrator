@@ -19,7 +19,8 @@ object Scylla {
     renames: List[Rename],
     df: DataFrame,
     timestampColumns: Option[TimestampColumns],
-    tokenRangeAccumulator: Option[TokenRangeAccumulator])(implicit spark: SparkSession): Unit = {
+    tokenRangeAccumulator: Option[TokenRangeAccumulator]
+  )(implicit spark: SparkSession): Unit = {
     val connector = Connectors.targetConnector(spark.sparkContext.getConf, target)
 
     val consistencyLevel = target.consistencyLevel match {
@@ -31,17 +32,19 @@ object Scylla {
     }
     if (consistencyLevel.toString == target.consistencyLevel) {
       log.info(
-        s"Using consistencyLevel [${consistencyLevel}] for TARGET based on target config [${target.consistencyLevel}]")
+        s"Using consistencyLevel [${consistencyLevel}] for TARGET based on target config [${target.consistencyLevel}]"
+      )
     } else {
       log.info(
-        s"Using DEFAULT consistencyLevel [${consistencyLevel}] for TARGET based on unrecognized target config [${target.consistencyLevel}]")
+        s"Using DEFAULT consistencyLevel [${consistencyLevel}] for TARGET based on unrecognized target config [${target.consistencyLevel}]"
+      )
     }
 
     val tempWriteConf = WriteConf
       .fromSparkConf(spark.sparkContext.getConf)
       .copy(consistencyLevel = consistencyLevel)
 
-    val writeConf = {
+    val writeConf =
       if (timestampColumns.nonEmpty) {
         tempWriteConf.copy(
           ttl = timestampColumns.map(_.ttl).fold(TTLOption.defaultValue)(TTLOption.perRow),
@@ -57,21 +60,21 @@ object Scylla {
         }
         if (target.writeWritetimestampInuS.nonEmpty) {
           hardcodedTempWriteConf = hardcodedTempWriteConf.copy(
-            timestamp = TimestampOption.constant(target.writeWritetimestampInuS.get))
+            timestamp = TimestampOption.constant(target.writeWritetimestampInuS.get)
+          )
         }
         hardcodedTempWriteConf
       } else {
         tempWriteConf
       }
-    }
 
     // Similarly to createDataFrame, when using withColumnRenamed, Spark tries
     // to re-encode the dataset. Instead we just use the modified schema from this
     // DataFrame; the access to the rows is positional anyway and the field names
     // are only used to construct the columns part of the INSERT statement.
     val renamedSchema = renames
-      .foldLeft(df) {
-        case (acc, Rename(from, to)) => acc.withColumnRenamed(from, to)
+      .foldLeft(df) { case (acc, Rename(from, to)) =>
+        acc.withColumnRenamed(from, to)
       }
       .schema
 
@@ -79,7 +82,8 @@ object Scylla {
     log.info(renamedSchema.treeString)
 
     val columnSelector = SomeColumns(
-      ArraySeq.unsafeWrapArray(renamedSchema.fields.map(_.name: ColumnRef)): _*)
+      ArraySeq.unsafeWrapArray(renamedSchema.fields.map(_.name: ColumnRef)): _*
+    )
 
     // Spark's conversion from its internal Decimal type to java.math.BigDecimal
     // pads the resulting value with trailing zeros corresponding to the scale of the

@@ -1,7 +1,7 @@
 package com.scylladb.migrator.alternator
 
 import com.scylladb.migrator.SparkUtils.successfullyPerformMigration
-import software.amazon.awssdk.services.dynamodb.model.{AttributeValue, PutItemRequest}
+import software.amazon.awssdk.services.dynamodb.model.{ AttributeValue, PutItemRequest }
 
 import scala.jdk.CollectionConverters._
 
@@ -21,14 +21,18 @@ class Issue103Test extends MigratorSuiteWithDynamoDBLocal {
     val attrs2 = Map(
       "asdfg" -> AttributeValue.fromM(
         Map(
-        "fffff" -> AttributeValue.fromS("asdfasdfs")
+          "fffff" -> AttributeValue.fromS("asdfasdfs")
         ).asJava
       )
     )
     val item2Data = keys2 ++ attrs2
 
-    sourceDDb().putItem(PutItemRequest.builder().tableName(tableName).item(item1Data.asJava).build())
-    sourceDDb().putItem(PutItemRequest.builder().tableName(tableName).item(item2Data.asJava).build())
+    sourceDDb().putItem(
+      PutItemRequest.builder().tableName(tableName).item(item1Data.asJava).build()
+    )
+    sourceDDb().putItem(
+      PutItemRequest.builder().tableName(tableName).item(item2Data.asJava).build()
+    )
 
     // Perform the migration
     successfullyPerformMigration("dynamodb-to-alternator-issue-103.yaml")

@@ -70,8 +70,10 @@ object DynamoUtils {
       }
   }
 
-  def replicateTableDefinition(sourceDescription: TableDescription,
-                               target: TargetSettings.DynamoDB): TableDescription = {
+  def replicateTableDefinition(
+    sourceDescription: TableDescription,
+    target: TargetSettings.DynamoDB
+  ): TableDescription = {
     // If non-existent, replicate
     val targetClient =
       buildDynamoClient(
@@ -104,13 +106,15 @@ object DynamoUtils {
               if (sourceDescription.provisionedThroughput.readCapacityUnits == 0L ||
                 sourceDescription.provisionedThroughput.writeCapacityUnits == 0) =>
             throw new RuntimeException(
-              "readCapacityUnits and writeCapacityUnits must be set for PROVISIONED billing mode")
+              "readCapacityUnits and writeCapacityUnits must be set for PROVISIONED billing mode"
+            )
 
           case Some(BillingMode.PROVISIONED) | None
               if (sourceDescription.provisionedThroughput.readCapacityUnits != 0L &&
                 sourceDescription.provisionedThroughput.writeCapacityUnits != 0) =>
             log.info(
-              "BillingMode PROVISIONED will be used since writeCapacityUnits and readCapacityUnits are set")
+              "BillingMode PROVISIONED will be used since writeCapacityUnits and readCapacityUnits are set"
+            )
             requestBuilder.billingMode(BillingMode.PROVISIONED)
             requestBuilder.provisionedThroughput(
               ProvisionedThroughput
@@ -126,14 +130,14 @@ object DynamoUtils {
         if (sourceDescription.hasLocalSecondaryIndexes) {
           requestBuilder.localSecondaryIndexes(
             sourceDescription.localSecondaryIndexes.stream
-              .map(
-                index =>
-                  LocalSecondaryIndex
-                    .builder()
-                    .indexName(index.indexName())
-                    .keySchema(index.keySchema())
-                    .projection(index.projection())
-                    .build())
+              .map(index =>
+                LocalSecondaryIndex
+                  .builder()
+                  .indexName(index.indexName())
+                  .keySchema(index.keySchema())
+                  .projection(index.projection())
+                  .build()
+              )
               .collect(Collectors.toList[LocalSecondaryIndex])
           )
         }
@@ -162,7 +166,8 @@ object DynamoUtils {
         }
 
         log.info(
-          s"Table ${target.table} does not exist at destination - creating it according to definition:")
+          s"Table ${target.table} does not exist at destination - creating it according to definition:"
+        )
         log.info(sourceDescription.toString)
         targetClient.createTable(requestBuilder.build())
         log.info(s"Table ${target.table} created.")
@@ -174,7 +179,8 @@ object DynamoUtils {
           case None =>
             throw new RuntimeException(
               "Unable to replicate table definition",
-              waiterResponse.exception.get)
+              waiterResponse.exception.get
+            )
         }
 
       case Failure(otherwise) =>
@@ -196,7 +202,8 @@ object DynamoUtils {
       buildDynamoStreamsClient(
         source.endpoint,
         source.finalCredentials.map(_.toProvider),
-        source.region)
+        source.region
+      )
 
     sourceClient
       .updateTable(
@@ -220,7 +227,8 @@ object DynamoUtils {
       val latestStreamArn = tableDesc.table.latestStreamArn
       val describeStream =
         sourceStreamsClient.describeStream(
-          DescribeStreamRequest.builder().streamArn(latestStreamArn).build())
+          DescribeStreamRequest.builder().streamArn(latestStreamArn).build()
+        )
 
       val streamStatus = describeStream.streamDescription.streamStatus
       if (streamStatus == StreamStatus.ENABLED) {
@@ -228,16 +236,19 @@ object DynamoUtils {
         done = true
       } else {
         log.info(
-          s"Stream not yet enabled (status ${streamStatus}); waiting for 5 seconds and retrying")
+          s"Stream not yet enabled (status ${streamStatus}); waiting for 5 seconds and retrying"
+        )
         Thread.sleep(5000)
       }
     }
   }
 
-  def buildDynamoClient(endpoint: Option[DynamoDBEndpoint],
-                        creds: Option[AwsCredentialsProvider],
-                        region: Option[String],
-                        interceptors: Seq[ExecutionInterceptor]): DynamoDbClient = {
+  def buildDynamoClient(
+    endpoint: Option[DynamoDBEndpoint],
+    creds: Option[AwsCredentialsProvider],
+    region: Option[String],
+    interceptors: Seq[ExecutionInterceptor]
+  ): DynamoDbClient = {
     val builder =
       AwsUtils.configureClientBuilder(DynamoDbClient.builder(), endpoint, region, creds)
     val conf = ClientOverrideConfiguration.builder()
@@ -245,42 +256,52 @@ object DynamoUtils {
     builder.overrideConfiguration(conf.build()).build()
   }
 
-  def buildDynamoStreamsClient(endpoint: Option[DynamoDBEndpoint],
-                               creds: Option[AwsCredentialsProvider],
-                               region: Option[String]): DynamoDbStreamsClient =
+  def buildDynamoStreamsClient(
+    endpoint: Option[DynamoDBEndpoint],
+    creds: Option[AwsCredentialsProvider],
+    region: Option[String]
+  ): DynamoDbStreamsClient =
     AwsUtils
       .configureClientBuilder(DynamoDbStreamsClient.builder(), endpoint, region, creds)
       .build()
 
-  /**
-    * Optionally set a configuration. If `maybeValue` is empty, nothing is done. Otherwise,
-    * its value is set to the `name` property on the `jobConf`.
+  /** Optionally set a configuration. If `maybeValue` is empty, nothing is done. Otherwise, its
+    * value is set to the `name` property on the `jobConf`.
     *
-    * @param jobConf    Target JobConf to configure
-    * @param name       Name of the Hadoop configuration key
-    * @param maybeValue Optional value to set.
+    * @param jobConf
+    *   Target JobConf to configure
+    * @param name
+    *   Name of the Hadoop configuration key
+    * @param maybeValue
+    *   Optional value to set.
     */
   def setOptionalConf(jobConf: JobConf, name: String, maybeValue: Option[String]): Unit =
-    for (value <- maybeValue) {
+    for (value <- maybeValue)
       jobConf.set(name, value)
-    }
 
-  /**
-    * Set the common configuration of both read and write DynamoDB jobs.
-    * @param jobConf             Target JobConf to configure
-    * @param maybeRegion         AWS region
-    * @param maybeEndpoint       AWS endpoint
-    * @param maybeScanSegments   Scan segments
-    * @param maybeMaxMapTasks    Max map tasks
-    * @param maybeAwsCredentials AWS credentials
+  /** Set the common configuration of both read and write DynamoDB jobs.
+    * @param jobConf
+    *   Target JobConf to configure
+    * @param maybeRegion
+    *   AWS region
+    * @param maybeEndpoint
+    *   AWS endpoint
+    * @param maybeScanSegments
+    *   Scan segments
+    * @param maybeMaxMapTasks
+    *   Max map tasks
+    * @param maybeAwsCredentials
+    *   AWS credentials
     */
-  def setDynamoDBJobConf(jobConf: JobConf,
-                         maybeRegion: Option[String],
-                         maybeEndpoint: Option[DynamoDBEndpoint],
-                         maybeScanSegments: Option[Int],
-                         maybeMaxMapTasks: Option[Int],
-                         maybeAwsCredentials: Option[AWSCredentials],
-                         removeConsumedCapacity: Boolean = false): Unit = {
+  def setDynamoDBJobConf(
+    jobConf: JobConf,
+    maybeRegion: Option[String],
+    maybeEndpoint: Option[DynamoDBEndpoint],
+    maybeScanSegments: Option[Int],
+    maybeMaxMapTasks: Option[Int],
+    maybeAwsCredentials: Option[AWSCredentials],
+    removeConsumedCapacity: Boolean = false
+  ): Unit = {
     for (region <- maybeRegion) {
       log.info(s"Using AWS region: ${region}")
       jobConf.set(DynamoDBConstants.REGION, region)
@@ -294,9 +315,8 @@ object DynamoUtils {
     for (credentials <- maybeAwsCredentials) {
       jobConf.set(DynamoDBConstants.DYNAMODB_ACCESS_KEY_CONF, credentials.accessKey)
       jobConf.set(DynamoDBConstants.DYNAMODB_SECRET_KEY_CONF, credentials.secretKey)
-      for (sessionToken <- credentials.maybeSessionToken) {
+      for (sessionToken <- credentials.maybeSessionToken)
         jobConf.set(DynamoDBConstants.DYNAMODB_SESSION_TOKEN_CONF, sessionToken)
-      }
     }
 
     // The default way to compute the available resources (memory/cpu per worker) requires a
@@ -305,7 +325,8 @@ object DynamoUtils {
 
     jobConf.set(
       DynamoDBConstants.CUSTOM_CLIENT_BUILDER_TRANSFORMER,
-      classOf[AlternatorLoadBalancingEnabler].getName)
+      classOf[AlternatorLoadBalancingEnabler].getName
+    )
 
     jobConf.set(RemoveConsumedCapacityConfig, removeConsumedCapacity.toString)
 
@@ -313,29 +334,29 @@ object DynamoUtils {
     jobConf.set("mapred.input.format.class", classOf[DynamoDBInputFormat].getName)
   }
 
-  /**
-    * @return The read throughput (in RCU) of the provided table description.
-    *         If the table billing mode is PROVISIONED, it returns the
-    *         table RCU. Otherwise (e.g., in case of on-demand
-    *         billing mode), it returns
-    *         [[DynamoDBConstants.DEFAULT_CAPACITY_FOR_ON_DEMAND]].
+  /** @return
+    *   The read throughput (in RCU) of the provided table description. If the table billing mode is
+    *   PROVISIONED, it returns the table RCU. Otherwise (e.g., in case of on-demand billing mode),
+    *   it returns [[DynamoDBConstants.DEFAULT_CAPACITY_FOR_ON_DEMAND]].
     */
   def tableReadThroughput(description: TableDescription): Long =
     tableThroughput(description, _.readCapacityUnits)
 
-  /**
-    * @return The write throughput (in WCU) of the provided table description.
-    *         If the table billing mode is PROVISIONED, it returns the
-    *         table WCU. Otherwise (e.g., in case of on-demand
-    *         billing mode), it returns
-    *         [[DynamoDBConstants.DEFAULT_CAPACITY_FOR_ON_DEMAND]].
+  /** @return
+    *   The write throughput (in WCU) of the provided table description. If the table billing mode
+    *   is PROVISIONED, it returns the table WCU. Otherwise (e.g., in case of on-demand billing
+    *   mode), it returns [[DynamoDBConstants.DEFAULT_CAPACITY_FOR_ON_DEMAND]].
     */
   def tableWriteThroughput(description: TableDescription): Long =
     tableThroughput(description, _.writeCapacityUnits)
 
-  private def tableThroughput(description: TableDescription,
-                              capacityUnits: ProvisionedThroughputDescription => Long): Long =
-    if (description.billingModeSummary == null || description.billingModeSummary.billingMode == BillingMode.PROVISIONED) {
+  private def tableThroughput(
+    description: TableDescription,
+    capacityUnits: ProvisionedThroughputDescription => Long
+  ): Long =
+    if (
+      description.billingModeSummary == null || description.billingModeSummary.billingMode == BillingMode.PROVISIONED
+    ) {
       capacityUnits(description.provisionedThroughput)
     } else {
       DynamoDBConstants.DEFAULT_CAPACITY_FOR_ON_DEMAND
@@ -345,11 +366,10 @@ object DynamoUtils {
     private var conf: Configuration = null
 
     override def apply(builder: DynamoDbClientBuilder): DynamoDbClientBuilder = {
-      for (customEndpoint <- Option(conf.get(DynamoDBConstants.ENDPOINT))) {
+      for (customEndpoint <- Option(conf.get(DynamoDBConstants.ENDPOINT)))
         builder.endpointProvider(
           new AlternatorEndpointProvider(URI.create(customEndpoint))
         )
-      }
       val overrideConf = ClientOverrideConfiguration.builder()
       if (conf.get(RemoveConsumedCapacityConfig, "false").toBoolean)
         overrideConf.addExecutionInterceptor(new RemoveConsumedCapacityInterceptor)

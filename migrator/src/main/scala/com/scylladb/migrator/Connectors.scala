@@ -32,7 +32,8 @@ object Connectors {
                 trustStoreType     = sslOptions.trustStoreType.getOrElse("JKS"),
                 protocol           = sslOptions.protocol.getOrElse("TLS"),
                 enabledAlgorithms = sslOptions.enabledAlgorithms.getOrElse(
-                  Set("TLS_RSA_WITH_AES_128_CBC_SHA", "TLS_RSA_WITH_AES_256_CBC_SHA")),
+                  Set("TLS_RSA_WITH_AES_128_CBC_SHA", "TLS_RSA_WITH_AES_256_CBC_SHA")
+                ),
                 clientAuthEnabled = sslOptions.clientAuthEnabled,
                 keyStorePath      = sslOptions.keyStorePath,
                 keyStorePassword  = sslOptions.keyStorePassword,
@@ -69,7 +70,8 @@ object Connectors {
                 keyStorePath       = sslOptions.keyStorePath,
                 keyStorePassword   = sslOptions.keyStorePassword,
                 enabledAlgorithms = sslOptions.enabledAlgorithms.getOrElse(
-                  Set("TLS_RSA_WITH_AES_128_CBC_SHA", "TLS_RSA_WITH_AES_256_CBC_SHA")),
+                  Set("TLS_RSA_WITH_AES_128_CBC_SHA", "TLS_RSA_WITH_AES_256_CBC_SHA")
+                ),
                 keyStoreType = sslOptions.keyStoreType.getOrElse("JKS")
               )
           }

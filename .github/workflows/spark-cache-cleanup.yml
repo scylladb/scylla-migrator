@@ -1,0 +1,80 @@
+name: Cleanup Spark image cache
+on:
+  schedule:
+    - cron: '0 3 * * 0' # weekly, Sunday 3am UTC
+  workflow_dispatch:
+
+env:
+  CACHE_REPO: scylladb/migrator-cache
+
+jobs:
+  cleanup:
+    name: Remove stale Spark cache images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute current master Spark hash
+        id: hash
+        run: echo "hash=$(find dockerfiles/spark -type f | sort | xargs sha256sum | sha256sum | cut -d' ' -f1 | head -c 16)" >> "$GITHUB_OUTPUT"
+
+      - name: Delete stale tags
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          KEEP_HASH: ${{ steps.hash.outputs.hash }}
+          MAX_AGE_DAYS: 7
+        run: |
+          set -euo pipefail
+
+          REPO="${CACHE_REPO}"
+          # Get Docker Hub JWT token
+          TOKEN=$(curl -sf "https://hub.docker.com/v2/users/login/" \
+            -H "Content-Type: application/json" \
+            -d "{\"username\":\"${DOCKERHUB_USERNAME}\",\"password\":\"${DOCKERHUB_TOKEN}\"}" \
+            | jq -r .token)
+
+          CUTOFF=$(date -u -d "${MAX_AGE_DAYS} days ago" +%Y-%m-%dT%H:%M:%S)
+          echo "Keeping tag: spark-${KEEP_HASH}"
+          echo "Deleting tags older than: ${CUTOFF}"
+
+          # List all spark-* tags
+          PAGE=1
+          while :; do
+            RESPONSE=$(curl -sf "https://hub.docker.com/v2/repositories/${REPO}/tags/?page_size=100&page=${PAGE}" \
+              -H "Authorization: Bearer ${TOKEN}")
+
+            TAGS=$(echo "$RESPONSE" | jq -r '.results[] | select(.name | startswith("spark-")) | "\(.name) \(.last_updated)"')
+
+            if [ -z "$TAGS" ]; then
+              break
+            fi
+
+            while IFS=' ' read -r TAG_NAME UPDATED_AT; do
+              [ -z "$TAG_NAME" ] && continue
+
+              # Keep the current master hash
+              if [ "$TAG_NAME" = "spark-${KEEP_HASH}" ]; then
+                echo "Keeping ${TAG_NAME} (matches master)"
+                continue
+              fi
+
+              # Keep tags newer than MAX_AGE_DAYS
+              if [[ "$UPDATED_AT" > "$CUTOFF" ]]; then
+                echo "Keeping ${TAG_NAME} (updated ${UPDATED_AT}, within ${MAX_AGE_DAYS}d)"
+                continue
+              fi
+
+              echo "Deleting ${TAG_NAME} (updated ${UPDATED_AT})"
+              curl -sf -X DELETE "https://hub.docker.com/v2/repositories/${REPO}/tags/${TAG_NAME}/" \
+                -H "Authorization: Bearer ${TOKEN}" || echo "  Failed to delete ${TAG_NAME}"
+            done <<< "$TAGS"
+
+            NEXT=$(echo "$RESPONSE" | jq -r '.next // empty')
+            if [ -z "$NEXT" ]; then
+              break
+            fi
+            PAGE=$((PAGE + 1))
+          done
+
+          echo "Cleanup complete"

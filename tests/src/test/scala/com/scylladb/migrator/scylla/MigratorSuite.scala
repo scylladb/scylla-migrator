@@ -4,17 +4,21 @@ import com.datastax.oss.driver.api.core.CqlSession
 import com.datastax.oss.driver.api.querybuilder.SchemaBuilder
 import com.scylladb.migrator.CassandraUtils.dropAndRecreateTable
 
+import com.scylladb.migrator.Integration
+import org.junit.experimental.categories.Category
+
 import java.net.InetSocketAddress
 import scala.jdk.CollectionConverters._
 
-/**
-  * Base class for implementing end-to-end tests.
+/** Base class for implementing end-to-end tests.
   *
-  * It expects external services (Cassandra, Scylla, Spark, etc.) to be running.
-  * See the files `CONTRIBUTING.md` and `docker-compose-tests.yml` for more information.
+  * It expects external services (Cassandra, Scylla, Spark, etc.) to be running. See the files
+  * `CONTRIBUTING.md` and `docker-compose-tests.yml` for more information.
   *
-  * @param sourcePort TCP port of the source database. See docker-compose-test.yml.
+  * @param sourcePort
+  *   TCP port of the source database. See docker-compose-test.yml.
   */
+@Category(Array(classOf[Integration]))
 abstract class MigratorSuite(sourcePort: Int) extends munit.FunSuite {
 
   val keyspace = "test"
@@ -23,9 +27,12 @@ abstract class MigratorSuite(sourcePort: Int) extends munit.FunSuite {
     SchemaBuilder
       .createKeyspace(keyspace)
       .ifNotExists()
-      .withReplicationOptions(Map[String, AnyRef](
-        "class"              -> "SimpleStrategy",
-        "replication_factor" -> Integer.valueOf(1)).asJava)
+      .withReplicationOptions(
+        Map[String, AnyRef](
+          "class"              -> "SimpleStrategy",
+          "replication_factor" -> Integer.valueOf(1)
+        ).asJava
+      )
       .build()
 
   /** Client of a source Cassandra instance */
@@ -33,13 +40,12 @@ abstract class MigratorSuite(sourcePort: Int) extends munit.FunSuite {
     private var session: CqlSession = null
     def apply(): CqlSession = session
     override def beforeAll(): Unit = {
-      session =
-        CqlSession
-          .builder()
-          .addContactPoint(new InetSocketAddress("localhost", sourcePort))
-          .withLocalDatacenter("datacenter1")
-          .withAuthCredentials("dummy", "dummy")
-          .build()
+      session = CqlSession
+        .builder()
+        .addContactPoint(new InetSocketAddress("localhost", sourcePort))
+        .withLocalDatacenter("datacenter1")
+        .withAuthCredentials("dummy", "dummy")
+        .build()
       session.execute(createKeyspaceStatement)
     }
     override def afterAll(): Unit = session.close()
@@ -50,28 +56,26 @@ abstract class MigratorSuite(sourcePort: Int) extends munit.FunSuite {
     var session: CqlSession = null
     def apply(): CqlSession = session
     override def beforeAll(): Unit = {
-      session =
-        CqlSession
-          .builder()
-          .addContactPoint(new InetSocketAddress("localhost", 9042))
-          .withLocalDatacenter("datacenter1")
-          .withAuthCredentials("dummy", "dummy")
-          .build()
+      session = CqlSession
+        .builder()
+        .addContactPoint(new InetSocketAddress("localhost", 9042))
+        .withLocalDatacenter("datacenter1")
+        .withAuthCredentials("dummy", "dummy")
+        .build()
       session.execute(createKeyspaceStatement)
     }
     override def afterAll(): Unit = session.close()
   }
 
-  /**
-    * Fixture automating the house-keeping work when migrating a table.
+  /** Fixture automating the house-keeping work when migrating a table.
     *
     * It deletes the table from both the source and target databases in case it was already
     * existing, and then recreates it in the source database.
     *
-    * After the test is executed, it deletes the table from both the source and target
-    * databases.
+    * After the test is executed, it deletes the table from both the source and target databases.
     *
-    * @param name Name of the table
+    * @param name
+    *   Name of the table
     */
   def withTable(name: String, renames: Map[String, String] = Map.empty): FunFixture[String] =
     FunFixture(
@@ -83,7 +87,8 @@ abstract class MigratorSuite(sourcePort: Int) extends munit.FunSuite {
             targetScylla(),
             keyspace,
             name,
-            columnName = originalName => renames.getOrElse(originalName, originalName))
+            columnName = originalName => renames.getOrElse(originalName, originalName)
+          )
         } catch {
           case any: Throwable =>
             fail(s"Something did not work as expected", any)

@@ -1,0 +1,20 @@
+source:
+  type: dynamodb
+  table: S3ExportBasicTest
+  region: dummy
+  endpoint:
+    host: http://dynamodb
+    port: 8000
+  credentials:
+    accessKey: dummy
+    secretKey: dummy
+  scanSegments: 1
+  readThroughput: 25
+
+target:
+  type: dynamodb-s3-export
+  path: /app/parquet/s3export_basic_test
+
+savepoints:
+  path: /app/savepoints
+  intervalSeconds: 300

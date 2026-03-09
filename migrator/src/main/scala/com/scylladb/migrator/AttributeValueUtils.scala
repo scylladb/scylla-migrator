@@ -19,7 +19,8 @@ object AttributeValueUtils {
     else if (value.getNS ne null) AttributeValue.fromNs(value.getNS)
     else if (value.getBS ne null)
       AttributeValue.fromBs(
-        value.getBS.stream().map(SdkBytes.fromByteBuffer).collect(Collectors.toList[SdkBytes]))
+        value.getBS.stream().map(SdkBytes.fromByteBuffer).collect(Collectors.toList[SdkBytes])
+      )
     else if (value.getM ne null) {
       AttributeValue.fromM(
         value.getM
@@ -34,7 +35,8 @@ object AttributeValueUtils {
       )
     } else if (value.getL ne null)
       AttributeValue.fromL(
-        value.getL.stream().map(fromV1).collect(Collectors.toList[AttributeValue]))
+        value.getL.stream().map(fromV1).collect(Collectors.toList[AttributeValue])
+      )
     else if (value.getNULL ne null) AttributeValue.fromNul(value.getNULL)
     else if (value.getBOOL ne null) AttributeValue.fromBool(value.getBOOL)
     else sys.error("Unable to convert AttributeValue from AWS SDK V1 to V2")

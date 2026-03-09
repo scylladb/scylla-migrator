@@ -3,9 +3,10 @@ package com.scylladb.migrator.scylla
 import com.datastax.oss.driver.api.querybuilder.SchemaBuilder
 import com.github.mjakubowski84.parquet4s.ParquetWriter
 import com.scylladb.migrator.CassandraUtils.dropAndRecreateTable
+import com.scylladb.migrator.TestFileUtils
 import org.apache.parquet.hadoop.ParquetFileWriter
 
-import java.nio.file.{Files, Path, Paths}
+import java.nio.file.{ Files, Path, Paths }
 import scala.jdk.CollectionConverters._
 import scala.util.Using
 
@@ -22,17 +23,21 @@ abstract class ParquetMigratorSuite extends MigratorSuite(sourcePort = 0) {
   override def munitFixtures: Seq[Fixture[_]] = Seq(targetScylla)
 
   // Override withTable to only create table in target (no source Cassandra for Parquet tests)
-  override def withTable(name: String, renames: Map[String, String] = Map.empty): FunFixture[String] =
+  override def withTable(
+    name: String,
+    renames: Map[String, String] = Map.empty
+  ): FunFixture[String] =
     FunFixture(
       setup = { _ =>
-        try {
+        try
           // Only create table in target ScyllaDB, not in source
           dropAndRecreateTable(
             targetScylla(),
             keyspace,
             name,
-            columnName = originalName => renames.getOrElse(originalName, originalName))
-        } catch {
+            columnName = originalName => renames.getOrElse(originalName, originalName)
+          )
+        catch {
           case any: Throwable =>
             fail(s"Something did not work as expected", any)
         }
@@ -70,19 +75,25 @@ abstract class ParquetMigratorSuite extends MigratorSuite(sourcePort = 0) {
       }
     )
 
-  def withParquetAndSavepoints(parquetDir: String, savepointsDir: String): FunFixture[(Path, Path)] =
+  def withParquetAndSavepoints(
+    parquetDir: String,
+    savepointsDir: String
+  ): FunFixture[(Path, Path)] =
     FunFixture.map2(withParquetDir(parquetDir), withSavepointsDir(savepointsDir))
 
-  def withTableAndSavepoints(tableName: String, parquetDir: String, savepointsDir: String): FunFixture[(String, (Path, Path))] =
+  def withTableAndSavepoints(
+    tableName: String,
+    parquetDir: String,
+    savepointsDir: String
+  ): FunFixture[(String, (Path, Path))] =
     FunFixture.map2(withTable(tableName), withParquetAndSavepoints(parquetDir, savepointsDir))
 
-  def writeParquetTestFile(path: Path, data: List[TestRecord]): Unit = {
+  def writeParquetTestFile(path: Path, data: List[TestRecord]): Unit =
     ParquetWriter.writeAndClose(
       path.toString,
       data,
       ParquetWriter.Options(writeMode = ParquetFileWriter.Mode.OVERWRITE)
     )
-  }
 
   def toContainerParquetUri(path: Path): String = {
     require(path.startsWith(parquetHostRoot), s"Unexpected parquet file location: $path")
@@ -92,7 +103,9 @@ abstract class ParquetMigratorSuite extends MigratorSuite(sourcePort = 0) {
 
   def listDataFiles(root: Path): Set[Path] =
     Using.resource(Files.walk(root)) { stream =>
-      stream.iterator().asScala
+      stream
+        .iterator()
+        .asScala
         .filter(path => Files.isRegularFile(path))
         .filter(_.getFileName.toString.endsWith(".parquet"))
         .toSet
@@ -101,30 +114,24 @@ abstract class ParquetMigratorSuite extends MigratorSuite(sourcePort = 0) {
   def findLatestSavepoint(directory: Path): Option[Path] =
     if (!Files.exists(directory)) None
     else
-      Using.resource(Files.list(directory)) { stream =>
-        stream.iterator().asScala
-          .filter(path => Files.isRegularFile(path))
-          .filter(_.getFileName.toString.startsWith("savepoint_"))
-          .toSeq
-      }.sortBy(path => Files.getLastModifiedTime(path).toMillis)
+      Using
+        .resource(Files.list(directory)) { stream =>
+          stream
+            .iterator()
+            .asScala
+            .filter(path => Files.isRegularFile(path))
+            .filter(_.getFileName.toString.startsWith("savepoint_"))
+            .toSeq
+        }
+        .sortBy(path => Files.getLastModifiedTime(path).toMillis)
         .lastOption
 
   private def ensureEmptyDirectory(directory: Path): Unit = {
     if (Files.exists(directory)) {
-      Using.resource(Files.list(directory)) { stream =>
-        stream.iterator().asScala.foreach(deleteRecursively)
-      }
+      val children = directory.toFile.listFiles()
+      if (children != null) children.foreach(TestFileUtils.deleteRecursive)
     }
     Files.createDirectories(directory)
-  }
-
-  private def deleteRecursively(path: Path): Unit = {
-    if (Files.isDirectory(path)) {
-      Using.resource(Files.list(path)) { stream =>
-        stream.iterator().asScala.foreach(deleteRecursively)
-      }
-    }
-    Files.deleteIfExists(path)
   }
 
 }

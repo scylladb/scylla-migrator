@@ -10,8 +10,9 @@ import com.scylladb.migrator.scylla.{ MySQLToScyllaValidator, ScyllaValidator }
 object Validator {
   val log = LogManager.getLogger("com.scylladb.migrator")
 
-  def runValidation(config: MigratorConfig)(
-    implicit spark: SparkSession): List[RowComparisonFailure] =
+  def runValidation(
+    config: MigratorConfig
+  )(implicit spark: SparkSession): List[RowComparisonFailure] =
     (config.source, config.target) match {
       case (cassandraSource: SourceSettings.Cassandra, scyllaTarget: TargetSettings.Scylla) =>
         ScyllaValidator.runValidation(cassandraSource, scyllaTarget, config)
@@ -20,8 +21,10 @@ object Validator {
       case (mysqlSource: SourceSettings.MySQL, scyllaTarget: TargetSettings.Scylla) =>
         MySQLToScyllaValidator.runValidation(mysqlSource, scyllaTarget, config)
       case _ =>
-        sys.error("Unsupported combination of source and target " +
-          s"(found ${config.source.getClass.getSimpleName} and ${config.target.getClass.getSimpleName} settings)")
+        sys.error(
+          "Unsupported combination of source and target " +
+            s"(found ${config.source.getClass.getSimpleName} and ${config.target.getClass.getSimpleName} settings)"
+        )
     }
 
   def main(args: Array[String]): Unit = {

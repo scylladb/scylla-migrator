@@ -6,18 +6,23 @@ import com.datastax.oss.driver.api.querybuilder.SchemaBuilder
 
 object CassandraUtils {
 
-  /**
-    * Prepare a Scylla table for a test. Drop any existing table of the same name and recreates it.
+  /** Prepare a Scylla table for a test. Drop any existing table of the same name and recreates it.
     *
-    * @param database   Database session to use
-    * @param keyspace   Keyspace name
-    * @param name       Name of the table to create
-    * @param columnName Function to possible transform the initial name of the columns
+    * @param database
+    *   Database session to use
+    * @param keyspace
+    *   Keyspace name
+    * @param name
+    *   Name of the table to create
+    * @param columnName
+    *   Function to possible transform the initial name of the columns
     */
-  def dropAndRecreateTable(database: CqlSession,
-                           keyspace: String,
-                           name: String,
-                           columnName: String => String): Unit = {
+  def dropAndRecreateTable(
+    database: CqlSession,
+    keyspace: String,
+    name: String,
+    columnName: String => String
+  ): Unit = {
     val dropTableStatement =
       SchemaBuilder
         .dropTable(keyspace, name)

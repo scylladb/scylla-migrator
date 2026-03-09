@@ -5,11 +5,10 @@ import org.apache.log4j.LogManager
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.execution.FileSourceScanExec
 
-/**
-  * Extracts partition-to-file mappings from the Spark execution plan.
+/** Extracts partition-to-file mappings from the Spark execution plan.
   *
-  * This uses Spark API to access the FileScanRDD, which already contains
-  * the partition-to-file mapping computed during query planning.
+  * This uses Spark API to access the FileScanRDD, which already contains the partition-to-file
+  * mapping computed during query planning.
   */
 object PartitionMetadataExtractor {
   private val logger =
@@ -20,8 +19,8 @@ object PartitionMetadataExtractor {
 
     val plan = df.queryExecution.executedPlan
 
-    val scanExecList = plan.collect {
-      case exec: FileSourceScanExec => exec
+    val scanExecList = plan.collect { case exec: FileSourceScanExec =>
+      exec
     }
 
     val scanExec = scanExecList match {
@@ -39,14 +38,14 @@ object PartitionMetadataExtractor {
 
     val rdd = scanExec.inputRDD
 
-    val partitionFiles = rdd.partitions.map {
-      case p: FilePartition =>
-        val filePaths = p.files.map(_.filePath.toString).toSeq
-        (p.index, filePaths)
+    val partitionFiles = rdd.partitions.map { case p: FilePartition =>
+      val filePaths = p.files.map(_.filePath.toString).toSeq
+      (p.index, filePaths)
     }.toMap
 
     logger.debug(
-      s"Extracted ${partitionFiles.size} partition mappings covering ${partitionFiles.values.flatten.toSet.size} unique files")
+      s"Extracted ${partitionFiles.size} partition mappings covering ${partitionFiles.values.flatten.toSet.size} unique files"
+    )
 
     partitionFiles
   }

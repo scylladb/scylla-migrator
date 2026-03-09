@@ -13,11 +13,11 @@ To test a custom version of the migrator that has not been [released](https://gi
 Build locally:
 1. Make sure the Java 8+ JDK and `sbt` are installed on your machine.
 2. Export the `JAVA_HOME` environment variable with the path to the JDK installation.
-3. Run `build.sh`
+3. Run `make build`
 
-Build Locally in Docker:
-1. Run `docker-build-jar.sh` to build locally using docker or
-   
+Build locally in Docker (no JDK/sbt required):
+1. Run `make docker-build-jar`
+
 Both options will produce the .jar file to use in `spark-submit` command at path `migrator/target/scala-2.13/scylla-migrator-assembly.jar`.
 
 ## Contributing
