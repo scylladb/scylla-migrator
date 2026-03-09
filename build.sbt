@@ -60,6 +60,7 @@ lazy val migrator = (project in file("migrator"))
       "com.github.jnr" % "jnr-posix" % "3.1.19", // Needed by the Spark ScyllaDB connector
       "com.scylladb.alternator" % "emr-dynamodb-hadoop"  % "5.8.0",
       "com.scylladb.alternator" % "load-balancing"       % "1.0.0",
+      "com.mysql"              % "mysql-connector-j"     % "8.3.0",
       "io.circe"               %% "circe-generic"        % circeVersion,
       "io.circe"               %% "circe-parser"         % circeVersion,
       "io.circe"               %% "circe-yaml"           % "0.15.1",
@@ -73,9 +74,9 @@ lazy val migrator = (project in file("migrator"))
       case "mime.types"                                         => MergeStrategy.first
       case PathList("META-INF", "io.netty.versions.properties") => MergeStrategy.concat
       case PathList("META-INF", "versions", _, "module-info.class") =>
-        MergeStrategy.discard // OK as long as we don’t rely on Java 9+ features such as SPI
+        MergeStrategy.discard // OK as long as we don't rely on Java 9+ features such as SPI
       case "module-info.class" =>
-        MergeStrategy.discard // OK as long as we don’t rely on Java 9+ features such as SPI
+        MergeStrategy.discard // OK as long as we don't rely on Java 9+ features such as SPI
       case x =>
         val oldStrategy = (assembly / assemblyMergeStrategy).value
         oldStrategy(x)
