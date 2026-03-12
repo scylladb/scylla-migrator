@@ -9,6 +9,7 @@ import org.junit.experimental.categories.Category
 
 import java.net.InetSocketAddress
 import scala.jdk.CollectionConverters._
+import scala.concurrent.duration._
 
 /** Base class for implementing end-to-end tests.
   *
@@ -20,6 +21,8 @@ import scala.jdk.CollectionConverters._
   */
 @Category(Array(classOf[Integration]))
 abstract class MigratorSuite(sourcePort: Int) extends munit.FunSuite {
+
+  override val munitTimeout: Duration = 2.minutes
 
   val keyspace = "test"
 
