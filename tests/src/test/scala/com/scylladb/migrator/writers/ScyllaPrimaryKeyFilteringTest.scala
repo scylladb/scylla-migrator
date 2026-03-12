@@ -21,9 +21,9 @@ class ScyllaPrimaryKeyFilteringTest extends munit.FunSuite {
   test("resolvePrimaryKeyColumns resolves renamed and case-insensitive primary key columns") {
     val schema = StructType(
       Seq(
-        StructField("ID", StringType, nullable = true),
+        StructField("ID", StringType, nullable             = true),
         StructField("ClusteringKey", IntegerType, nullable = true),
-        StructField("value", StringType, nullable = true)
+        StructField("value", StringType, nullable          = true)
       )
     )
 
@@ -43,7 +43,7 @@ class ScyllaPrimaryKeyFilteringTest extends munit.FunSuite {
   test("requireAllPrimaryKeysResolved throws when not all primary key columns are found") {
     val schema = StructType(
       Seq(
-        StructField("id", StringType, nullable = true),
+        StructField("id", StringType, nullable    = true),
         StructField("value", StringType, nullable = true)
       )
     )
@@ -62,8 +62,8 @@ class ScyllaPrimaryKeyFilteringTest extends munit.FunSuite {
   test("dropRowsWithNullPrimaryKeys drops invalid rows and tracks dropped count") {
     val schema = StructType(
       Seq(
-        StructField("pk1", StringType, nullable = true),
-        StructField("pk2", StringType, nullable = true),
+        StructField("pk1", StringType, nullable   = true),
+        StructField("pk2", StringType, nullable   = true),
         StructField("value", StringType, nullable = true)
       )
     )
@@ -83,7 +83,8 @@ class ScyllaPrimaryKeyFilteringTest extends munit.FunSuite {
       droppedRows
     )
 
-    val keptRows = filtered.collect().map(row => (row.getString(0), row.getString(1), row.getString(2))).toSet
+    val keptRows =
+      filtered.collect().map(row => (row.getString(0), row.getString(1), row.getString(2))).toSet
     assertEquals(keptRows, Set(("a", "1", "ok-1"), ("d", "4", "ok-2")))
     assert(droppedRows.value == 2L)
   }

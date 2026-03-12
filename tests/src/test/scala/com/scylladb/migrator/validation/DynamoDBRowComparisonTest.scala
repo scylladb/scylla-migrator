@@ -156,7 +156,9 @@ class DynamoDBRowComparisonTest extends munit.FunSuite {
       dynamoDBRowComparisonFailure(
         source,
         Some(target),
-        List(Item.DifferingFieldValues(List("foo")))))
+        List(Item.DifferingFieldValues(List("foo")))
+      )
+    )
     assertEquals(result, expected)
   }
 
@@ -173,7 +175,9 @@ class DynamoDBRowComparisonTest extends munit.FunSuite {
       dynamoDBRowComparisonFailure(
         source,
         Some(target),
-        List(Item.DifferingFieldValues(List("foo")))))
+        List(Item.DifferingFieldValues(List("foo")))
+      )
+    )
     assertEquals(result, expected)
   }
 
@@ -193,7 +197,9 @@ class DynamoDBRowComparisonTest extends munit.FunSuite {
       dynamoDBRowComparisonFailure(
         source,
         Some(target),
-        List(Item.DifferingFieldValues(List("foo")))))
+        List(Item.DifferingFieldValues(List("foo")))
+      )
+    )
     assertEquals(result, expected)
   }
 
