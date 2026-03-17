@@ -7,7 +7,7 @@ import com.datastax.spark.connector.rdd.partitioner.dht.Token
 import com.datastax.spark.connector.types.CassandraOption
 import com.scylladb.migrator.Connectors
 import com.scylladb.migrator.config.{ CopyType, SourceSettings }
-import org.apache.log4j.LogManager
+import org.apache.logging.log4j.LogManager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.cassandra.{ CassandraSQLRow, DataTypeConverter }
 import org.apache.spark.sql.types.{ IntegerType, LongType, StructField, StructType }

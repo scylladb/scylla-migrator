@@ -7,7 +7,7 @@ import org.apache.hadoop.dynamodb.read.DynamoDBInputFormat
 import org.apache.hadoop.dynamodb.write.DynamoDBOutputFormat
 import org.apache.hadoop.dynamodb.{ DynamoDBConstants, DynamoDbClientBuilderTransformer }
 import org.apache.hadoop.mapred.JobConf
-import org.apache.log4j.LogManager
+import org.apache.logging.log4j.LogManager
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider
 import software.amazon.awssdk.services.dynamodb.{ DynamoDbClient, DynamoDbClientBuilder }
 import software.amazon.awssdk.core.SdkRequest

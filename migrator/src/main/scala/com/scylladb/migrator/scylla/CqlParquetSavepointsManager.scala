@@ -4,7 +4,7 @@ import com.datastax.spark.connector.rdd.partitioner.{ CassandraPartition, CqlTok
 import com.datastax.spark.connector.rdd.partitioner.dht.Token
 import com.scylladb.migrator.SavepointsManager
 import com.scylladb.migrator.config.MigratorConfig
-import org.apache.log4j.LogManager
+import org.apache.logging.log4j.LogManager
 import org.apache.spark.scheduler.{ SparkListener, SparkListenerTaskEnd }
 import org.apache.spark.{ SparkContext, Success => TaskEndSuccess }
 

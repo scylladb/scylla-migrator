@@ -1,7 +1,7 @@
 // IMPORTANT: Must be in this package to access Spark internal API
 package org.apache.spark.sql.execution.datasources
 
-import org.apache.log4j.LogManager
+import org.apache.logging.log4j.LogManager
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.execution.FileSourceScanExec
 

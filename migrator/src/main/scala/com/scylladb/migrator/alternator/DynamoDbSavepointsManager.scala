@@ -6,7 +6,7 @@ import org.apache.hadoop.dynamodb.DynamoDBItemWritable
 import org.apache.hadoop.dynamodb.split.DynamoDBSplit
 import org.apache.hadoop.io.Text
 import org.apache.hadoop.mapred.InputSplit
-import org.apache.log4j.LogManager
+import org.apache.logging.log4j.LogManager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.scheduler.{ SparkListener, SparkListenerTaskEnd }
 import org.apache.spark.{ Partition, SerializableWritable, SparkContext, Success => TaskEndSuccess }
@@ -58,8 +58,8 @@ object DynamoDbSavepointsManager {
               segments.forEach(segment => segmentsAccumulator.add(segment))
               log.info(s"Marked segments ${segments} as migrated.")
             case Failure(error) =>
-              log.error(
-                s"Unable to collect the segments scanned in partition ${partitionId}. The next savepoint will not include them.",
+              log.debug(
+                s"Unable to collect the segments scanned in partition ${partitionId} (likely from an unrelated stage). The next savepoint will not include them.",
                 error
               )
           }
@@ -91,12 +91,18 @@ object DynamoDbSavepointsManager {
   private def inputSplit(partition: Partition): Try[DynamoDBSplit] = Try {
     // Unfortunately, class `HadoopPartition` is private, so we can’t simply
     // pattern match on it. We use reflection to access its `inputSplit` member.
-    if (partition.getClass.getName != "org.apache.spark.rdd.HadoopPartition") {
-      throw new Exception(s"Unexpected partition type: ${partition.getClass.getName}.")
-    }
-    val inputSplitMember = partition.getClass.getMethod("inputSplit")
+    val inputSplitMethod =
+      try partition.getClass.getMethod("inputSplit")
+      catch {
+        case _: NoSuchMethodException =>
+          // Not a HadoopPartition (e.g. ParallelCollectionPartition from an unrelated stage).
+          // This is expected — the SparkListener fires for all tasks, not just the source RDD.
+          throw new Exception(
+            s"Partition type ${partition.getClass.getName} does not have an inputSplit method (not a HadoopPartition)."
+          )
+      }
     val inputSplitResult =
-      inputSplitMember.invoke(partition).asInstanceOf[SerializableWritable[InputSplit]]
+      inputSplitMethod.invoke(partition).asInstanceOf[SerializableWritable[InputSplit]]
     inputSplitResult.value match {
       case dynamoDbSplit: DynamoDBSplit => dynamoDbSplit
       case other => throw new Exception(s"Unexpected InputSplit type: ${other.getClass.getName}.")

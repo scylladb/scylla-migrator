@@ -11,7 +11,7 @@ import com.datastax.spark.connector.cql.{ CassandraConnector, Schema }
 import com.scylladb.migrator.Connectors
 import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
 import com.scylladb.migrator.validation.RowComparisonFailure
-import org.apache.log4j.LogManager
+import org.apache.logging.log4j.LogManager
 import org.apache.spark.sql.SparkSession
 import com.datastax.oss.driver.api.core.ConsistencyLevel
 import com.datastax.spark.connector.rdd.ReadConf

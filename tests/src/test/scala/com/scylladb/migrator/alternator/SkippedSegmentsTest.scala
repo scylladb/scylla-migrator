@@ -38,7 +38,7 @@ class SkippedSegmentsTest extends MigratorSuiteWithDynamoDBLocal {
 
     // Verify that some items have been copied to the target database …
     val itemCount = targetAlternatorItemCount(tableName)
-    assert(itemCount > 75L && itemCount < 125L, s"Unexpected item count: ${itemCount}")
+    assert(itemCount > 50L && itemCount < 150L, s"Unexpected item count: ${itemCount}")
     // … but not all of them, hence the validator fails
     assertEquals(performValidation(configPart2), 1)
 

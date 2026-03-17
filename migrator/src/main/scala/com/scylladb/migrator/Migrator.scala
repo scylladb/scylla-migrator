@@ -3,7 +3,8 @@ package com.scylladb.migrator
 import com.scylladb.migrator.alternator.AlternatorMigrator
 import com.scylladb.migrator.config._
 import com.scylladb.migrator.scylla.ScyllaMigrator
-import org.apache.log4j.{ Level, LogManager, Logger }
+import org.apache.logging.log4j.{ Level, LogManager }
+import org.apache.logging.log4j.core.config.Configurator
 import org.apache.spark.sql._
 
 object Migrator {
@@ -18,10 +19,10 @@ object Migrator {
       .config("spark.streaming.stopGracefullyOnShutdown", "true")
       .getOrCreate()
 
-    Logger.getRootLogger.setLevel(Level.WARN)
-    log.setLevel(Level.INFO)
-    Logger.getLogger("org.apache.spark.scheduler.TaskSetManager").setLevel(Level.WARN)
-    Logger.getLogger("com.datastax.spark.connector.cql.CassandraConnector").setLevel(Level.WARN)
+    Configurator.setRootLevel(Level.WARN)
+    Configurator.setLevel("com.scylladb.migrator", Level.INFO)
+    Configurator.setLevel("org.apache.spark.scheduler.TaskSetManager", Level.WARN)
+    Configurator.setLevel("com.datastax.spark.connector.cql.CassandraConnector", Level.WARN)
 
     log.info(s"ScyllaDB Migrator ${BuildInfo.version}")
 
