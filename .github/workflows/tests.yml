@@ -109,7 +109,11 @@ jobs:
         run: make test-integration-scylla
         env:
           COVERAGE: ${{ github.event_name == 'push' && 'true' || 'false' }}
+      - name: Run E2E sanity tests (Scylla only)
+        if: success()
+        run: make test-benchmark-e2e-sanity-scylla
       - name: Stop services
+        if: always()
         run: make stop-services
       - name: Save Spark image to cache
         if: steps.spark-cache.outputs.cache-hit != 'true'
