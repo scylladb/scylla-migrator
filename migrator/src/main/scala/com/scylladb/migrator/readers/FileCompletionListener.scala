@@ -1,6 +1,6 @@
 package com.scylladb.migrator.readers
 
-import org.apache.log4j.LogManager
+import org.apache.logging.log4j.LogManager
 import org.apache.spark.scheduler.{ SparkListener, SparkListenerTaskEnd }
 import org.apache.spark.Success
 

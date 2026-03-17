@@ -1,6 +1,6 @@
 package com.scylladb.migrator.readers
 
-import org.apache.log4j.LogManager
+import org.apache.logging.log4j.LogManager
 import org.apache.spark.sql.{ DataFrame, SparkSession }
 import org.apache.spark.sql.execution.datasources.PartitionMetadataExtractor
 

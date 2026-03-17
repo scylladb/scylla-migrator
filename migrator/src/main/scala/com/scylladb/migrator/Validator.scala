@@ -3,7 +3,8 @@ package com.scylladb.migrator
 import com.scylladb.migrator.alternator.AlternatorValidator
 import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
 import com.scylladb.migrator.validation.RowComparisonFailure
-import org.apache.log4j.{ Level, LogManager, Logger }
+import org.apache.logging.log4j.{ Level, LogManager }
+import org.apache.logging.log4j.core.config.Configurator
 import org.apache.spark.sql.SparkSession
 import com.scylladb.migrator.scylla.ScyllaValidator
 
@@ -33,10 +34,10 @@ object Validator {
       .config("spark.stage.maxConsecutiveAttempts", "60")
       .getOrCreate()
 
-    Logger.getRootLogger.setLevel(Level.WARN)
-    log.setLevel(Level.INFO)
-    Logger.getLogger("org.apache.spark.scheduler.TaskSetManager").setLevel(Level.INFO)
-    Logger.getLogger("com.datastax.spark.connector.cql.CassandraConnector").setLevel(Level.INFO)
+    Configurator.setRootLevel(Level.WARN)
+    Configurator.setLevel("com.scylladb.migrator", Level.INFO)
+    Configurator.setLevel("org.apache.spark.scheduler.TaskSetManager", Level.INFO)
+    Configurator.setLevel("com.datastax.spark.connector.cql.CassandraConnector", Level.INFO)
 
     log.info(s"ScyllaDB Migrator Validator ${BuildInfo.version}")
 

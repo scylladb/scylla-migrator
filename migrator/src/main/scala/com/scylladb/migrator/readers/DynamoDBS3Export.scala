@@ -6,7 +6,7 @@ import com.scylladb.migrator.config.SourceSettings.DynamoDBS3Export.{ AttributeT
 import io.circe.{ Decoder, DecodingFailure }
 import io.circe.generic.semiauto.deriveDecoder
 import io.circe.parser.decode
-import org.apache.log4j.LogManager
+import org.apache.logging.log4j.LogManager
 import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
 import software.amazon.awssdk.core.SdkBytes

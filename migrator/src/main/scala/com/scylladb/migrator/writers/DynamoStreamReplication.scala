@@ -4,7 +4,7 @@ import com.amazonaws.services.dynamodbv2.streamsadapter.model.RecordAdapter
 import com.amazonaws.services.dynamodbv2.model.{ AttributeValue => AttributeValueV1 }
 import com.scylladb.migrator.AttributeValueUtils
 import com.scylladb.migrator.config.{ AWSCredentials, SourceSettings, TargetSettings }
-import org.apache.log4j.LogManager
+import org.apache.logging.log4j.LogManager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.streaming.StreamingContext

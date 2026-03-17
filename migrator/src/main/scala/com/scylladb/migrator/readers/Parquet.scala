@@ -2,7 +2,7 @@ package com.scylladb.migrator.readers
 
 import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
 import com.scylladb.migrator.scylla.{ ScyllaMigrator, ScyllaParquetMigrator, SourceDataFrame }
-import org.apache.log4j.LogManager
+import org.apache.logging.log4j.LogManager
 import org.apache.spark.sql.{ AnalysisException, SparkSession }
 import scala.util.Using
 

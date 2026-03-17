@@ -7,7 +7,7 @@ import com.scylladb.migrator.SavepointsManager
 import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
 import com.scylladb.migrator.readers.{ ParquetSavepointsManager, TimestampColumns }
 import com.scylladb.migrator.{ readers, writers }
-import org.apache.log4j.LogManager
+import org.apache.logging.log4j.LogManager
 import org.apache.spark.sql.{ DataFrame, SparkSession }
 
 import scala.util.Using

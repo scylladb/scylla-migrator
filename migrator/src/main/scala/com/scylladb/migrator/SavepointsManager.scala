@@ -1,7 +1,7 @@
 package com.scylladb.migrator
 
 import com.scylladb.migrator.config.MigratorConfig
-import org.apache.log4j.LogManager
+import org.apache.logging.log4j.LogManager
 import sun.misc.{ Signal, SignalHandler }
 
 import java.nio.charset.StandardCharsets

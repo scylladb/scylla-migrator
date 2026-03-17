@@ -1,7 +1,7 @@
 package com.scylladb.migrator.writers
 
 import com.scylladb.migrator.config.TargetSettings
-import org.apache.log4j.LogManager
+import org.apache.logging.log4j.LogManager
 import org.apache.spark.sql.DataFrame
 
 object Parquet {

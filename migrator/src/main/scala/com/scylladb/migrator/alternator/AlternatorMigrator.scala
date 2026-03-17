@@ -5,7 +5,7 @@ import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSett
 import com.scylladb.migrator.writers.DynamoStreamReplication
 import org.apache.hadoop.dynamodb.DynamoDBItemWritable
 import org.apache.hadoop.io.Text
-import org.apache.log4j.LogManager
+import org.apache.logging.log4j.LogManager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.streaming.{ Seconds, StreamingContext }

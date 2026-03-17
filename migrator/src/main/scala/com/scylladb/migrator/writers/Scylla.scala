@@ -5,7 +5,7 @@ import com.datastax.spark.connector._
 import com.scylladb.migrator.Connectors
 import com.scylladb.migrator.config.{ Rename, TargetSettings }
 import com.scylladb.migrator.readers.TimestampColumns
-import org.apache.log4j.{ LogManager, Logger }
+import org.apache.logging.log4j.{ LogManager, Logger }
 import org.apache.spark.sql.{ DataFrame, Row, SparkSession }
 import com.datastax.oss.driver.api.core.ConsistencyLevel
 

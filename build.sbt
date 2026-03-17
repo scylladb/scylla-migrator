@@ -2,10 +2,10 @@ import sbt.librarymanagement.InclExclRule
 
 // The AWS SDK version, the Spark version, and the Hadoop version must be compatible together
 val awsSdkVersion = "2.23.19"
-val sparkVersion = "3.5.8"
-val hadoopVersion = "3.3.4"
+val sparkVersion = "4.0.2"
+val hadoopVersion = "3.4.1"
 val circeVersion = "0.14.7"
-val connectorVersion = "4.0.0"
+val connectorVersion = "4.1.0"
 val dynamodbStreamsKinesisAdapterVersion =
   "1.5.4" // Note This version still depends on AWS SDK 1.x, but there is no more recent version that supports AWS SDK v2.
 
@@ -13,7 +13,7 @@ inThisBuild(
   List(
     organization := "com.scylladb",
     scalaVersion := "2.13.14",
-    scalacOptions ++= Seq("-release:8", "-deprecation", "-unchecked", "-feature")
+    scalacOptions ++= Seq("-release:17", "-deprecation", "-unchecked", "-feature")
   )
 )
 
@@ -36,7 +36,7 @@ lazy val migrator = (project in file("migrator"))
   .settings(
     name      := "scylla-migrator",
     mainClass := Some("com.scylladb.migrator.Migrator"),
-    javacOptions ++= Seq("-source", "1.8", "-target", "1.8"),
+    javacOptions ++= Seq("-source", "17", "-target", "17"),
     javaOptions ++= Seq(
       "-Xms512M",
       "-Xmx2048M"
@@ -47,10 +47,11 @@ lazy val migrator = (project in file("migrator"))
     libraryDependencies ++= Seq(
       "org.apache.spark" %% "spark-streaming" % sparkVersion % "provided",
       "org.apache.spark" %% "spark-sql"       % sparkVersion % "provided",
-      ("org.apache.hadoop" % "hadoop-aws" % hadoopVersion) // Note: this package still depends on the AWS SDK v1
-        // Exclude the AWS bundle because it creates many conflicts when generating the assembly
+      ("org.apache.hadoop" % "hadoop-aws" % hadoopVersion)
+        // Exclude the AWS bundles because they create many conflicts when generating the assembly
         .excludeAll(
-          InclExclRule("com.amazonaws", "aws-java-sdk-bundle")
+          InclExclRule("com.amazonaws", "aws-java-sdk-bundle"),   // AWS SDK v1 bundle
+          InclExclRule("software.amazon.awssdk", "bundle")        // AWS SDK v2 bundle (added in Hadoop 3.4.x)
         ),
       "software.amazon.awssdk" % "s3-transfer-manager"      % awsSdkVersion,
       "software.amazon.awssdk" % "dynamodb"                 % awsSdkVersion,
@@ -72,6 +73,7 @@ lazy val migrator = (project in file("migrator"))
       // Handle duplicates between the transitive dependencies of Spark itself
       case "mime.types"                                         => MergeStrategy.first
       case PathList("META-INF", "io.netty.versions.properties") => MergeStrategy.concat
+      case PathList("META-INF", "FastDoubleParser-NOTICE")      => MergeStrategy.first
       case PathList("META-INF", "versions", _, "module-info.class") =>
         MergeStrategy.discard // OK as long as we don’t rely on Java 9+ features such as SPI
       case "module-info.class" =>
@@ -105,20 +107,10 @@ lazy val tests = project
     Test / parallelExecution := false,
     // Needed to build a Spark session on Java 17+, see https://stackoverflow.com/questions/73465937/apache-spark-3-3-0-breaks-on-java-17-with-cannot-access-class-sun-nio-ch-direct
     Test / javaOptions ++= {
-      val javaCompat = {
-        val maybeJavaMajorVersion =
-          sys.props
-            .get("java.version")
-            .map(version => version.takeWhile(_ != '.').toInt)
-        if (maybeJavaMajorVersion.exists(_ > 11))
-          Seq("--add-exports", "java.base/sun.nio.ch=ALL-UNNAMED")
-        else
-          Nil
-      }
       val e2eProps = Seq("e2e.cql.rows", "e2e.ddb.rows").flatMap { key =>
         sys.props.get(key).map(v => s"-D${key}=${v}")
       }
-      javaCompat ++ e2eProps
+      Seq("--add-exports", "java.base/sun.nio.ch=ALL-UNNAMED") ++ e2eProps
     },
     Test / fork := true
   )
