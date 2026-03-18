@@ -2,24 +2,110 @@ package com.scylladb.migrator.writers
 
 import com.datastax.spark.connector.writer._
 import com.datastax.spark.connector._
+import com.datastax.spark.connector.cql.Schema
 import com.scylladb.migrator.Connectors
-import com.scylladb.migrator.config.{ Rename, TargetSettings }
+import com.scylladb.migrator.config.{ Rename, SourceSettings, TargetSettings }
 import com.scylladb.migrator.readers.TimestampColumns
 import org.apache.logging.log4j.{ LogManager, Logger }
+import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{ DataFrame, Row, SparkSession }
+import org.apache.spark.sql.types.StructType
+import org.apache.spark.util.LongAccumulator
 import com.datastax.oss.driver.api.core.ConsistencyLevel
 
 import scala.collection.immutable.ArraySeq
+import java.util.Locale
 
 object Scylla {
   val log: Logger = LogManager.getLogger("com.scylladb.migrator.writer.Scylla")
+
+  private[writers] case class PrimaryKeyResolution(
+    sourcePkNames: Set[String],
+    resolvedSourcePkNames: Set[String],
+    unresolvedSourcePkNames: Set[String],
+    fieldIndices: Array[Int]
+  )
+
+  private[writers] def resolvePrimaryKeyColumns(
+    targetPkNames: Set[String],
+    renames: List[Rename],
+    dfSchema: StructType
+  ): PrimaryKeyResolution = {
+    val reverseRenames = renames.map(r => r.to -> r.from).toMap
+    val sourcePkNames =
+      targetPkNames.map(name => reverseRenames.getOrElse(name, name))
+    val dfFieldNamesLower =
+      dfSchema.fieldNames.map(name => name.toLowerCase(Locale.ROOT) -> name).toMap
+    val resolution = sourcePkNames.map { sourcePkName =>
+      sourcePkName -> dfFieldNamesLower.get(sourcePkName.toLowerCase(Locale.ROOT))
+    }
+
+    val resolvedSourcePkNames = resolution.collect { case (_, Some(dfFieldName)) =>
+      dfFieldName
+    }
+    val unresolvedSourcePkNames = resolution.collect { case (sourcePkName, None) =>
+      sourcePkName
+    }
+    val fieldIndices = resolvedSourcePkNames.map(dfSchema.fieldIndex).toArray
+
+    PrimaryKeyResolution(
+      sourcePkNames,
+      resolvedSourcePkNames,
+      unresolvedSourcePkNames,
+      fieldIndices
+    )
+  }
+
+  private[writers] def requireAllPrimaryKeysResolved(
+    targetPkNames: Set[String],
+    pkResolution: PrimaryKeyResolution
+  ): Unit =
+    if (pkResolution.resolvedSourcePkNames.size != targetPkNames.size) {
+      val resolved = pkResolution.resolvedSourcePkNames.mkString(", ")
+      val unresolved = pkResolution.unresolvedSourcePkNames.mkString(", ")
+      throw new IllegalArgumentException(
+        s"Cannot resolve all primary key columns from the source DataFrame. " +
+          s"Resolved: [${resolved}], unresolved: [${unresolved}]. " +
+          s"Check that column names in the source data match the target table, " +
+          s"or configure renames accordingly."
+      )
+    }
+
+  private[writers] def dropRowsWithNullPrimaryKeys(
+    rdd: RDD[Row],
+    pkFieldIndices: Array[Int],
+    nullPkRowsDropped: LongAccumulator
+  ): RDD[Row] =
+    rdd.filter { row =>
+      val hasNullPk = pkFieldIndices.exists(i => row.isNullAt(i))
+      if (hasNullPk) nullPkRowsDropped.add(1L)
+      !hasNullPk
+    }
+
+  /** Decide whether to drop rows with null primary keys. If explicitly configured on the target,
+    * use that value. Otherwise, auto-detect: CQL and DynamoDB sources guarantee non-null PKs, so
+    * filtering is skipped; other sources (Parquet, etc.) enable it.
+    */
+  private def shouldDropNullPrimaryKeys(
+    target: TargetSettings.Scylla,
+    source: SourceSettings
+  ): Boolean =
+    target.dropNullPrimaryKeys.getOrElse {
+      source match {
+        case _: SourceSettings.Cassandra | _: SourceSettings.DynamoDB |
+            _: SourceSettings.DynamoDBS3Export =>
+          false
+        case _ => true
+      }
+    }
 
   def writeDataframe(
     target: TargetSettings.Scylla,
     renames: List[Rename],
     df: DataFrame,
     timestampColumns: Option[TimestampColumns],
-    tokenRangeAccumulator: Option[TokenRangeAccumulator]
+    tokenRangeAccumulator: Option[TokenRangeAccumulator],
+    source: SourceSettings
   )(implicit spark: SparkSession): Unit = {
     val connector = Connectors.targetConnector(spark.sparkContext.getConf, target)
 
@@ -98,7 +184,38 @@ object Scylla {
           })
         }
 
-    rdd
+    // Optionally filter out rows where any primary key column is null to prevent
+    // infinite retries against the target database (see issue #262).
+    // Auto-detected from the source type, or overridden via target `dropNullPrimaryKeys`.
+    val dropNullPks = shouldDropNullPrimaryKeys(target, source)
+    log.info(s"Drop null primary key rows: ${dropNullPks}")
+    val (finalRdd, nullPkRowsDropped) =
+      if (dropNullPks) {
+        val tableDef =
+          connector.withSessionDo(Schema.tableFromCassandra(_, target.keyspace, target.table))
+        val targetPkNames = tableDef.primaryKey.map(_.columnName).toSet
+
+        val pkResolution = resolvePrimaryKeyColumns(targetPkNames, renames, df.schema)
+        pkResolution.unresolvedSourcePkNames.foreach { sourcePkName =>
+          log.warn(s"Primary key column '${sourcePkName}' not found in source DataFrame schema")
+        }
+        requireAllPrimaryKeysResolved(targetPkNames, pkResolution)
+
+        val pkColumnsInDf = pkResolution.resolvedSourcePkNames
+        val pkFieldIndices = pkResolution.fieldIndices
+        log.info(
+          s"Primary key columns in target table: ${targetPkNames.mkString(", ")}; " +
+            s"corresponding source columns: ${pkColumnsInDf.mkString(", ")}"
+        )
+
+        val accumulator =
+          spark.sparkContext.longAccumulator("Rows dropped due to null primary key")
+        (dropRowsWithNullPrimaryKeys(rdd, pkFieldIndices, accumulator), Some(accumulator))
+      } else {
+        (rdd, None)
+      }
+
+    finalRdd
       .saveToCassandra(
         target.keyspace,
         target.table,
@@ -106,6 +223,14 @@ object Scylla {
         writeConf,
         tokenRangeAccumulator = tokenRangeAccumulator
       )(connector, SqlRowWriter.Factory)
+
+    nullPkRowsDropped.foreach { acc =>
+      if (acc.value > 0) {
+        log.warn(
+          s"Dropped ${acc.value} rows with null primary key values"
+        )
+      }
+    }
   }
 
 }
