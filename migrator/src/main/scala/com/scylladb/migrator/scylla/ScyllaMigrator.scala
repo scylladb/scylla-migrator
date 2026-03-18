@@ -89,7 +89,8 @@ trait ScyllaMigratorBase {
         migratorConfig.getRenamesOrNil,
         sourceDF.dataFrame,
         sourceDF.timestampColumns,
-        tokenRangeAccumulator
+        tokenRangeAccumulator,
+        migratorConfig.source
       )
     } catch {
       case NonFatal(e) => // Catching everything on purpose to try and dump the accumulator state

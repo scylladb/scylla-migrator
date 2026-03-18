@@ -22,7 +22,8 @@ object TargetSettings {
     stripTrailingZerosForDecimals: Boolean,
     writeTTLInS: Option[Int],
     writeWritetimestampInuS: Option[Long],
-    consistencyLevel: String
+    consistencyLevel: String,
+    dropNullPrimaryKeys: Option[Boolean] = None
   ) extends TargetSettings
 
   case class DynamoDB(
