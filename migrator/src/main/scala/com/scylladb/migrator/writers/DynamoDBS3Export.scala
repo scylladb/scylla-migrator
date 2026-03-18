@@ -190,15 +190,22 @@ object DynamoDBS3Export {
       val b64 = Base64.getEncoder.encodeToString(av.b().asByteArray())
       Json.obj("B" -> Json.fromString(b64))
     } else if (av.hasSs)
-      Json.obj("SS" -> Json.fromValues(av.ss().asScala.map(Json.fromString)))
+      Json.obj("SS" -> Json.fromValues(av.ss().asScala.toSeq.sorted.map(Json.fromString)))
     else if (av.hasNs)
-      Json.obj("NS" -> Json.fromValues(av.ns().asScala.map(Json.fromString)))
+      Json.obj(
+        "NS" -> Json.fromValues(
+          av.ns().asScala.toSeq.sortBy(s => BigDecimal(s)).map(Json.fromString)
+        )
+      )
     else if (av.hasBs)
       Json.obj(
         "BS" -> Json.fromValues(
           av.bs()
             .asScala
-            .map(b => Json.fromString(Base64.getEncoder.encodeToString(b.asByteArray())))
+            .toSeq
+            .map(b => Base64.getEncoder.encodeToString(b.asByteArray()))
+            .sorted
+            .map(Json.fromString)
         )
       )
     else if (av.hasL)

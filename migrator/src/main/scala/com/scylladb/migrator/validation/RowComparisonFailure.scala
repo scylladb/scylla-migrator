@@ -231,10 +231,18 @@ object RowComparisonFailure {
       case (Some(DdbValue.N(l)), Some(DdbValue.N(r))) =>
         areNumericalValuesDifferent(BigDecimal(l), BigDecimal(r), floatingPointTolerance)
       case (Some(DdbValue.Ns(l)), Some(DdbValue.Ns(r))) =>
-        val xs = l.map(BigDecimal(_))
-        val ys = r.map(BigDecimal(_))
+        val xs = l.toSeq.map(BigDecimal(_)).sorted
+        val ys = r.toSeq.map(BigDecimal(_)).sorted
         xs.size != ys.size || xs.zip(ys).exists { case (x, y) =>
           areNumericalValuesDifferent(x, y, floatingPointTolerance)
+        }
+      case (Some(DdbValue.L(l)), Some(DdbValue.L(r))) =>
+        l.size != r.size || l.zip(r).exists { case (lv, rv) =>
+          areDifferent(Some(lv), Some(rv), timestampMsTolerance, floatingPointTolerance)
+        }
+      case (Some(DdbValue.M(l)), Some(DdbValue.M(r))) =>
+        l.size != r.size || l.keySet != r.keySet || l.exists { case (k, lv) =>
+          areDifferent(Some(lv), r.get(k), timestampMsTolerance, floatingPointTolerance)
         }
 
       // All remaining types get compared with standard equality

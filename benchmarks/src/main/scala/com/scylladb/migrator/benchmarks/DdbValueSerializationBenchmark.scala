@@ -45,7 +45,7 @@ class DdbValueSerializationBenchmark {
         )
       ),
       "tags"   -> DdbValue.L(Seq(DdbValue.S("urgent"), DdbValue.S("reviewed"), DdbValue.N("42"))),
-      "scores" -> DdbValue.Ns(Seq("100", "200", "300"))
+      "scores" -> DdbValue.Ns(Set("100", "200", "300"))
     )
 
     flatItemBytes   = serialize(flatItem)
