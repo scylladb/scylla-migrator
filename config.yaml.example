@@ -253,6 +253,31 @@ target:
 #   # Optional - when streamChanges is true, skip the initial snapshot transfer and only stream changes.
 #   # This setting is ignored if streamChanges is false.
 #   #skipInitialSnapshotTransfer: false
+#
+#   # Optional - Alternator-specific settings (only used when endpoint is set):
+#   #alternator:
+#   #  # Preferred datacenter for DC-aware routing (falls back to all nodes if unavailable)
+#   #  datacenter: dc1
+#   #  # Preferred rack for rack-aware routing (requires datacenter, falls back to DC then all nodes)
+#   #  rack: rack1
+#   #  # Interval (ms) for refreshing the node list while the client is active (default: 1000)
+#   #  activeRefreshIntervalMs: 1000
+#   #  # Interval (ms) for refreshing the node list while the client is idle (default: 60000)
+#   #  idleRefreshIntervalMs: 60000
+#   #  # Enable GZIP compression of request bodies (default: false)
+#   #  compression: false
+#   #  # Optimize HTTP headers to reduce traffic overhead (default: false)
+#   #  optimizeHeaders: false
+#   #  # Maximum connections in the HTTP connection pool (default: 400)
+#   #  maxConnections: 400
+#   #  # Maximum idle time for pooled connections in ms (default: 600000)
+#   #  connectionMaxIdleTimeMs: 600000
+#   #  # Maximum lifetime for pooled connections in ms, 0 = unlimited (default: 0)
+#   #  connectionTimeToLiveMs: 0
+#   #  # Maximum time to wait when the pool is exhausted in ms (default: 10000)
+#   #  connectionAcquisitionTimeoutMs: 10000
+#   #  # Maximum time to wait for TCP handshake in ms (default: 15000)
+#   #  connectionTimeoutMs: 15000
 
 # Savepoints are configuration files (like this one), saved by the migrator as it
 # runs. Their purpose is to skip token ranges that have already been copied. This

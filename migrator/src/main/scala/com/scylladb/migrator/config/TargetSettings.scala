@@ -35,7 +35,8 @@ object TargetSettings {
     streamChanges: Boolean,
     skipInitialSnapshotTransfer: Option[Boolean],
     removeConsumedCapacity: Option[Boolean] = Some(true),
-    billingMode: Option[BillingMode] = None
+    billingMode: Option[BillingMode] = None,
+    alternator: Option[AlternatorSettings] = None
   ) extends TargetSettings {
     lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
       AwsUtils.computeFinalCredentials(credentials, endpoint, region)
