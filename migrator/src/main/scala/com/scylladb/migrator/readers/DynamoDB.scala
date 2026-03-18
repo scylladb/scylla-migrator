@@ -2,7 +2,7 @@ package com.scylladb.migrator.readers
 
 import com.scylladb.migrator.{ AWSCredentials, DynamoUtils }
 import com.scylladb.migrator.DynamoUtils.{ setDynamoDBJobConf, setOptionalConf }
-import com.scylladb.migrator.config.{ DynamoDBEndpoint, SourceSettings }
+import com.scylladb.migrator.config.{ AlternatorSettings, DynamoDBEndpoint, SourceSettings }
 import org.apache.hadoop.dynamodb.read.DynamoDBInputFormat
 import org.apache.hadoop.dynamodb.{ DynamoDBConstants, DynamoDBItemWritable }
 import org.apache.hadoop.io.Text
@@ -38,7 +38,8 @@ object DynamoDB {
       source.readThroughput,
       source.throughputReadPercent,
       skipSegments,
-      source.removeConsumedCapacity.getOrElse(false)
+      source.removeConsumedCapacity.getOrElse(false),
+      source.alternator
     )
 
   /** Overload of `readRDD` that does not depend on `SourceSettings.DynamoDB`
@@ -54,7 +55,8 @@ object DynamoDB {
     readThroughput: Option[Int],
     throughputReadPercent: Option[Float],
     skipSegments: Option[Set[Int]],
-    removeConsumedCapacity: Boolean = false
+    removeConsumedCapacity: Boolean = false,
+    alternatorSettings: Option[AlternatorSettings] = None
   ): (RDD[(Text, DynamoDBItemWritable)], TableDescription) = {
 
     val dynamoDbClient =
@@ -64,7 +66,8 @@ object DynamoDB {
         region,
         if (removeConsumedCapacity)
           Seq(new DynamoUtils.RemoveConsumedCapacityInterceptor)
-        else Nil
+        else Nil,
+        alternatorSettings
       )
 
     val tableDescription =
@@ -93,7 +96,8 @@ object DynamoDB {
         tableDescription,
         maybeTtlDescription,
         skipSegments,
-        removeConsumedCapacity
+        removeConsumedCapacity,
+        alternatorSettings
       )
 
     val rdd =
@@ -119,7 +123,8 @@ object DynamoDB {
     description: TableDescription,
     maybeTtlDescription: Option[TimeToLiveDescription],
     skipSegments: Option[Set[Int]],
-    removeConsumedCapacity: Boolean
+    removeConsumedCapacity: Boolean,
+    alternatorSettings: Option[AlternatorSettings] = None
   ): JobConf = {
     val maybeItemCount = Option(description.itemCount).map(_.toLong)
     val maybeAvgItemSize =
@@ -138,7 +143,8 @@ object DynamoDB {
       scanSegments,
       maxMapTasks,
       credentials,
-      removeConsumedCapacity
+      removeConsumedCapacity,
+      alternatorSettings
     )
     jobConf.set(DynamoDBConstants.INPUT_TABLE_NAME, table)
     setOptionalConf(jobConf, DynamoDBConstants.ITEM_COUNT, maybeItemCount.map(_.toString))

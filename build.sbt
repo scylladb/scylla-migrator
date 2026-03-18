@@ -60,7 +60,7 @@ lazy val migrator = (project in file("migrator"))
       "com.scylladb"          %% "spark-scylladb-connector" % connectorVersion,
       "com.github.jnr" % "jnr-posix" % "3.1.19", // Needed by the Spark ScyllaDB connector
       "com.scylladb.alternator" % "emr-dynamodb-hadoop"  % "5.8.0",
-      "com.scylladb.alternator" % "load-balancing"       % "1.0.0",
+      "com.scylladb.alternator" % "load-balancing"       % "2.0.3",
       "io.circe"               %% "circe-generic"        % circeVersion,
       "io.circe"               %% "circe-parser"         % circeVersion,
       "io.circe"               %% "circe-yaml"           % "0.15.1",

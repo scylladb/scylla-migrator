@@ -57,7 +57,8 @@ object DynamoStreamReplication {
             target.endpoint,
             target.finalCredentials.map(_.toProvider),
             target.region,
-            Seq.empty
+            Seq.empty,
+            target.alternator
           )
         try
           partition.foreach { item =>
