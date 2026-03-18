@@ -32,6 +32,9 @@ SBT_COVERAGE_PREFIX :=
 SBT_COVERAGE_SUFFIX :=
 endif
 
+DOCKER_SPARK_BIND_DIRS := ./tests/docker/parquet ./tests/docker/spark-master ./tests/docker/aws-profile
+DOCKER_SCYLLA_BIND_DIRS := ./tests/docker/scylla ./tests/docker/scylla-source
+
 # Suppress command echo unless VERBOSE=true
 ifeq ($(VERBOSE),true)
 Q :=
@@ -103,19 +106,23 @@ spark-image: ## Pull or build the Spark Docker image
 	echo "SPARK_IMAGE=$${IMAGE}" >> "$${GITHUB_ENV:-/dev/null}"
 
 start-services: spark-image ## Start all Docker Compose test services
-	$(Q)sudo chmod -R 777 ./tests/docker/scylla ./tests/docker/scylla-source
+	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
+	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
 	docker compose -f $(COMPOSE_FILE) up -d
 
 start-services-scylla: spark-image ## Start services needed for Scylla integration tests
-	$(Q)sudo chmod -R 777 ./tests/docker/scylla ./tests/docker/scylla-source
+	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
+	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
 	docker compose -f $(COMPOSE_FILE) up -d cassandra scylla-source scylla spark-master spark-worker
 
 start-services-alternator: spark-image ## Start services needed for Alternator integration tests
-	$(Q)sudo chmod -R 777 ./tests/docker/scylla
+	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
+	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
 	docker compose -f $(COMPOSE_FILE) up -d dynamodb scylla s3 spark-master spark-worker
 
 start-services-aws: spark-image ## Start only services needed for AWS tests
-	$(Q)sudo chmod -R 777 ./tests/docker/scylla
+	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
+	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
 	docker compose -f $(COMPOSE_FILE) up -d scylla spark-master spark-worker
 
 wait-for-services: ## Wait for all test services to become ready
