@@ -4,6 +4,7 @@ import com.datastax.spark.connector.CassandraRow
 import com.scylladb.migrator.alternator.DdbValue
 import com.scylladb.migrator.validation.RowComparisonFailure
 import org.openjdk.jmh.annotations._
+import software.amazon.awssdk.core.SdkBytes
 
 import java.util.concurrent.TimeUnit
 
@@ -26,6 +27,10 @@ class RowComparisonBenchmark {
   private var dynamoLeft: Map[String, DdbValue] = _
   private var dynamoRightSame: Map[String, DdbValue] = _
   private var dynamoRightDiff: Map[String, DdbValue] = _
+
+  private var dynamoSetLeft: Map[String, DdbValue] = _
+  private var dynamoSetRightSame: Map[String, DdbValue] = _
+  private var dynamoSetRightDiff: Map[String, DdbValue] = _
 
   @Setup(Level.Trial)
   def setup(): Unit = {
@@ -77,6 +82,43 @@ class RowComparisonBenchmark {
       "age"    -> DdbValue.N("25"),
       "active" -> DdbValue.Bool(false)
     )
+
+    dynamoSetLeft = Map(
+      "pk"     -> DdbValue.S("user-123"),
+      "tags"   -> DdbValue.Ss(Set("a", "b", "c", "d", "e")),
+      "scores" -> DdbValue.Ns(Set("1.1", "2.2", "3.3", "4.4", "5.5")),
+      "blobs" -> DdbValue.Bs(
+        Set(
+          SdkBytes.fromUtf8String("alpha"),
+          SdkBytes.fromUtf8String("beta"),
+          SdkBytes.fromUtf8String("gamma")
+        )
+      )
+    )
+    dynamoSetRightSame = Map(
+      "pk"     -> DdbValue.S("user-123"),
+      "tags"   -> DdbValue.Ss(Set("e", "d", "c", "b", "a")),
+      "scores" -> DdbValue.Ns(Set("5.5", "4.4", "3.3", "2.2", "1.1")),
+      "blobs" -> DdbValue.Bs(
+        Set(
+          SdkBytes.fromUtf8String("gamma"),
+          SdkBytes.fromUtf8String("alpha"),
+          SdkBytes.fromUtf8String("beta")
+        )
+      )
+    )
+    dynamoSetRightDiff = Map(
+      "pk"     -> DdbValue.S("user-123"),
+      "tags"   -> DdbValue.Ss(Set("a", "b", "x", "y", "z")),
+      "scores" -> DdbValue.Ns(Set("1.1", "2.2", "9.9", "8.8", "7.7")),
+      "blobs" -> DdbValue.Bs(
+        Set(
+          SdkBytes.fromUtf8String("alpha"),
+          SdkBytes.fromUtf8String("delta"),
+          SdkBytes.fromUtf8String("epsilon")
+        )
+      )
+    )
   }
 
   @Benchmark
@@ -117,6 +159,24 @@ class RowComparisonBenchmark {
     RowComparisonFailure.compareDynamoDBRows(
       dynamoLeft,
       Some(dynamoRightDiff),
+      renamedColumn          = identity,
+      floatingPointTolerance = 0.0
+    )
+
+  @Benchmark
+  def compareDynamoDBRows_sets_identical(): Option[RowComparisonFailure] =
+    RowComparisonFailure.compareDynamoDBRows(
+      dynamoSetLeft,
+      Some(dynamoSetRightSame),
+      renamedColumn          = identity,
+      floatingPointTolerance = 0.0
+    )
+
+  @Benchmark
+  def compareDynamoDBRows_sets_differing(): Option[RowComparisonFailure] =
+    RowComparisonFailure.compareDynamoDBRows(
+      dynamoSetLeft,
+      Some(dynamoSetRightDiff),
       renamedColumn          = identity,
       floatingPointTolerance = 0.0
     )
