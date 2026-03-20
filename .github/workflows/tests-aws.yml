@@ -6,6 +6,18 @@ on:
     paths:
       - '**.scala'
       - '**.sbt'
+      - 'Makefile'
+      - 'docker-compose-tests.yml'
+      - '.github/workflows/**'
+
+  pull_request:
+    paths:
+      - '**.scala'
+      - '**.sbt'
+      - 'Makefile'
+      - 'docker-compose-tests.yml'
+      - '.github/workflows/**'
+
   workflow_dispatch:
 
 env:
