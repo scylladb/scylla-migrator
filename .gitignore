@@ -182,3 +182,9 @@ CLAUDE.md
 
 # Benchmark results
 benchmarks/results/
+
+# Auto-generated test config files (created by CassandraVersion.configForSource)
+tests/src/test/configurations/cassandra[0-9]*-to-*.yaml
+
+# Docker bind-mount data directories
+tests/docker/cassandra[0-9]*/

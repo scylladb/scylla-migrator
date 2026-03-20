@@ -5,8 +5,10 @@ SHELL := bash
 .PHONY: help build docker-build-jar lint lint-fix \
         spark-image start-services stop-services wait-for-services \
         start-services-scylla wait-for-services-scylla \
+        start-services-cassandra wait-for-services-cassandra test-integration-cassandra \
         start-services-alternator wait-for-services-alternator \
-        test test-unit test-integration test-integration-scylla test-integration-alternator \
+        test test-unit test-integration test-integration-scylla \
+        test-integration-alternator \
         test-integration-aws \
         test-benchmark test-benchmark-jmh test-benchmark-jmh-quick \
         test-benchmark-e2e test-benchmark-e2e-sanity test-benchmark-e2e-sanity-scylla \
@@ -33,7 +35,10 @@ SBT_COVERAGE_SUFFIX :=
 endif
 
 DOCKER_SPARK_BIND_DIRS := ./tests/docker/parquet ./tests/docker/spark-master ./tests/docker/aws-profile
-DOCKER_SCYLLA_BIND_DIRS := ./tests/docker/scylla ./tests/docker/scylla-source
+DOCKER_SCYLLA_BIND_DIRS := ./tests/docker/scylla ./tests/docker/scylla-source ./tests/docker/cassandra5 ./tests/docker/cassandra3 ./tests/docker/cassandra2
+
+# Parameterized Cassandra version for per-version testing (2, 3, 4, or 5)
+CASSANDRA_VERSION ?= 4
 
 # Suppress command echo unless VERBOSE=true
 ifeq ($(VERBOSE),true)
@@ -113,7 +118,7 @@ start-services: spark-image ## Start all Docker Compose test services
 start-services-scylla: spark-image ## Start services needed for Scylla integration tests
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
 	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
-	docker compose -f $(COMPOSE_FILE) up -d cassandra scylla-source scylla spark-master spark-worker
+	docker compose -f $(COMPOSE_FILE) up -d cassandra cassandra5 cassandra3 cassandra2 scylla-source scylla spark-master spark-worker
 
 start-services-alternator: spark-image ## Start services needed for Alternator integration tests
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
@@ -137,6 +142,9 @@ wait-for-services: ## Wait for all test services to become ready
 
 wait-for-services-scylla: ## Wait for Scylla test services to become ready
 	$(Q)$(call wait-for-cql,cassandra)
+	$(call wait-for-cql,cassandra5)
+	$(call wait-for-cql,cassandra3)
+	$(call wait-for-cql,cassandra2)
 	$(call wait-for-cql,scylla-source)
 	$(call wait-for-cql,scylla)
 	$(call wait-for-port,8080)
@@ -162,13 +170,35 @@ stop-services: ## Stop all Docker Compose test services
 dump-logs: ## Dump Docker Compose container logs
 	$(Q)docker compose -f $(COMPOSE_FILE) logs
 
+# --- Per-version Cassandra source testing (CASSANDRA_VERSION=2|3|4|5) ---
+# Docker service name: "cassandra" for v4, "cassandraN" for others
+ifeq ($(CASSANDRA_VERSION),4)
+_CASSANDRA_SERVICE := cassandra
+else
+_CASSANDRA_SERVICE := cassandra$(CASSANDRA_VERSION)
+endif
+
+start-services-cassandra: spark-image ## Start services for a single Cassandra version (CASSANDRA_VERSION=...)
+	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla ./tests/docker/$(_CASSANDRA_SERVICE)
+	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla ./tests/docker/$(_CASSANDRA_SERVICE)
+	docker compose -f $(COMPOSE_FILE) up -d $(_CASSANDRA_SERVICE) scylla spark-master spark-worker
+
+wait-for-services-cassandra: ## Wait for a single Cassandra version to become ready (CASSANDRA_VERSION=...)
+	$(Q)$(call wait-for-cql,$(_CASSANDRA_SERVICE))
+	$(call wait-for-cql,scylla)
+	$(call wait-for-port,8080)
+	$(call wait-for-port,8081)
+
+test-integration-cassandra: ## Run integration tests for a single Cassandra version (CASSANDRA_VERSION=...)
+	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.scylla.Cassandra$(CASSANDRA_VERSION)* -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.E2E" $(SBT_COVERAGE_SUFFIX)
+
 test-unit: ## Run unit tests (no services required)
 	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly -- --exclude-categories=com.scylladb.migrator.Integration" $(SBT_COVERAGE_SUFFIX)
 
 test-integration: ## Run integration tests (requires services, excludes AWS, benchmarks, and E2E)
 	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.AWS,com.scylladb.migrator.E2E" $(SBT_COVERAGE_SUFFIX)
 
-test-integration-scylla: ## Run Scylla integration tests only (excludes E2E benchmarks)
+test-integration-scylla: ## Run all Scylla integration tests (requires all CQL sources running)
 	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.scylla.* -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.E2E" $(SBT_COVERAGE_SUFFIX)
 
 test-integration-alternator: ## Run Alternator integration tests only (excludes AWS and E2E benchmarks)

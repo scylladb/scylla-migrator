@@ -8,9 +8,12 @@ import com.scylladb.migrator.SparkUtils.successfullyPerformMigration
 import scala.jdk.CollectionConverters._
 import scala.util.chaining._
 
-class BasicMigrationTest extends MigratorSuite(sourcePort = 9043) {
+abstract class BasicMigrationTest(version: CassandraVersion) extends MigratorSuite(version.port) {
 
-  withTable("BasicTest").test("Read from source and write to target") { tableName =>
+  private val configFile =
+    CassandraVersion.configForSource("cassandra-to-scylla-basic.yaml", version)
+
+  withTable("BasicTest").test(s"Cassandra ${version.label}: basic migration") { tableName =>
     val insertStatement =
       QueryBuilder
         .insertInto(keyspace, tableName)
@@ -22,13 +25,10 @@ class BasicMigrationTest extends MigratorSuite(sourcePort = 9043) {
         )
         .build()
 
-    // Insert some items
     sourceCassandra().execute(insertStatement)
 
-    // Perform the migration
-    successfullyPerformMigration("cassandra-to-scylla-basic.yaml")
+    successfullyPerformMigration(configFile)
 
-    // Check that the item has been migrated to the target table
     val selectAllStatement = QueryBuilder
       .selectFrom(keyspace, tableName)
       .all()
@@ -43,3 +43,8 @@ class BasicMigrationTest extends MigratorSuite(sourcePort = 9043) {
   }
 
 }
+
+class Cassandra2BasicMigrationTest extends BasicMigrationTest(CassandraVersion.V2)
+class Cassandra3BasicMigrationTest extends BasicMigrationTest(CassandraVersion.V3)
+class Cassandra4BasicMigrationTest extends BasicMigrationTest(CassandraVersion.V4)
+class Cassandra5BasicMigrationTest extends BasicMigrationTest(CassandraVersion.V5)

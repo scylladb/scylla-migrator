@@ -182,3 +182,54 @@ jobs:
           path: |
             tests/target/scala-2.13/scoverage-report/
             migrator/target/scala-2.13/scoverage-report/
+
+  test-cassandra-compat:
+    name: Cassandra ${{ matrix.version }}.x compat
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [2, 3, 5]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: sbt
+      - uses: sbt/setup-sbt@v1
+      - name: Restore Spark Docker image cache
+        id: spark-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/spark-image.tar
+          key: spark-image-${{ hashFiles('dockerfiles/spark/**') }}
+      - name: Load cached Spark image
+        if: steps.spark-cache.outputs.cache-hit == 'true'
+        run: docker load < /tmp/spark-image.tar
+      - name: Pre-create JAR directory and start services
+        run: |
+          mkdir -p migrator/target/scala-2.13
+          make start-services-cassandra CASSANDRA_VERSION=${{ matrix.version }}
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Download assembly JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: migrator-jar
+          path: migrator/target/scala-2.13/
+      - name: Wait for services
+        run: make wait-for-services-cassandra CASSANDRA_VERSION=${{ matrix.version }}
+      - name: Dump container logs on failure
+        if: failure()
+        run: make dump-logs
+      - name: Run Cassandra ${{ matrix.version }}.x integration tests
+        run: make test-integration-cassandra CASSANDRA_VERSION=${{ matrix.version }}
+      - name: Stop services
+        if: always()
+        run: make stop-services
+      - name: Save Spark image to cache
+        if: steps.spark-cache.outputs.cache-hit != 'true'
+        run: docker save spark-migrator -o /tmp/spark-image.tar

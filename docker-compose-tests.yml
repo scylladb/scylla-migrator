@@ -11,12 +11,51 @@ services:
 
   cassandra:
     image: cassandra:4.1
+    environment:
+      MAX_HEAP_SIZE: 256M
+      HEAP_NEWSIZE: 64M
     volumes:
       - ./tests/docker/cassandra:/var/lib/cassandra
     ports:
       - "9043:9042"
     expose:
       - 9043
+
+  cassandra5:
+    image: cassandra:5.0
+    environment:
+      MAX_HEAP_SIZE: 256M
+      HEAP_NEWSIZE: 64M
+    volumes:
+      - ./tests/docker/cassandra5:/var/lib/cassandra
+    ports:
+      - "9047:9042"
+    expose:
+      - 9047
+
+  cassandra3:
+    image: cassandra:3.11
+    environment:
+      MAX_HEAP_SIZE: 256M
+      HEAP_NEWSIZE: 64M
+    volumes:
+      - ./tests/docker/cassandra3:/var/lib/cassandra
+    ports:
+      - "9045:9042"
+    expose:
+      - 9045
+
+  cassandra2:
+    image: cassandra:2.2
+    environment:
+      MAX_HEAP_SIZE: 256M
+      HEAP_NEWSIZE: 64M
+    volumes:
+      - ./tests/docker/cassandra2:/var/lib/cassandra
+    ports:
+      - "9046:9042"
+    expose:
+      - 9046
 
   scylla-source:
     image: scylladb/scylla:latest
