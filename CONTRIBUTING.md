@@ -181,6 +181,9 @@ All the releases (major, minor, and patch releases) are cut off the branch `mast
 |
 |                <- unpublished commits
 |
+* branch-2.0.x   <- latest release in the 2.0.x series
+|
+|
 * branch-1.1.x   <- latest release in the 1.1.x series
 |
 |
