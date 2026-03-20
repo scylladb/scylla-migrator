@@ -8,10 +8,13 @@ import com.scylladb.migrator.SparkUtils.successfullyPerformMigration
 import scala.jdk.CollectionConverters._
 import scala.util.chaining._
 
-class RenamedItemsTest extends MigratorSuite(sourcePort = 9043) {
+abstract class RenamedItemsTest(version: CassandraVersion) extends MigratorSuite(version.port) {
+
+  private val configFile =
+    CassandraVersion.configForSource("cassandra-to-scylla-renames.yaml", version)
 
   withTable("RenamedItems", renames = Map("bar" -> "quux"))
-    .test("Read from source and write to target") { tableName =>
+    .test(s"Cassandra ${version.label}: rename items along the migration") { tableName =>
       val insertStatement =
         QueryBuilder
           .insertInto(keyspace, tableName)
@@ -24,13 +27,10 @@ class RenamedItemsTest extends MigratorSuite(sourcePort = 9043) {
           )
           .build()
 
-      // Insert some items
       sourceCassandra().execute(insertStatement)
 
-      // Perform the migration
-      successfullyPerformMigration("cassandra-to-scylla-renames.yaml")
+      successfullyPerformMigration(configFile)
 
-      // Check that the item has been migrated to the target table
       val selectAllStatement = QueryBuilder
         .selectFrom(keyspace, tableName)
         .all()
@@ -46,3 +46,8 @@ class RenamedItemsTest extends MigratorSuite(sourcePort = 9043) {
     }
 
 }
+
+class Cassandra2RenamedItemsTest extends RenamedItemsTest(CassandraVersion.V2)
+class Cassandra3RenamedItemsTest extends RenamedItemsTest(CassandraVersion.V3)
+class Cassandra4RenamedItemsTest extends RenamedItemsTest(CassandraVersion.V4)
+class Cassandra5RenamedItemsTest extends RenamedItemsTest(CassandraVersion.V5)

@@ -8,14 +8,14 @@ import com.scylladb.migrator.SparkUtils.{ performValidation, successfullyPerform
 import scala.concurrent.duration.{ Duration, DurationInt }
 import scala.jdk.CollectionConverters._
 
-class ValidatorTest extends MigratorSuite(sourcePort = 9043) {
+abstract class ValidatorTest(version: CassandraVersion) extends MigratorSuite(version.port) {
 
   override val munitTimeout: Duration = 120.seconds
 
-  withTable("BasicTest").test("Validate migration") { tableName =>
-    val configFile = "cassandra-to-scylla-basic.yaml"
+  private val configFile =
+    CassandraVersion.configForSource("cassandra-to-scylla-basic.yaml", version)
 
-    // Insert some items
+  withTable("BasicTest").test(s"Cassandra ${version.label}: validate migration") { tableName =>
     val insertStatement =
       QueryBuilder
         .insertInto(keyspace, tableName)
@@ -28,13 +28,10 @@ class ValidatorTest extends MigratorSuite(sourcePort = 9043) {
         .build()
     sourceCassandra().execute(insertStatement)
 
-    // Perform the migration
     successfullyPerformMigration(configFile)
 
-    // Perform the validation
     assertEquals(performValidation(configFile), 0, "Validation failed")
 
-    // Change the value of an item
     val updateStatement =
       QueryBuilder
         .update(keyspace, tableName)
@@ -44,9 +41,12 @@ class ValidatorTest extends MigratorSuite(sourcePort = 9043) {
         .build()
     targetScylla().execute(updateStatement)
 
-    // Check that the validation failed because of the introduced change
     assertEquals(performValidation(configFile), 1)
-
   }
 
 }
+
+class Cassandra2ValidatorTest extends ValidatorTest(CassandraVersion.V2)
+class Cassandra3ValidatorTest extends ValidatorTest(CassandraVersion.V3)
+class Cassandra4ValidatorTest extends ValidatorTest(CassandraVersion.V4)
+class Cassandra5ValidatorTest extends ValidatorTest(CassandraVersion.V5)
