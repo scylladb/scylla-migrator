@@ -22,7 +22,7 @@ import software.amazon.awssdk.services.dynamodb.model.{
 }
 
 import java.net.URI
-import java.nio.file.Paths
+import java.nio.file.{ Files, Paths }
 import scala.util.chaining._
 import scala.jdk.CollectionConverters._
 import scala.sys.process.stringToProcess
@@ -232,7 +232,25 @@ abstract class MigratorSuiteWithAWS extends MigratorSuite {
       // Provision the AWS credentials on the Spark nodes via a Docker volume
       val localAwsCredentials =
         Paths.get(sys.props("user.home"), ".aws", "credentials").toAbsolutePath
-      (s"cp ${localAwsCredentials} docker/aws-profile/credentials").!!
+      val targetCredentials = Paths.get("docker", "aws-profile", "credentials")
+      if (Files.exists(localAwsCredentials)) {
+        Files.copy(
+          localAwsCredentials,
+          targetCredentials,
+          java.nio.file.StandardCopyOption.REPLACE_EXISTING
+        )
+      } else {
+        // In CI, credentials are provided via environment variables (e.g., OIDC federation)
+        val accessKey = sys.env("AWS_ACCESS_KEY_ID")
+        val secretKey = sys.env("AWS_SECRET_ACCESS_KEY")
+        val sessionToken = sys.env.get("AWS_SESSION_TOKEN")
+        val content = new StringBuilder()
+          .append("[default]\n")
+          .append(s"aws_access_key_id = ${accessKey}\n")
+          .append(s"aws_secret_access_key = ${secretKey}\n")
+        sessionToken.foreach(token => content.append(s"aws_session_token = ${token}\n"))
+        Files.write(targetCredentials, content.toString().getBytes)
+      }
 
       val region = Region.of(sys.env("AWS_REGION"))
       client = DynamoDbClient
