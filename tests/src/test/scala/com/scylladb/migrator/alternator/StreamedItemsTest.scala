@@ -14,9 +14,9 @@ import scala.util.chaining.scalaUtilChainingOps
 
 class StreamedItemsTest extends MigratorSuiteWithAWS {
 
-  override val munitTimeout: Duration = 120.seconds
+  override val munitTimeout: Duration = 480.seconds
 
-  withTable("StreamedItemsTest").test("Stream changes") { tableName =>
+  withStreamingTable("StreamedItemsTest").test("Stream changes") { tableName =>
     val configFileName = "dynamodb-to-alternator-streaming.yaml"
 
     // Populate the source table
@@ -28,16 +28,19 @@ class StreamedItemsTest extends MigratorSuiteWithAWS {
     )
 
     // Perform the migration
-    val sparkLogs = new StringBuilder()
+    val sparkLogs =
+      new StringBuffer() // StringBuffer for thread safety (ProcessLogger callbacks come from separate threads)
     val sparkJob =
       submitSparkJobProcess(configFileName, "com.scylladb.migrator.Migrator")
         .run(ProcessLogger { log =>
-          sparkLogs ++= log
-//          println(log) // Uncomment to see the logs
+          sparkLogs.append(log).append('\n')
         })
 
-    awaitAtMost(60.seconds) {
-      assert(sparkLogs.toString().contains(s"Table ${tableName} created."))
+    awaitAtMost(180.seconds) {
+      assert(
+        sparkLogs.toString().contains(s"Table ${tableName} created."),
+        s"Spark job alive: ${sparkJob.isAlive()}. Last 2000 chars of logs:\n${sparkLogs.toString().takeRight(5000)}"
+      )
     }
     // Check that the table initial snapshot has been successfully migrated
     awaitAtMost(60.seconds) {
@@ -60,12 +63,15 @@ class StreamedItemsTest extends MigratorSuiteWithAWS {
       PutItemRequest.builder().tableName(tableName).item(item2Data.asJava).build()
     )
 
-    // Check that the added item has also been migrated
-    awaitAtMost(60.seconds) {
+    // Check that the added item has also been migrated (KCL startup can take a while)
+    awaitAtMost(180.seconds) {
       targetAlternator()
         .getItem(GetItemRequest.builder().tableName(tableName).key(keys2.asJava).build())
         .tap { itemResult =>
-          assert(itemResult.hasItem, "Second item not found in the target database")
+          assert(
+            itemResult.hasItem,
+            s"Second item not found in the target database. Spark job alive: ${sparkJob.isAlive()}. Last 5000 chars of logs:\n${sparkLogs.toString().takeRight(5000)}"
+          )
           assertEquals(
             itemResult.item.asScala.toMap,
             item2Data + ("_dynamo_op_type" -> AttributeValue.fromBool(true))
@@ -80,66 +86,73 @@ class StreamedItemsTest extends MigratorSuiteWithAWS {
     deleteStreamTable(tableName)
   }
 
-  withTable("StreamedItemsSkipSnapshotTest").test("Stream changes but skip initial snapshot") {
-    tableName =>
-      val configFileName = "dynamodb-to-alternator-streaming-skip-snapshot.yaml"
+  withStreamingTable("StreamedItemsSkipSnapshotTest").test(
+    "Stream changes but skip initial snapshot"
+  ) { tableName =>
+    val configFileName = "dynamodb-to-alternator-streaming-skip-snapshot.yaml"
 
-      // Populate the source table
-      val keys1 = Map("id" -> AttributeValue.fromS("12345"))
-      val attrs1 = Map("foo" -> AttributeValue.fromS("bar"))
-      val item1Data = keys1 ++ attrs1
-      sourceDDb().putItem(
-        PutItemRequest.builder().tableName(tableName).item(item1Data.asJava).build()
+    // Populate the source table
+    val keys1 = Map("id" -> AttributeValue.fromS("12345"))
+    val attrs1 = Map("foo" -> AttributeValue.fromS("bar"))
+    val item1Data = keys1 ++ attrs1
+    sourceDDb().putItem(
+      PutItemRequest.builder().tableName(tableName).item(item1Data.asJava).build()
+    )
+
+    // Perform the migration
+    val sparkLogs =
+      new StringBuffer() // StringBuffer for thread safety (ProcessLogger callbacks come from separate threads)
+    val sparkJob =
+      submitSparkJobProcess(configFileName, "com.scylladb.migrator.Migrator")
+        .run(ProcessLogger { (log: String) =>
+          sparkLogs.append(log).append('\n')
+        })
+
+    // Wait for the changes to start being streamed
+    awaitAtMost(180.seconds) {
+      assert(
+        sparkLogs.toString().contains("alternator: Starting to transfer changes"),
+        s"Spark job alive: ${sparkJob.isAlive()}. Last 2000 chars of logs:\n${sparkLogs.toString().takeRight(5000)}"
       )
+    }
 
-      // Perform the migration
-      val sparkLogs = new StringBuilder()
-      val sparkJob =
-        submitSparkJobProcess(configFileName, "com.scylladb.migrator.Migrator")
-          .run(ProcessLogger { (log: String) =>
-            sparkLogs ++= log
-//          println(log) // Uncomment to see the logs
-          })
+    // Insert one more item
+    val keys2 = Map("id" -> AttributeValue.fromS("67890"))
+    val attrs2 = Map(
+      "foo" -> AttributeValue.fromS("baz"),
+      "baz" -> AttributeValue.fromBool(false)
+    )
+    val item2Data = keys2 ++ attrs2
+    sourceDDb().putItem(
+      PutItemRequest.builder().tableName(tableName).item(item2Data.asJava).build()
+    )
 
-      // Wait for the changes to start being streamed
-      awaitAtMost(60.seconds) {
-        assert(sparkLogs.toString().contains("alternator: Starting to transfer changes"))
-      }
-
-      // Insert one more item
-      val keys2 = Map("id" -> AttributeValue.fromS("67890"))
-      val attrs2 = Map(
-        "foo" -> AttributeValue.fromS("baz"),
-        "baz" -> AttributeValue.fromBool(false)
-      )
-      val item2Data = keys2 ++ attrs2
-      sourceDDb().putItem(
-        PutItemRequest.builder().tableName(tableName).item(item2Data.asJava).build()
-      )
-
-      // Check that only the second item has been migrated
-      awaitAtMost(60.seconds) {
-        targetAlternator()
-          .getItem(GetItemRequest.builder().tableName(tableName).key(keys2.asJava).build())
-          .tap { itemResult =>
-            assert(itemResult.hasItem, "Second item not found in the target database")
-            assertEquals(
-              itemResult.item.asScala.toMap,
-              item2Data + ("_dynamo_op_type" -> AttributeValue.fromBool(true))
-            )
-          }
-      }
+    // Check that only the second item has been migrated (KCL startup can take a while)
+    awaitAtMost(180.seconds) {
       targetAlternator()
-        .getItem(GetItemRequest.builder().tableName(tableName).key(keys1.asJava).build())
+        .getItem(GetItemRequest.builder().tableName(tableName).key(keys2.asJava).build())
         .tap { itemResult =>
-          assert(!itemResult.hasItem, "First item found in the target database")
+          assert(
+            itemResult.hasItem,
+            s"Second item not found in the target database. Spark job alive: ${sparkJob.isAlive()}. Last 5000 chars of logs:\n${sparkLogs.toString().takeRight(5000)}"
+          )
+          assertEquals(
+            itemResult.item.asScala.toMap,
+            item2Data + ("_dynamo_op_type" -> AttributeValue.fromBool(true))
+          )
         }
+    }
+    targetAlternator()
+      .getItem(GetItemRequest.builder().tableName(tableName).key(keys1.asJava).build())
+      .tap { itemResult =>
+        assert(!itemResult.hasItem, "First item found in the target database")
+      }
 
-      // Stop the migration job
-      stopSparkJob(configFileName)
-      assertEquals(sparkJob.exitValue(), 143)
+    // Stop the migration job
+    stopSparkJob(configFileName)
+    assertEquals(sparkJob.exitValue(), 143)
 
-      deleteStreamTable(tableName)
+    deleteStreamTable(tableName)
   }
 
   /** Continuously evaluate the provided `assertion` until it terminates (MUnit models failures with

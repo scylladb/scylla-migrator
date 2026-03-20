@@ -11,14 +11,18 @@ import software.amazon.awssdk.services.dynamodb.model.{
   CreateTableRequest,
   DeleteTableRequest,
   DescribeTableRequest,
+  DynamoDbException,
   GetItemRequest,
   GlobalSecondaryIndexDescription,
   KeySchemaElement,
   KeyType,
   LocalSecondaryIndexDescription,
   ProvisionedThroughput,
+  ResourceInUseException,
   ResourceNotFoundException,
-  ScalarAttributeType
+  ScalarAttributeType,
+  StreamSpecification,
+  StreamViewType
 }
 
 import java.net.URI
@@ -87,7 +91,13 @@ trait MigratorSuite extends munit.FunSuite {
               ProvisionedThroughput.builder().readCapacityUnits(25L).writeCapacityUnits(25L).build()
             )
             .build()
-        sourceDDb().createTable(createTableRequest)
+        try
+          sourceDDb().createTable(createTableRequest)
+        catch {
+          case _: ResourceInUseException =>
+            // Table already exists (e.g., from a previous run that could not delete it)
+            System.err.println(s"Table ${name} already exists, reusing it")
+        }
         val waiterResponse =
           sourceDDb()
             .waiter()
@@ -105,9 +115,65 @@ trait MigratorSuite extends munit.FunSuite {
     teardown = { _ =>
       // Clean-up both the source and target databases because we assume the test did replicate the table
       // to the target database
-      targetAlternator().deleteTable(DeleteTableRequest.builder().tableName(name).build())
-      sourceDDb().deleteTable(DeleteTableRequest.builder().tableName(name).build())
-      ()
+      deleteTableIfExists(targetAlternator(), name)
+      deleteTableIfExists(sourceDDb(), name)
+    }
+  )
+
+  /** Like `withTable`, but creates the table with DynamoDB Streams enabled. This avoids needing
+    * `dynamodb:UpdateTable` permission to enable streams later.
+    */
+  def withStreamingTable(name: String): FunFixture[String] = FunFixture(
+    setup = { _ =>
+      deleteTableIfExists(sourceDDb(), name)
+      deleteTableIfExists(targetAlternator(), name)
+      try {
+        val createTableRequest =
+          CreateTableRequest
+            .builder()
+            .tableName(name)
+            .keySchema(KeySchemaElement.builder().attributeName("id").keyType(KeyType.HASH).build())
+            .attributeDefinitions(
+              AttributeDefinition
+                .builder()
+                .attributeName("id")
+                .attributeType(ScalarAttributeType.S)
+                .build()
+            )
+            .provisionedThroughput(
+              ProvisionedThroughput.builder().readCapacityUnits(25L).writeCapacityUnits(25L).build()
+            )
+            .streamSpecification(
+              StreamSpecification
+                .builder()
+                .streamEnabled(true)
+                .streamViewType(StreamViewType.NEW_IMAGE)
+                .build()
+            )
+            .build()
+        try
+          sourceDDb().createTable(createTableRequest)
+        catch {
+          case _: ResourceInUseException =>
+            System.err.println(s"Table ${name} already exists, reusing it")
+        }
+        val waiterResponse =
+          sourceDDb()
+            .waiter()
+            .waitUntilTableExists(describeTableRequest(name))
+        assert(
+          waiterResponse.matched().response().isPresent,
+          s"Failed to create table ${name}: ${waiterResponse.matched().exception().get()}"
+        )
+      } catch {
+        case any: Throwable =>
+          fail(s"Failed to create table ${name} in database ${sourceDDb()}", any)
+      }
+      name
+    },
+    teardown = { _ =>
+      deleteTableIfExists(targetAlternator(), name)
+      deleteTableIfExists(sourceDDb(), name)
     }
   )
 
@@ -133,6 +199,9 @@ trait MigratorSuite extends munit.FunSuite {
       case _: ResourceNotFoundException =>
         // OK, the table was not existing or the waiter completed with the ResourceNotFoundException
         ()
+      case e: DynamoDbException if e.getMessage.contains("not authorized") =>
+        // The IAM role does not have dynamodb:DeleteTable permission, skip cleanup
+        System.err.println(s"Warning: not authorized to delete table ${name}, skipping")
       case any: Throwable =>
         fail(s"Failed to delete table ${name}", any)
     }

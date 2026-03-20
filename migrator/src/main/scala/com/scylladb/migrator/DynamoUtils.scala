@@ -237,20 +237,32 @@ object DynamoUtils {
         source.region
       )
 
-    sourceClient
-      .updateTable(
-        UpdateTableRequest
-          .builder()
-          .tableName(source.table)
-          .streamSpecification(
-            StreamSpecification
-              .builder()
-              .streamEnabled(true)
-              .streamViewType(StreamViewType.NEW_IMAGE)
-              .build()
-          )
-          .build()
-      )
+    // Check if streams are already enabled before trying to update the table
+    val tableDesc =
+      sourceClient.describeTable(DescribeTableRequest.builder().tableName(source.table).build())
+    val streamSpec = tableDesc.table.streamSpecification
+    val alreadyEnabled =
+      streamSpec != null && streamSpec.streamEnabled && streamSpec.streamViewType == StreamViewType.NEW_IMAGE
+
+    if (!alreadyEnabled) {
+      log.info("Enabling DynamoDB Streams on the source table")
+      sourceClient
+        .updateTable(
+          UpdateTableRequest
+            .builder()
+            .tableName(source.table)
+            .streamSpecification(
+              StreamSpecification
+                .builder()
+                .streamEnabled(true)
+                .streamViewType(StreamViewType.NEW_IMAGE)
+                .build()
+            )
+            .build()
+        )
+    } else {
+      log.info("DynamoDB Streams already enabled on the source table")
+    }
 
     var done = false
     while (!done) {
