@@ -187,4 +187,16 @@ benchmarks/results/
 tests/src/test/configurations/cassandra[0-9]*-to-*.yaml
 
 # Docker bind-mount data directories
+tests/docker/cassandra/
+tests/docker/s3/
 tests/docker/cassandra[0-9]*/
+tests/docker/aws-profile/*
+!tests/docker/aws-profile/.gitkeep
+tests/docker/spark-master/*
+!tests/docker/spark-master/.gitkeep
+tests/docker/scylla-source/*
+!tests/docker/scylla-source/.gitkeep
+tests/docker/scylla/*
+!tests/docker/scylla/.gitkeep
+tests/docker/parquet/*
+!tests/docker/parquet/.gitkeep
