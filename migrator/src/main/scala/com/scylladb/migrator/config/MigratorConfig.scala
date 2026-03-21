@@ -54,10 +54,32 @@ object MigratorConfig {
   def loadFrom(path: String): MigratorConfig = {
     val configData = scala.io.Source.fromFile(path).mkString
 
-    parser
+    val config = parser
       .parse(configData)
       .leftWiden[Error]
       .flatMap(_.as[MigratorConfig])
       .valueOr(throw _)
+
+    validate(config)
+    config
   }
+
+  private def validate(config: MigratorConfig): Unit =
+    config.target match {
+      case scylla: TargetSettings.Scylla =>
+        scylla.ttl.foreach { _ =>
+          config.source match {
+            case cassandra: SourceSettings.Cassandra =>
+              require(
+                cassandra.preserveTimestamps,
+                "ttl requires preserveTimestamps to be true"
+              )
+            case _ =>
+              throw new IllegalArgumentException(
+                "ttl is only supported with Cassandra/Scylla sources"
+              )
+          }
+        }
+      case _ =>
+    }
 }

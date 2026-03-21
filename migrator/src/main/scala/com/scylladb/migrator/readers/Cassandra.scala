@@ -6,7 +6,7 @@ import com.datastax.spark.connector.rdd.ReadConf
 import com.datastax.spark.connector.rdd.partitioner.dht.Token
 import com.datastax.spark.connector.types.CassandraOption
 import com.scylladb.migrator.Connectors
-import com.scylladb.migrator.config.{ CopyType, SourceSettings }
+import com.scylladb.migrator.config.{ CopyType, SourceSettings, TTLConfig, TTLPolicy }
 import org.apache.logging.log4j.LogManager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.cassandra.{ CassandraSQLRow, DataTypeConverter }
@@ -101,25 +101,80 @@ object Cassandra {
         Selection(columnRefs, origSchema, None)
     }
 
+  /** Compute the effective TTL for a cell based on the TTL policy.
+    *
+    * @param ttl
+    *   existing TTL on the source cell (None if not set)
+    * @param writetime
+    *   writetime of the cell in microseconds
+    * @param ttlConfig
+    *   TTL configuration (value and policy), or None to preserve source TTL as-is
+    * @param nowMillis
+    *   current time in milliseconds (for testing)
+    */
+  def computeEffectiveTTL(
+    ttl: Option[Int],
+    writetime: Option[Long],
+    ttlConfig: Option[TTLConfig],
+    nowMillis: Long = System.currentTimeMillis()
+  ): Long =
+    ttlConfig match {
+      case None => ttl.map(_.toLong).getOrElse(0L)
+      case Some(config) =>
+        config.policy match {
+          case TTLPolicy.SetIfMissing =>
+            ttl match {
+              case Some(existingTTL) => existingTTL.toLong
+              case None              => computeTTLFromWritetime(config.value, writetime, nowMillis)
+            }
+          case TTLPolicy.Always =>
+            computeTTLFromWritetime(config.value, writetime, nowMillis)
+          case TTLPolicy.UpdateIfPresent =>
+            ttl match {
+              case Some(_) => computeTTLFromWritetime(config.value, writetime, nowMillis)
+              case None    => 0L
+            }
+        }
+    }
+
+  private def computeTTLFromWritetime(
+    ttlValue: Long,
+    writetime: Option[Long],
+    nowMillis: Long
+  ): Long =
+    writetime match {
+      case Some(writetimeMicros) =>
+        val ageSeconds = (nowMillis - writetimeMicros / 1000) / 1000
+        val computed = ttlValue - ageSeconds
+        if (computed > 0) computed else 1L
+      case None => 0L
+    }
+
   def explodeRow(
     row: Row,
     schema: StructType,
     primaryKeyOrdinals: Map[String, Int],
-    regularKeyOrdinals: Map[String, (Int, Int, Int)]
+    regularKeyOrdinals: Map[String, (Int, Int, Int)],
+    ttlConfig: Option[TTLConfig]
   ) =
     if (regularKeyOrdinals.isEmpty) List(row)
     else {
       val rowTimestampsToFields =
         regularKeyOrdinals
           .map { case (fieldName, (ordinal, ttlOrdinal, writetimeOrdinal)) =>
+            val ttl =
+              if (row.isNullAt(ttlOrdinal)) None
+              else Some(row.getInt(ttlOrdinal))
+            val writetime =
+              if (row.isNullAt(writetimeOrdinal)) None
+              else Some(row.getLong(writetimeOrdinal))
+            val effectiveTTL = computeEffectiveTTL(ttl, writetime, ttlConfig)
             (
               fieldName,
               if (row.isNullAt(ordinal)) CassandraOption.Null
               else CassandraOption.Value(row.get(ordinal)),
-              if (row.isNullAt(ttlOrdinal)) None
-              else Some(row.getInt(ttlOrdinal)),
-              if (row.isNullAt(writetimeOrdinal)) None
-              else Some(row.getLong(writetimeOrdinal))
+              if (effectiveTTL == 0L) None else Some(effectiveTTL),
+              writetime
             )
           }
           .groupBy { case (fieldName, value, ttl, writetime) =>
@@ -206,7 +261,8 @@ object Cassandra {
     df: DataFrame,
     timestampColumns: Option[TimestampColumns],
     origSchema: StructType,
-    tableDef: TableDef
+    tableDef: TableDef,
+    ttlConfig: Option[TTLConfig]
   ): DataFrame =
     timestampColumns match {
       case None => df
@@ -216,6 +272,10 @@ object Cassandra {
           origSchema.fields.map(_.name).toList,
           tableDef
         )
+
+        ttlConfig.foreach { config =>
+          log.info(s"Applying TTL of ${config.value}s with policy ${config.policy}")
+        }
 
         val broadcastPrimaryKeyOrdinals = spark.sparkContext.broadcast(primaryKeyOrdinals)
         val broadcastRegularKeyOrdinals = spark.sparkContext.broadcast(regularKeyOrdinals)
@@ -233,7 +293,8 @@ object Cassandra {
             _,
             broadcastSchema.value,
             broadcastPrimaryKeyOrdinals.value,
-            broadcastRegularKeyOrdinals.value
+            broadcastRegularKeyOrdinals.value,
+            ttlConfig
           )
         }(Encoders.row(finalSchema))
 
@@ -281,7 +342,8 @@ object Cassandra {
     */
   def explodeDataframeFromPerColumnMeta(
     spark: SparkSession,
-    df: DataFrame
+    df: DataFrame,
+    ttlConfig: Option[TTLConfig] = None
   ): (DataFrame, TimestampColumns) = {
     val (primaryKeyOrdinals, regularKeyOrdinals) = indexFieldsFromSchema(df.schema)
 
@@ -307,7 +369,8 @@ object Cassandra {
         _,
         broadcastSchema.value,
         broadcastPrimaryKeyOrdinals.value,
-        broadcastRegularKeyOrdinals.value
+        broadcastRegularKeyOrdinals.value,
+        ttlConfig
       )
     }(Encoders.row(finalSchema))
 
@@ -324,7 +387,8 @@ object Cassandra {
     source: SourceSettings.Cassandra,
     preserveTimes: Boolean,
     tokenRangesToSkip: Set[(Token[_], Token[_])],
-    skipExplosion: Boolean = false
+    skipExplosion: Boolean = false,
+    ttlConfig: Option[TTLConfig] = None
   ): SourceDataFrame = {
     val connector = Connectors.sourceConnector(spark.sparkContext.getConf, source)
     val consistencyLevel = source.consistencyLevel match {
@@ -394,7 +458,8 @@ object Cassandra {
         rawDataframe,
         selection.timestampColumns,
         origSchema,
-        tableDef
+        tableDef,
+        ttlConfig
       )
       SourceDataFrame(resultingDataframe, selection.timestampColumns, true)
     }

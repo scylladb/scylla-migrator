@@ -194,6 +194,14 @@ target:
   #writeTTLInS: 7776000
   # writetime in microseconds (sample 1640998861000 is Saturday, January 1, 2022 2:01:01 AM GMT+01:00 )
   #writeWritetimestampInuS: 1640998861000
+  # Optional TTL (in seconds) applied relative to each cell's write timestamp.
+  # Requires source preserveTimestamps: true. Only use when migrating into an empty target table.
+  # Accepts a plain number (defaults to set-if-missing policy) or "value:policy":
+  #   ttl: 7776000                       # apply only to cells without a TTL (set-if-missing)
+  #   ttl: "7776000:set-if-missing"      # same as above, explicit
+  #   ttl: "7776000:always"              # apply to all cells, overriding source TTL
+  #   ttl: "7776000:update-if-present"   # apply only to cells that already have a TTL
+  #ttl: 7776000
 
 # Example for loading into a DynamoDB target (for example, Scylla's Alternator):
 # target:

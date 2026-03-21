@@ -270,6 +270,13 @@ Apache Cassandra Target
     writeTTLInS: 7776000
     # Optional - writetime in microseconds (sample 1640998861000 is Saturday, January 1, 2022 2:01:01 AM GMT+01:00 )
     writeWritetimestampInuS: 1640998861000
+    # Optional TTL (in seconds) applied relative to each cell's write timestamp.
+    # Requires source preserveTimestamps: true. Only use when migrating into an empty target table.
+    # Accepts a plain number (defaults to set-if-missing) or "value:policy":
+    #   ttl: 7776000                       # apply only to cells without a TTL
+    #   ttl: "7776000:always"              # apply to all cells, overriding source TTL
+    #   ttl: "7776000:update-if-present"   # apply only to cells that already have a TTL
+    # ttl: 7776000
     # Optional - SSL as per https://github.com/scylladb/spark-cassandra-connector/blob/master/doc/reference.md#cassandra-ssl-connection-options
     sslOptions:
       clientAuthEnabled: false
