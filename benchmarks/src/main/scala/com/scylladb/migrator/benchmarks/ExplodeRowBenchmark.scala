@@ -33,7 +33,8 @@ class ExplodeRowBenchmark {
       singleTimestampRow,
       BenchmarkFixtures.timestampSchema,
       BenchmarkFixtures.primaryKeyOrdinals,
-      BenchmarkFixtures.regularKeyOrdinals
+      BenchmarkFixtures.regularKeyOrdinals,
+      ttlConfig = None
     )
 
   @Benchmark
@@ -42,7 +43,8 @@ class ExplodeRowBenchmark {
       multiTimestampRow,
       BenchmarkFixtures.timestampSchema,
       BenchmarkFixtures.primaryKeyOrdinals,
-      BenchmarkFixtures.regularKeyOrdinals
+      BenchmarkFixtures.regularKeyOrdinals,
+      ttlConfig = None
     )
 
   @Benchmark
@@ -51,7 +53,8 @@ class ExplodeRowBenchmark {
       BenchmarkFixtures.makeSimpleRow(1),
       BenchmarkFixtures.simpleSchema,
       BenchmarkFixtures.primaryKeyOrdinals,
-      regularKeyOrdinals = Map.empty
+      regularKeyOrdinals = Map.empty,
+      ttlConfig          = None
     )
 
   @Benchmark
@@ -60,7 +63,8 @@ class ExplodeRowBenchmark {
       wideSingleTimestampRow,
       BenchmarkFixtures.wideTimestampSchema,
       BenchmarkFixtures.widePrimaryKeyOrdinals,
-      BenchmarkFixtures.wideRegularKeyOrdinals
+      BenchmarkFixtures.wideRegularKeyOrdinals,
+      ttlConfig = None
     )
 
   @Benchmark
@@ -69,6 +73,7 @@ class ExplodeRowBenchmark {
       wideMultiTimestampRow,
       BenchmarkFixtures.wideTimestampSchema,
       BenchmarkFixtures.widePrimaryKeyOrdinals,
-      BenchmarkFixtures.wideRegularKeyOrdinals
+      BenchmarkFixtures.wideRegularKeyOrdinals,
+      ttlConfig = None
     )
 }

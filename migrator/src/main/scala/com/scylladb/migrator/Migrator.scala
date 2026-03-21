@@ -38,7 +38,8 @@ object Migrator {
             spark,
             cqlSource,
             cqlSource.preserveTimestamps,
-            migratorConfig.getSkipTokenRangesOrEmptySet
+            migratorConfig.getSkipTokenRangesOrEmptySet,
+            ttlConfig = scyllaTarget.ttl
           )
           ScyllaMigrator.migrate(migratorConfig, scyllaTarget, sourceDF)
         case (parquetSource: SourceSettings.Parquet, scyllaTarget: TargetSettings.Scylla) =>
