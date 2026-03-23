@@ -3,9 +3,11 @@ package com.scylladb.migrator.config
 import cats.implicits._
 import com.scylladb.migrator.AwsUtils
 import io.circe.syntax._
-import io.circe.{ Decoder, DecodingFailure, Encoder, Json }
+import io.circe.{ Decoder, DecodingFailure, Encoder, Json, JsonObject }
 import io.circe.generic.semiauto.{ deriveDecoder, deriveEncoder }
 import software.amazon.awssdk.services.dynamodb.model.BillingMode
+
+import scala.collection.immutable.ListMap
 
 case class DynamoDBEndpoint(host: String, port: Int) {
   def renderEndpoint = s"${host}:${port}"
@@ -56,6 +58,60 @@ object SourceSettings {
   ) extends SourceSettings {
     lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
       AwsUtils.computeFinalCredentials(credentials, endpoint, region)
+  }
+
+  /** @param schemaSampleSize
+    *   Number of records to sample for schema discovery (default: 1000). Values above 10K will
+    *   trigger a warning; schema discovery uses a synchronized callback so very large values add
+    *   lock contention.
+    * @param preserveTTL
+    *   When true, adds an 'aero_ttl' column (IntegerType) with the record's remaining TTL in
+    *   seconds. Records with no expiration will have TTL = -1. (default: false)
+    * @param preserveGeneration
+    *   When true, adds an 'aero_generation' column (IntegerType) with the record's generation
+    *   counter. (default: false)
+    * @param totalTimeoutMs
+    *   Total timeout in milliseconds for Aerospike operations. When not specified, defaults to
+    *   `socketTimeoutMs * 3` if socketTimeoutMs is set, otherwise 30000ms.
+    * @param maxPollRetries
+    *   Maximum consecutive poll timeouts before failing a partition (default: 5). With the default
+    *   pollTimeoutSeconds of 120, this means a partition can wait up to 10 minutes before failing.
+    * @param schemaDiscoveryStrategy
+    *   Controls how many partitions are scanned during schema discovery (default: "progressive").
+    *   "progressive" scans 8 -> 64 -> all partitions (stops after finding records). "single" scans
+    *   only 8 partitions (fastest startup, may miss bins in sparse data). "full" scans all
+    *   partitions (most thorough, may be slow on large clusters).
+    * @param maxConnsPerNode
+    *   Maximum number of connections to each Aerospike node (default: Aerospike client default).
+    * @param connPoolsPerNode
+    *   Number of connection pools per Aerospike node (default: Aerospike client default).
+    */
+  case class Aerospike(
+    hosts: Seq[String],
+    port: Option[Int],
+    namespace: String,
+    set: String,
+    bins: Option[Seq[String]],
+    splitCount: Option[Int],
+    schemaSampleSize: Option[Int],
+    queueSize: Option[Int],
+    credentials: Option[Credentials],
+    connectTimeoutMs: Option[Int],
+    socketTimeoutMs: Option[Int],
+    tlsName: Option[String],
+    schema: Option[ListMap[String, String]],
+    pollTimeoutSeconds: Option[Int],
+    preserveTTL: Option[Boolean],
+    preserveGeneration: Option[Boolean],
+    totalTimeoutMs: Option[Int],
+    maxScanRetries: Option[Int],
+    schemaDiscoveryStrategy: Option[SchemaDiscoveryStrategy],
+    maxPollRetries: Option[Int],
+    maxConnsPerNode: Option[Int],
+    connPoolsPerNode: Option[Int]
+  ) extends SourceSettings {
+    def ttlEnabled: Boolean = preserveTTL.getOrElse(false)
+    def generationEnabled: Boolean = preserveGeneration.getOrElse(false)
   }
 
   case class DynamoDBS3Export(
@@ -138,6 +194,28 @@ object SourceSettings {
     }
   }
 
+  // ListMap preserves insertion order from YAML, ensuring schema column order is deterministic.
+  // The standard Map may reorder keys for maps with 5+ entries.
+  private implicit val listMapStringDecoder: Decoder[ListMap[String, String]] =
+    Decoder.decodeJsonObject.emap { obj =>
+      val builder = ListMap.newBuilder[String, String]
+      val errors = List.newBuilder[String]
+      obj.toList.foreach { case (k, v) =>
+        v.asString match {
+          case Some(s) => builder += k -> s
+          case None    => errors += s"Expected string value for key '$k', got: ${v.noSpaces}"
+        }
+      }
+      val errs = errors.result()
+      if (errs.nonEmpty) Left(errs.mkString("; "))
+      else Right(builder.result())
+    }
+
+  private implicit val listMapStringEncoder: Encoder[ListMap[String, String]] =
+    Encoder.instance { m =>
+      Json.fromJsonObject(JsonObject.fromIterable(m.map { case (k, v) => k -> Json.fromString(v) }))
+    }
+
   implicit val decoder: Decoder[SourceSettings] = Decoder.instance { cursor =>
     cursor.get[String]("type").flatMap {
       case "cassandra" | "scylla" =>
@@ -148,6 +226,26 @@ object SourceSettings {
         deriveDecoder[DynamoDB].apply(cursor)
       case "dynamodb-s3-export" =>
         deriveDecoder[DynamoDBS3Export].apply(cursor)
+      case "aerospike" =>
+        deriveDecoder[Aerospike].apply(cursor).flatMap { a =>
+          val errors = List.newBuilder[String]
+          a.port.foreach(p => if (p <= 0 || p > 65535) errors += s"Invalid port: $p")
+          a.splitCount.foreach(s => if (s <= 0) errors += s"splitCount must be positive, got $s")
+          a.schemaSampleSize
+            .foreach(s => if (s <= 0) errors += s"schemaSampleSize must be positive, got $s")
+          a.queueSize.foreach(q => if (q <= 0) errors += s"queueSize must be positive, got $q")
+          a.pollTimeoutSeconds
+            .foreach(p => if (p <= 0) errors += s"pollTimeoutSeconds must be positive, got $p")
+          a.maxPollRetries
+            .foreach(r => if (r <= 0) errors += s"maxPollRetries must be positive, got $r")
+          a.maxConnsPerNode
+            .foreach(n => if (n <= 0) errors += s"maxConnsPerNode must be positive, got $n")
+          a.connPoolsPerNode
+            .foreach(n => if (n <= 0) errors += s"connPoolsPerNode must be positive, got $n")
+          val errs = errors.result()
+          if (errs.nonEmpty) Left(DecodingFailure(errs.mkString("; "), cursor.history))
+          else Right(a)
+        }
       case otherwise =>
         Left(DecodingFailure(s"Unknown source type: ${otherwise}", cursor.history))
     }
@@ -173,6 +271,11 @@ object SourceSettings {
       deriveEncoder[DynamoDBS3Export]
         .encodeObject(s)
         .add("type", Json.fromString("dynamodb-s3-export"))
+        .asJson
+    case s: Aerospike =>
+      deriveEncoder[Aerospike]
+        .encodeObject(s)
+        .add("type", Json.fromString("aerospike"))
         .asJson
   }
 }

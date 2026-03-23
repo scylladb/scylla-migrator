@@ -67,6 +67,9 @@ source:
 #     host: <host>
 #     port: <port>
 
+# Example for loading from Aerospike:
+# See config-aerospike.yaml.example for a complete Aerospike source configuration.
+
 # Example for loading from DynamoDB:
 # source:
 #   type: dynamodb

@@ -7,8 +7,10 @@ SHELL := bash
         start-services-scylla wait-for-services-scylla \
         start-services-cassandra wait-for-services-cassandra test-integration-cassandra \
         start-services-alternator wait-for-services-alternator \
+        start-services-aerospike wait-for-services-aerospike \
         test test-unit test-integration test-integration-scylla \
         test-integration-alternator \
+        test-integration-aerospike \
         test-integration-aws \
         test-benchmark test-benchmark-jmh test-benchmark-jmh-quick \
         test-benchmark-e2e test-benchmark-e2e-sanity test-benchmark-e2e-sanity-scylla \
@@ -16,6 +18,8 @@ SHELL := bash
         test-benchmark-e2e-scylla-parquet test-benchmark-e2e-parquet-scylla \
         test-benchmark-e2e-cassandra-parquet \
         test-benchmark-e2e-dynamodb-s3export test-benchmark-e2e-s3export-alternator \
+        test-benchmark-e2e-aerospike-scylla \
+        test-benchmark-e2e-sanity-aerospike \
         dump-logs
 
 COMPOSE_FILE := docker-compose-tests.yml
@@ -25,6 +29,7 @@ COVERAGE ?= false
 VERBOSE ?= false
 E2E_CQL_ROWS ?= 5000000
 E2E_DDB_ROWS ?= 500000
+E2E_AEROSPIKE_ROWS ?= 5000000
 
 ifeq ($(COVERAGE),true)
 SBT_COVERAGE_PREFIX := coverage
@@ -99,12 +104,12 @@ spark-image: ## Pull or build the Spark Docker image
 	else
 		echo "Cache miss — building from dockerfiles/spark"
 		docker build -t "$${IMAGE}" dockerfiles/spark
-		if [ -n "$${DOCKERHUB_USERNAME:-}" ] && [ -n "$${DOCKERHUB_TOKEN:-}" ]; then
+		if [ -n "$${GITHUB_ACTIONS:-}" ] && [ -n "$${DOCKERHUB_USERNAME:-}" ] && [ -n "$${DOCKERHUB_TOKEN:-}" ]; then
 			echo "$${DOCKERHUB_TOKEN}" | docker login -u "$${DOCKERHUB_USERNAME}" --password-stdin
 			docker push "$${IMAGE}"
 			echo "Pushed $${IMAGE} to cache"
 		else
-			echo "No Docker Hub credentials — skipping push"
+			echo "Not in CI or no Docker Hub credentials — skipping push"
 		fi
 	fi
 	docker tag "$${IMAGE}" spark-migrator
@@ -112,28 +117,35 @@ spark-image: ## Pull or build the Spark Docker image
 
 start-services: spark-image ## Start all Docker Compose test services
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
-	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
+	$(Q)sudo chmod -R a+rwX $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
 	docker compose -f $(COMPOSE_FILE) up -d
 
 start-services-scylla: spark-image ## Start services needed for Scylla integration tests
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
-	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
+	$(Q)sudo chmod -R a+rwX $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
 	docker compose -f $(COMPOSE_FILE) up -d cassandra cassandra5 cassandra3 cassandra2 scylla-source scylla spark-master spark-worker
 
 start-services-alternator: spark-image ## Start services needed for Alternator integration tests
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
-	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
+	$(Q)sudo chmod -R a+rwX $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
 	docker compose -f $(COMPOSE_FILE) up -d dynamodb scylla s3 spark-master spark-worker
+
+start-services-aerospike: spark-image ## Start services needed for Aerospike integration tests
+	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
+	$(Q)sudo chmod -R a+rwX $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
+	docker compose -f $(COMPOSE_FILE) up -d aerospike scylla spark-master spark-worker
 
 start-services-aws: spark-image ## Start only services needed for AWS tests
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
-	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
+	$(Q)sudo chmod -R a+rwX $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
 	docker compose -f $(COMPOSE_FILE) up -d scylla spark-master spark-worker
 
 wait-for-services: ## Wait for all test services to become ready
 	$(Q)$(call wait-for-port,8000)
 	$(call wait-for-port,8001)
 	$(call wait-for-port,4566)
+	echo "Waiting for Aerospike to be ready on port 3000"
+	$(call attempt,docker compose -f $(COMPOSE_FILE) exec aerospike asinfo -v status 2>/dev/null | grep -qw ok)
 	$(call wait-for-cql,scylla)
 	$(call wait-for-cql,cassandra)
 	$(call wait-for-cql,scylla-source)
@@ -154,6 +166,13 @@ wait-for-services-alternator: ## Wait for Alternator test services to become rea
 	$(Q)$(call wait-for-port,8000)
 	$(call wait-for-port,8001)
 	$(call wait-for-port,4566)
+	$(call wait-for-cql,scylla)
+	$(call wait-for-port,8080)
+	$(call wait-for-port,8081)
+
+wait-for-services-aerospike: ## Wait for Aerospike test services to become ready
+	$(Q)echo "Waiting for Aerospike to be ready on port 3000"
+	$(call attempt,docker compose -f $(COMPOSE_FILE) exec aerospike asinfo -v status 2>/dev/null | grep -qw ok)
 	$(call wait-for-cql,scylla)
 	$(call wait-for-port,8080)
 	$(call wait-for-port,8081)
@@ -180,7 +199,7 @@ endif
 
 start-services-cassandra: spark-image ## Start services for a single Cassandra version (CASSANDRA_VERSION=...)
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla ./tests/docker/$(_CASSANDRA_SERVICE)
-	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla ./tests/docker/$(_CASSANDRA_SERVICE)
+	$(Q)sudo chmod -R a+rwX $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla ./tests/docker/$(_CASSANDRA_SERVICE)
 	docker compose -f $(COMPOSE_FILE) up -d $(_CASSANDRA_SERVICE) scylla spark-master spark-worker
 
 wait-for-services-cassandra: ## Wait for a single Cassandra version to become ready (CASSANDRA_VERSION=...)
@@ -203,6 +222,32 @@ test-integration-scylla: ## Run all Scylla integration tests (requires all CQL s
 
 test-integration-alternator: ## Run Alternator integration tests only (excludes AWS and E2E benchmarks)
 	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.alternator.* com.scylladb.migrator.writers.* -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.AWS,com.scylladb.migrator.E2E" $(SBT_COVERAGE_SUFFIX)
+
+test-integration-aerospike: ## Run Aerospike integration tests only (excludes E2E benchmarks)
+	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.aerospike.* -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.E2E" $(SBT_COVERAGE_SUFFIX)
+
+# --- Per-version Aerospike source testing (AEROSPIKE_VERSION=6|7) ---
+AEROSPIKE_VERSION ?= 7
+ifeq ($(AEROSPIKE_VERSION),7)
+_AEROSPIKE_SERVICE := aerospike
+else
+_AEROSPIKE_SERVICE := aerospike$(AEROSPIKE_VERSION)
+endif
+
+start-services-aerospike-compat: spark-image ## Start services for a single Aerospike version (AEROSPIKE_VERSION=...)
+	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
+	$(Q)sudo chmod -R a+rwX $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
+	docker compose -f $(COMPOSE_FILE) up -d $(_AEROSPIKE_SERVICE) scylla spark-master spark-worker
+
+wait-for-services-aerospike-compat: ## Wait for a single Aerospike version to become ready (AEROSPIKE_VERSION=...)
+	$(Q)echo "Waiting for Aerospike ($(_AEROSPIKE_SERVICE)) to be ready"
+	$(call attempt,docker compose -f $(COMPOSE_FILE) exec $(_AEROSPIKE_SERVICE) asinfo -v status 2>/dev/null | grep -qw ok)
+	$(call wait-for-cql,scylla)
+	$(call wait-for-port,8080)
+	$(call wait-for-port,8081)
+
+test-integration-aerospike-compat: ## Run Aerospike integration tests for a specific version (AEROSPIKE_VERSION=...)
+	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.aerospike.* -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.E2E" $(SBT_COVERAGE_SUFFIX)
 
 test-integration-aws: ## Run AWS integration tests (requires services + AWS credentials)
 	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly -- --include-categories=com.scylladb.migrator.AWS" $(SBT_COVERAGE_SUFFIX)
@@ -248,6 +293,7 @@ test-benchmark-e2e: ## Run all E2E throughput benchmarks (requires services)
 	$(Q)$(MAKE) test-benchmark-e2e-cassandra-parquet
 	$(Q)$(MAKE) test-benchmark-e2e-dynamodb-s3export
 	$(Q)$(MAKE) test-benchmark-e2e-s3export-alternator
+	$(Q)$(MAKE) test-benchmark-e2e-aerospike-scylla
 
 test-benchmark-e2e-cassandra-scylla: ## Run Cassandra->Scylla E2E benchmarks
 	$(Q)sbt -De2e.cql.rows=$(E2E_CQL_ROWS) "testOnly com.scylladb.migrator.scylla.CassandraToScyllaE2EBenchmark"
@@ -272,3 +318,9 @@ test-benchmark-e2e-dynamodb-s3export: ## Run DynamoDB->S3Export E2E benchmark
 
 test-benchmark-e2e-s3export-alternator: ## Run S3Export->Alternator E2E benchmark (requires dynamodb-s3export to have run first)
 	$(Q)sbt -De2e.ddb.rows=$(E2E_DDB_ROWS) "testOnly com.scylladb.migrator.alternator.S3ExportToAlternatorE2EBenchmark"
+
+test-benchmark-e2e-aerospike-scylla: ## Run Aerospike->Scylla E2E benchmark
+	$(Q)sbt -De2e.aerospike.rows=$(E2E_AEROSPIKE_ROWS) "testOnly com.scylladb.migrator.aerospike.AerospikeToScyllaE2EBenchmark"
+
+test-benchmark-e2e-sanity-aerospike: ## Run Aerospike E2E sanity (small row count, for CI)
+	$(Q)$(MAKE) test-benchmark-e2e-aerospike-scylla E2E_AEROSPIKE_ROWS=1000

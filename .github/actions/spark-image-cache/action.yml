@@ -1,0 +1,21 @@
+name: Spark Image Cache
+description: Restore and load cached Spark Docker image
+
+outputs:
+  cache-hit:
+    description: Whether the Spark image cache was hit
+    value: ${{ steps.spark-cache.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Restore Spark Docker image cache
+      id: spark-cache
+      uses: actions/cache@v4
+      with:
+        path: /tmp/spark-image.tar
+        key: spark-image-${{ hashFiles('dockerfiles/spark/**') }}
+    - name: Load cached Spark image
+      if: steps.spark-cache.outputs.cache-hit == 'true'
+      run: docker load < /tmp/spark-image.tar
+      shell: bash
