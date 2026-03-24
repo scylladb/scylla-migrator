@@ -58,10 +58,25 @@ object Migrator {
               alternatorTarget: TargetSettings.DynamoDB
             ) =>
           AlternatorMigrator.migrateFromS3Export(s3Source, alternatorTarget, migratorConfig)
+        case (
+              aerospikeSource: SourceSettings.Aerospike,
+              scyllaTarget: TargetSettings.Scylla
+            ) =>
+          val sourceDF = readers.Aerospike.readDataframe(spark, aerospikeSource)
+          ScyllaMigrator.migrate(migratorConfig, scyllaTarget, sourceDF)
         case (source, target) =>
+          val validCombinations =
+            """Supported source -> target combinations:
+              |  Cassandra/Scylla -> Scylla
+              |  Cassandra/Scylla -> Parquet
+              |  Parquet          -> Scylla
+              |  DynamoDB         -> DynamoDB/Alternator
+              |  DynamoDB         -> S3 Export
+              |  S3 Export        -> DynamoDB/Alternator
+              |  Aerospike        -> Scylla""".stripMargin
           sys.error(
             s"Unsupported combination of source and target: " +
-              s"${source.getClass.getSimpleName} -> ${target.getClass.getSimpleName}"
+              s"${source.getClass.getSimpleName} -> ${target.getClass.getSimpleName}\n$validCombinations"
           )
       }
     } finally

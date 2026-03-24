@@ -11,6 +11,9 @@ on:
       - 'dockerfiles/**'
       - 'docker-compose-tests.yml'
       - '.github/workflows/**'
+      - 'tests/configurations/**'
+      - 'tests/docker/**'
+      - 'config*.yaml.example'
 
   pull_request:
     paths:
@@ -21,11 +24,15 @@ on:
       - 'dockerfiles/**'
       - 'docker-compose-tests.yml'
       - '.github/workflows/**'
+      - 'tests/configurations/**'
+      - 'tests/docker/**'
+      - 'config*.yaml.example'
 
 jobs:
   lint:
     name: Check formatting
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
@@ -44,6 +51,7 @@ jobs:
   test-unit:
     name: Unit tests
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
@@ -71,6 +79,7 @@ jobs:
     name: Integration tests (Scylla)
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
@@ -79,15 +88,8 @@ jobs:
           java-version: 17
           cache: sbt
       - uses: sbt/setup-sbt@v1
-      - name: Restore Spark Docker image cache
+      - uses: ./.github/actions/spark-image-cache
         id: spark-cache
-        uses: actions/cache@v4
-        with:
-          path: /tmp/spark-image.tar
-          key: spark-image-${{ hashFiles('dockerfiles/spark/**') }}
-      - name: Load cached Spark image
-        if: steps.spark-cache.outputs.cache-hit == 'true'
-        run: docker load < /tmp/spark-image.tar
       - name: Pre-create JAR directory and start services
         run: |
           mkdir -p migrator/target/scala-2.13
@@ -112,6 +114,9 @@ jobs:
       - name: Run E2E sanity tests (Scylla only)
         if: success()
         run: make test-benchmark-e2e-sanity-scylla
+      - name: Dump container logs on test failure
+        if: failure()
+        run: make dump-logs
       - name: Stop services
         if: always()
         run: make stop-services
@@ -131,6 +136,7 @@ jobs:
     name: Integration tests (Alternator)
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
@@ -139,15 +145,8 @@ jobs:
           java-version: 17
           cache: sbt
       - uses: sbt/setup-sbt@v1
-      - name: Restore Spark Docker image cache
+      - uses: ./.github/actions/spark-image-cache
         id: spark-cache
-        uses: actions/cache@v4
-        with:
-          path: /tmp/spark-image.tar
-          key: spark-image-${{ hashFiles('dockerfiles/spark/**') }}
-      - name: Load cached Spark image
-        if: steps.spark-cache.outputs.cache-hit == 'true'
-        run: docker load < /tmp/spark-image.tar
       - name: Pre-create JAR directory and start services
         run: |
           mkdir -p migrator/target/scala-2.13
@@ -169,7 +168,11 @@ jobs:
         run: make test-integration-alternator
         env:
           COVERAGE: ${{ github.event_name == 'push' && 'true' || 'false' }}
+      - name: Dump container logs on test failure
+        if: failure()
+        run: make dump-logs
       - name: Stop services
+        if: always()
         run: make stop-services
       - name: Save Spark image to cache
         if: steps.spark-cache.outputs.cache-hit != 'true'
@@ -183,10 +186,123 @@ jobs:
             tests/target/scala-2.13/scoverage-report/
             migrator/target/scala-2.13/scoverage-report/
 
+  test-integration-aerospike:
+    name: Integration tests (Aerospike)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: sbt
+      - uses: sbt/setup-sbt@v1
+      - name: Cache Coursier and SBT compilation
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            tests/target
+          key: sbt-aerospike-${{ hashFiles('build.sbt', 'project/**') }}
+          restore-keys: |
+            sbt-aerospike-
+      - uses: ./.github/actions/spark-image-cache
+        id: spark-cache
+      - name: Pre-create JAR directory and start services
+        run: |
+          mkdir -p migrator/target/scala-2.13
+          make start-services-aerospike
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Download assembly JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: migrator-jar
+          path: migrator/target/scala-2.13/
+      - name: Wait for services
+        run: make wait-for-services-aerospike
+      - name: Dump container logs on failure
+        if: failure()
+        run: make dump-logs
+      - name: Run Aerospike integration tests
+        run: make test-integration-aerospike
+        env:
+          COVERAGE: ${{ github.event_name == 'push' && 'true' || 'false' }}
+      - name: Run E2E sanity tests (Aerospike)
+        if: success()
+        run: make test-benchmark-e2e-sanity-aerospike
+      - name: Dump container logs on test failure
+        if: failure()
+        run: make dump-logs
+      - name: Stop services
+        if: always()
+        run: make stop-services
+      - name: Save Spark image to cache
+        if: steps.spark-cache.outputs.cache-hit != 'true'
+        run: docker save spark-migrator -o /tmp/spark-image.tar
+      - name: Upload coverage report
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-aerospike
+          path: |
+            tests/target/scala-2.13/scoverage-report/
+            migrator/target/scala-2.13/scoverage-report/
+
+  test-aerospike-compat:
+    name: Aerospike 6.x compat
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: sbt
+      - uses: sbt/setup-sbt@v1
+      - uses: ./.github/actions/spark-image-cache
+        id: spark-cache
+      - name: Pre-create JAR directory and start services
+        run: |
+          mkdir -p migrator/target/scala-2.13
+          make start-services-aerospike-compat AEROSPIKE_VERSION=6
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Download assembly JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: migrator-jar
+          path: migrator/target/scala-2.13/
+      - name: Wait for services
+        run: make wait-for-services-aerospike-compat AEROSPIKE_VERSION=6
+      - name: Dump container logs on failure
+        if: failure()
+        run: make dump-logs
+      - name: Run Aerospike 6.x integration tests
+        run: make test-integration-aerospike-compat AEROSPIKE_VERSION=6
+        env:
+          AEROSPIKE_PORT: 3001
+      - name: Dump container logs on test failure
+        if: failure()
+        run: make dump-logs
+      - name: Stop services
+        if: always()
+        run: make stop-services
+      - name: Save Spark image to cache
+        if: steps.spark-cache.outputs.cache-hit != 'true'
+        run: docker save spark-migrator -o /tmp/spark-image.tar
+
   test-cassandra-compat:
     name: Cassandra ${{ matrix.version }}.x compat
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -199,15 +315,8 @@ jobs:
           java-version: 17
           cache: sbt
       - uses: sbt/setup-sbt@v1
-      - name: Restore Spark Docker image cache
+      - uses: ./.github/actions/spark-image-cache
         id: spark-cache
-        uses: actions/cache@v4
-        with:
-          path: /tmp/spark-image.tar
-          key: spark-image-${{ hashFiles('dockerfiles/spark/**') }}
-      - name: Load cached Spark image
-        if: steps.spark-cache.outputs.cache-hit == 'true'
-        run: docker load < /tmp/spark-image.tar
       - name: Pre-create JAR directory and start services
         run: |
           mkdir -p migrator/target/scala-2.13
@@ -227,6 +336,9 @@ jobs:
         run: make dump-logs
       - name: Run Cassandra ${{ matrix.version }}.x integration tests
         run: make test-integration-cassandra CASSANDRA_VERSION=${{ matrix.version }}
+      - name: Dump container logs on test failure
+        if: failure()
+        run: make dump-logs
       - name: Stop services
         if: always()
         run: make stop-services

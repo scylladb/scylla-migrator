@@ -9,6 +9,45 @@ services:
       - "8001:8000"
     working_dir: /home/dynamodblocal
 
+  aerospike:
+    # Aerospike Server 7.x is AGPL v3 licensed. Used here only for integration testing.
+    image: aerospike/aerospike-server:7.2
+    volumes:
+      - ./tests/docker/aerospike/aerospike.conf:/etc/aerospike/aerospike.conf
+    ports:
+      - "3000:3000"
+    expose:
+      - 3000
+    healthcheck:
+      test: ["CMD", "asinfo", "-v", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  aerospike6:
+    # Aerospike 6.4 — minimum supported version (scanPartitions requires 6.0+).
+    # Network alias "aerospike" allows Spark configs to connect without modification.
+    # NOTE: Do not run aerospike and aerospike6 simultaneously — they share the "aerospike"
+    # alias. The compat tests start only one version at a time via make targets.
+    image: aerospike/aerospike-server:6.4
+    volumes:
+      - ./tests/docker/aerospike/aerospike.conf:/etc/aerospike/aerospike.conf
+    ports:
+      - "3001:3000"
+    expose:
+      - 3000
+    networks:
+      default:
+        aliases:
+          - aerospike
+    healthcheck:
+      test: ["CMD", "asinfo", "-v", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   cassandra:
     image: cassandra:4.1
     environment:
@@ -58,7 +97,7 @@ services:
       - 9046
 
   scylla-source:
-    image: scylladb/scylla:latest
+    image: scylladb/scylla:2025.1
     volumes:
       - "./tests/docker/scylla-source:/var/lib/scylla"
     ports:
@@ -73,7 +112,7 @@ services:
       --alternator-write-isolation only_rmw_uses_lwt
       --tablets-mode-for-new-keyspaces disabled
   scylla:
-    image: scylladb/scylla:latest
+    image: scylladb/scylla:2025.1
     volumes:
       - "./tests/docker/scylla:/var/lib/scylla"
     ports:
@@ -94,7 +133,6 @@ services:
       - DEBUG=${DEBUG:-0}
     volumes:
       - "./tests/docker/s3:/var/lib/localstack"
-      - "/var/run/docker.sock:/var/run/docker.sock"
 
   spark-master:
     image: ${SPARK_IMAGE:-spark-migrator}
@@ -105,9 +143,9 @@ services:
     expose:
       - 5005
     ports:
-      - 4040:4040
-      - 5005:5005
-      - 8080:8080
+      - 127.0.0.1:4040:4040
+      - 127.0.0.1:5005:5005
+      - 127.0.0.1:8080:8080
     volumes:
       - ./migrator/target/scala-2.13:/jars
       - ./tests/src/test/configurations:/app/configurations
@@ -127,8 +165,8 @@ services:
     expose:
       - 5006
     ports:
-      - 5006:5006
-      - 8081:8081
+      - 127.0.0.1:5006:5006
+      - 127.0.0.1:8081:8081
     volumes:
       - ./tests/docker/parquet:/app/parquet
       - ./tests/docker/aws-profile:/root/.aws
