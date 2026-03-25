@@ -5,8 +5,8 @@ import software.amazon.awssdk.services.dynamodb.model.{ AttributeValue, PutItemR
 
 import scala.jdk.CollectionConverters._
 
-/** Tests DynamoDB→Alternator migration across the full matrix of Scylla versions,
-  * keyspace types (vnodes vs tablets) and billing modes (PAY_PER_REQUEST vs PROVISIONED).
+/** Tests DynamoDB→Alternator migration across the full matrix of Scylla versions, keyspace types
+  * (vnodes vs tablets) and billing modes (PAY_PER_REQUEST vs PROVISIONED).
   *
   * The matrix covers:
   *   - Old Scylla (< 2025.1.4): does not reject INDEXES consumed capacity
@@ -26,8 +26,8 @@ abstract class BillingModeTest(val scyllaTarget: ScyllaAlternatorTarget, configF
   withTable("BillingModeTest").test(
     s"${scyllaTarget.label}: migrate items to Alternator"
   ) { tableName =>
-    val keys    = Map("id"  -> AttributeValue.fromS("billing-mode-test-id"))
-    val attrs   = Map("foo" -> AttributeValue.fromS("bar"))
+    val keys = Map("id" -> AttributeValue.fromS("billing-mode-test-id"))
+    val attrs = Map("foo" -> AttributeValue.fromS("bar"))
     val itemData = keys ++ attrs
 
     sourceDDb().putItem(PutItemRequest.builder().tableName(tableName).item(itemData.asJava).build())
@@ -41,25 +41,25 @@ abstract class BillingModeTest(val scyllaTarget: ScyllaAlternatorTarget, configF
 }
 
 /** Old Scylla (< 2025.1.4) with PAY_PER_REQUEST billing. */
-class OldScyllaTest
-    extends BillingModeTest(
+class OldScyllaTest extends BillingModeTest(
       ScyllaAlternatorTarget.OldScylla,
-      "dynamodb-to-alternator-old-scylla.yaml")
+      "dynamodb-to-alternator-old-scylla.yaml"
+    )
 
 /** New Scylla (> 2025.1.4) with vnodes keyspace and PROVISIONED billing. */
-class NewScyllaVnodesProvisionedTest
-    extends BillingModeTest(
+class NewScyllaVnodesProvisionedTest extends BillingModeTest(
       ScyllaAlternatorTarget.VnodesNewScylla,
-      "dynamodb-to-alternator-vnodes-provisioned.yaml")
+      "dynamodb-to-alternator-vnodes-provisioned.yaml"
+    )
 
 /** New Scylla (> 2025.1.4) with tablets keyspace and PAY_PER_REQUEST billing. */
-class NewScyllaTabletsPayPerRequestTest
-    extends BillingModeTest(
+class NewScyllaTabletsPayPerRequestTest extends BillingModeTest(
       ScyllaAlternatorTarget.TabletsNewScylla,
-      "dynamodb-to-alternator-tablets-pay-per-request.yaml")
+      "dynamodb-to-alternator-tablets-pay-per-request.yaml"
+    )
 
 /** New Scylla (> 2025.1.4) with tablets keyspace and PROVISIONED billing. */
-class NewScyllaTabletsProvisionedTest
-    extends BillingModeTest(
+class NewScyllaTabletsProvisionedTest extends BillingModeTest(
       ScyllaAlternatorTarget.TabletsNewScylla,
-      "dynamodb-to-alternator-tablets-provisioned.yaml")
+      "dynamodb-to-alternator-tablets-provisioned.yaml"
+    )

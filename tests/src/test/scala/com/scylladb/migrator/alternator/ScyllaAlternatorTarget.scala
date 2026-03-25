@@ -15,7 +15,8 @@ case class ScyllaAlternatorTarget(
   label: String,
   alternatorPort: Int,
   cqlPort: Int,
-  dockerHost: String)
+  dockerHost: String
+)
 
 object ScyllaAlternatorTarget {
 

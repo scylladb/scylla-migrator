@@ -39,7 +39,8 @@ trait MigratorSuite extends munit.FunSuite {
   /** Client of a source DynamoDB instance */
   def sourceDDb: Fixture[DynamoDbClient]
 
-  /** The host port of the target Alternator instance. Override to test against a different target. */
+  /** The host port of the target Alternator instance. Override to test against a different target.
+    */
   def targetAlternatorPort: Int = 8000
 
   /** Client of a target Alternator instance */
