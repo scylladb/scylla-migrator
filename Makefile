@@ -19,6 +19,8 @@ SHELL := bash
         dump-logs
 
 COMPOSE_FILE := docker-compose-tests.yml
+COMPOSE_DYNAMODB := docker-compose-dynamodb.yml
+COMPOSE_SCYLLA := docker-compose-scylla.yml
 CACHE_REPO ?= scylladb/migrator-cache
 DOCKER_IMAGE ?= scylladb/scylla-migrator
 DOCKER_TAG ?= latest
@@ -27,6 +29,20 @@ COVERAGE ?= false
 VERBOSE ?= false
 E2E_CQL_ROWS ?= 5000000
 E2E_DDB_ROWS ?= 500000
+
+# ScyllaDB version and storage mode for DynamoDB/Alternator tests
+SCYLLA_VERSION ?= latest
+TABLETS_MODE ?= vnodes
+
+ifeq ($(TABLETS_MODE),vnodes)
+COMPOSE_DYNAMODB_FILES := -f $(COMPOSE_DYNAMODB) -f docker-compose-vnodes.yml
+COMPOSE_SCYLLA_FILES := -f $(COMPOSE_SCYLLA) -f docker-compose-vnodes-scylla.yml
+else
+COMPOSE_DYNAMODB_FILES := -f $(COMPOSE_DYNAMODB)
+COMPOSE_SCYLLA_FILES := -f $(COMPOSE_SCYLLA)
+endif
+
+export SCYLLA_VERSION
 
 ifeq ($(COVERAGE),true)
 SBT_COVERAGE_PREFIX := coverage
@@ -123,17 +139,19 @@ start-services: ## Start all Docker Compose test services
 start-services-scylla: ## Start services needed for Scylla integration tests
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla ./tests/docker/scylla-source
 	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla ./tests/docker/scylla-source
-	docker compose -f $(COMPOSE_FILE) up -d cassandra scylla-source scylla
+	docker compose $(COMPOSE_SCYLLA_FILES) up -d cassandra scylla-source scylla
 
-start-services-alternator: ## Start services needed for Alternator integration tests
+start-services-dynamodb: ## Start services for DynamoDB integration tests (SCYLLA_VERSION=..., TABLETS_MODE=...)
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
 	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
-	docker compose -f $(COMPOSE_FILE) up -d dynamodb scylla s3
+	docker compose $(COMPOSE_DYNAMODB_FILES) up -d
+
+start-services-alternator: start-services-dynamodb ## Alias for start-services-dynamodb
 
 start-services-aws: ## Start only services needed for AWS tests
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
 	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
-	docker compose -f $(COMPOSE_FILE) up -d scylla
+	docker compose $(COMPOSE_DYNAMODB_FILES) up -d scylla
 
 wait-for-services: ## Wait for all test services to become ready
 	$(Q)($(call wait-for-port,8000)) & p1=$$!
@@ -150,12 +168,14 @@ wait-for-services-scylla: ## Wait for Scylla test services to become ready
 	($(call wait-for-cql,scylla)) & p3=$$!
 	wait $$p1; wait $$p2; wait $$p3
 
-wait-for-services-alternator: ## Wait for Alternator test services to become ready
+wait-for-services-dynamodb: ## Wait for DynamoDB test services to become ready
 	$(Q)($(call wait-for-port,8000)) & p1=$$!
 	($(call wait-for-port,8001)) & p2=$$!
 	($(call wait-for-port,4566)) & p3=$$!
 	($(call wait-for-cql,scylla)) & p4=$$!
 	wait $$p1; wait $$p2; wait $$p3; wait $$p4
+
+wait-for-services-alternator: wait-for-services-dynamodb ## Alias for wait-for-services-dynamodb
 
 wait-for-services-aws: ## Wait for AWS test services to become ready
 	$(Q)($(call wait-for-port,8000)) & p1=$$!
@@ -165,8 +185,32 @@ wait-for-services-aws: ## Wait for AWS test services to become ready
 stop-services: ## Stop all Docker Compose test services
 	$(Q)docker compose -f $(COMPOSE_FILE) down
 
-dump-logs: ## Dump Docker Compose container logs
-	$(Q)docker compose -f $(COMPOSE_FILE) logs
+stop-services-scylla: ## Stop Scylla test services
+	$(Q)docker compose $(COMPOSE_SCYLLA_FILES) down
+
+stop-services-dynamodb: ## Stop DynamoDB test services
+	$(Q)docker compose $(COMPOSE_DYNAMODB_FILES) down
+
+dump-logs: ## Dump Docker Compose container logs (per service)
+	$(Q)for svc in $$(docker compose -f $(COMPOSE_FILE) config --services 2>/dev/null); do \
+		echo "========== $$svc =========="; \
+		docker compose -f $(COMPOSE_FILE) logs --tail=50 "$$svc" 2>&1 || true; \
+		echo; \
+	done
+
+dump-logs-scylla: ## Dump Scylla test service logs (per service)
+	$(Q)for svc in $$(docker compose $(COMPOSE_SCYLLA_FILES) config --services 2>/dev/null); do \
+		echo "========== $$svc =========="; \
+		docker compose $(COMPOSE_SCYLLA_FILES) logs --tail=50 "$$svc" 2>&1 || true; \
+		echo; \
+	done
+
+dump-logs-dynamodb: ## Dump DynamoDB test service logs (per service)
+	$(Q)for svc in $$(docker compose $(COMPOSE_DYNAMODB_FILES) config --services 2>/dev/null); do \
+		echo "========== $$svc =========="; \
+		docker compose $(COMPOSE_DYNAMODB_FILES) logs --tail=50 "$$svc" 2>&1 || true; \
+		echo; \
+	done
 
 # --- Per-version Cassandra source testing (CASSANDRA_VERSION=2|3|4|5) ---
 # Docker service name: "cassandra" for v4, "cassandraN" for others
@@ -179,7 +223,7 @@ endif
 start-services-cassandra: ## Start services for a single Cassandra version (CASSANDRA_VERSION=...)
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla ./tests/docker/$(_CASSANDRA_SERVICE)
 	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla ./tests/docker/$(_CASSANDRA_SERVICE)
-	docker compose -f $(COMPOSE_FILE) up -d $(_CASSANDRA_SERVICE) scylla
+	docker compose $(COMPOSE_SCYLLA_FILES) up -d $(_CASSANDRA_SERVICE) scylla
 
 wait-for-services-cassandra: ## Wait for a single Cassandra version to become ready (CASSANDRA_VERSION=...)
 	$(Q)($(call wait-for-cql,$(_CASSANDRA_SERVICE))) & p1=$$!
@@ -198,8 +242,10 @@ test-integration: ## Run integration tests (requires services, excludes AWS, ben
 test-integration-scylla: ## Run Scylla integration tests (Cassandra compat tests run in their own matrix job)
 	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.scylla.* -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.E2E,com.scylladb.migrator.CassandraCompat" $(SBT_COVERAGE_SUFFIX)
 
-test-integration-alternator: ## Run Alternator integration tests only (excludes AWS and E2E benchmarks)
+test-integration-dynamodb: ## Run DynamoDB/Alternator integration tests (excludes AWS and E2E)
 	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.alternator.* com.scylladb.migrator.writers.* -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.AWS,com.scylladb.migrator.E2E" $(SBT_COVERAGE_SUFFIX)
+
+test-integration-alternator: test-integration-dynamodb ## Alias for test-integration-dynamodb
 
 test-integration-aws: ## Run AWS integration tests (requires services + AWS credentials)
 	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly -- --include-categories=com.scylladb.migrator.AWS" $(SBT_COVERAGE_SUFFIX)

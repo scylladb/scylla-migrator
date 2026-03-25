@@ -1,0 +1,32 @@
+source:
+  type: dynamodb
+  table: Issue103Items
+  region: dummy
+  endpoint:
+    host: http://dynamodb
+    port: 8000
+  credentials:
+    accessKey: dummy
+    secretKey: dummy
+  maxMapTasks: 2
+  scanSegments: 10
+
+target:
+  type: dynamodb
+  table: Issue103Items
+  region: dummy
+  endpoint:
+    host: http://scylla
+    port: 8000
+  credentials:
+    accessKey: dummy
+    secretKey: dummy
+  maxMapTasks: 1
+  streamChanges: false
+  removeConsumedCapacity: true
+  billingMode: PROVISIONED
+
+# Below are unused but mandatory settings
+savepoints:
+  path: /app/savepoints
+  intervalSeconds: 300

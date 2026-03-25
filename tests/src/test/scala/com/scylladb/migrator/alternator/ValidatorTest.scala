@@ -16,9 +16,15 @@ class ValidatorTest extends MigratorSuiteWithDynamoDBLocal {
 
   override val munitTimeout: Duration = 120.seconds
 
-  withTable("BasicTest").test("Validate migration") { tableName =>
-    val configFile = "dynamodb-to-alternator-basic.yaml"
+  withTable("BasicTest").test("Validate migration (PAY_PER_REQUEST)") { tableName =>
+    runValidatorTest(tableName, "dynamodb-to-alternator-basic.yaml")
+  }
 
+  withTable("BasicTest").test("Validate migration (PROVISIONED)") { tableName =>
+    runValidatorTest(tableName, "dynamodb-to-alternator-basic-provisioned.yaml")
+  }
+
+  private def runValidatorTest(tableName: String, configFile: String): Unit = {
     val keys = Map("id" -> AttributeValue.fromS("12345"))
     val attrs = Map("foo" -> AttributeValue.fromS("bar"))
     val itemData = keys ++ attrs

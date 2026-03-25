@@ -1,0 +1,34 @@
+services:
+
+  dynamodb:
+    command: "-jar DynamoDBLocal.jar -sharedDb -inMemory"
+    image: "amazon/dynamodb-local:2.5.3"
+    expose:
+      - 8001
+    ports:
+      - "8001:8000"
+    working_dir: /home/dynamodblocal
+
+  scylla:
+    image: scylladb/scylla:${SCYLLA_VERSION:-latest}
+    volumes:
+      - "./tests/docker/scylla:/var/lib/scylla"
+    ports:
+      - "8000:8000"
+      - "9042:9042"
+    command: >
+      --smp 1
+      --memory 2048M
+      --alternator-port 8000
+      --alternator-write-isolation only_rmw_uses_lwt
+
+  s3:
+    image: localstack/localstack:s3-community-archive
+    ports:
+      - "127.0.0.1:4566:4566"            # LocalStack Gateway
+    environment:
+      - DEBUG=${DEBUG:-0}
+    volumes:
+      - "./tests/docker/s3:/var/lib/localstack"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+

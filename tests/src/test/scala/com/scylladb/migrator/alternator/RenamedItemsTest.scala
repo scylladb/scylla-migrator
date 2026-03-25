@@ -7,7 +7,15 @@ import scala.jdk.CollectionConverters._
 
 class RenamedItemsTest extends MigratorSuiteWithDynamoDBLocal {
 
-  withTable("RenamedItems").test("Rename items along the migration") { tableName =>
+  withTable("RenamedItems").test("Rename items along the migration (PAY_PER_REQUEST)") { tableName =>
+    runRenameTest(tableName, "dynamodb-to-alternator-renames.yaml")
+  }
+
+  withTable("RenamedItems").test("Rename items along the migration (PROVISIONED)") { tableName =>
+    runRenameTest(tableName, "dynamodb-to-alternator-renames-provisioned.yaml")
+  }
+
+  private def runRenameTest(tableName: String, configFile: String): Unit = {
     // Insert several items
     val keys1 = Map("id" -> AttributeValue.fromS("12345"))
     val attrs1 = Map("foo" -> AttributeValue.fromS("bar"))
@@ -28,7 +36,7 @@ class RenamedItemsTest extends MigratorSuiteWithDynamoDBLocal {
     )
 
     // Perform the migration
-    successfullyPerformMigration("dynamodb-to-alternator-renames.yaml")
+    successfullyPerformMigration(configFile)
 
     val renamedItem1Data =
       item1Data + ("quux" -> item1Data("foo")) - "foo"

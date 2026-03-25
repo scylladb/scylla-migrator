@@ -7,7 +7,16 @@ import scala.jdk.CollectionConverters._
 
 class BasicMigrationTest extends MigratorSuiteWithDynamoDBLocal {
 
-  withTable("BasicTest").test("Read from source and write to target") { tableName =>
+  withTable("BasicTest").test("Read from source and write to target (PAY_PER_REQUEST)") {
+    tableName =>
+      runBasicMigration(tableName, "dynamodb-to-alternator-basic.yaml")
+  }
+
+  withTable("BasicTest").test("Read from source and write to target (PROVISIONED)") { tableName =>
+    runBasicMigration(tableName, "dynamodb-to-alternator-basic-provisioned.yaml")
+  }
+
+  private def runBasicMigration(tableName: String, configFile: String): Unit = {
     val keys = Map("id" -> AttributeValue.fromS("12345"))
     val attrs = Map("foo" -> AttributeValue.fromS("bar"))
     val itemData = keys ++ attrs
@@ -16,7 +25,7 @@ class BasicMigrationTest extends MigratorSuiteWithDynamoDBLocal {
     sourceDDb().putItem(PutItemRequest.builder().tableName(tableName).item(itemData.asJava).build())
 
     // Perform the migration
-    successfullyPerformMigration("dynamodb-to-alternator-basic.yaml")
+    successfullyPerformMigration(configFile)
 
     checkSchemaWasMigrated(tableName)
 
