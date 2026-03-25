@@ -40,6 +40,12 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      - name: Ensure Dockerfile.release exists
+        run: |
+          if [ ! -f Dockerfile.release ]; then
+            git show origin/master:Dockerfile.release > Dockerfile.release
+          fi
+
       - name: Resolve Docker tags
         id: tags
         run: |
