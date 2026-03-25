@@ -1,5 +1,5 @@
 # Stage 1: Build the assembly JAR
-FROM openjdk:17-jdk-slim AS build
+FROM eclipse-temurin:17-jdk AS build
 
 RUN apt-get update && apt-get install -y curl gnupg && \
     echo "deb https://repo.scala-sbt.org/scalasbt/debian all main" | tee /etc/apt/sources.list.d/sbt.list && \
@@ -9,8 +9,6 @@ RUN apt-get update && apt-get install -y curl gnupg && \
 
 WORKDIR /app
 COPY . /app
-
-ENV JAVA_HOME=/usr/local/openjdk-17
 
 RUN export TERM=xterm-color && sbt -mem 8192 migrator/assembly
 
