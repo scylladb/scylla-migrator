@@ -99,6 +99,25 @@ object Scylla {
       }
     }
 
+  /** Build the column selector for `saveToCassandra`, excluding metadata columns (ttl, writetime)
+    * that are consumed by WriteConf via TTLOption.perRow / TimestampOption.perRow rather than
+    * written as actual table columns.
+    */
+  private[writers] def buildColumnSelector(
+    schema: StructType,
+    timestampColumns: Option[TimestampColumns]
+  ): SomeColumns = {
+    val metaColumnNames =
+      timestampColumns.map(tc => Set(tc.ttl, tc.writeTime)).getOrElse(Set.empty)
+    SomeColumns(
+      ArraySeq.unsafeWrapArray(
+        schema.fields.collect {
+          case f if !metaColumnNames.contains(f.name) => f.name: ColumnRef
+        }
+      ): _*
+    )
+  }
+
   def writeDataframe(
     target: TargetSettings.Scylla,
     renames: List[Rename],
@@ -167,9 +186,7 @@ object Scylla {
     log.info("Schema after renames:")
     log.info(renamedSchema.treeString)
 
-    val columnSelector = SomeColumns(
-      ArraySeq.unsafeWrapArray(renamedSchema.fields.map(_.name: ColumnRef)): _*
-    )
+    val columnSelector = buildColumnSelector(renamedSchema, timestampColumns)
 
     // Spark's conversion from its internal Decimal type to java.math.BigDecimal
     // pads the resulting value with trailing zeros corresponding to the scale of the
