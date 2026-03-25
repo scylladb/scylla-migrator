@@ -58,6 +58,22 @@ object SourceSettings {
       AwsUtils.computeFinalCredentials(credentials, endpoint, region)
   }
 
+  case class MySQL(
+    host: String,
+    port: Int,
+    database: String,
+    table: String,
+    credentials: Credentials,
+    primaryKey: Option[List[String]],
+    partitionColumn: Option[String],
+    numPartitions: Option[Int],
+    lowerBound: Option[Long],
+    upperBound: Option[Long],
+    fetchSize: Int,
+    where: Option[String],
+    connectionProperties: Option[Map[String, String]]
+  ) extends SourceSettings
+
   case class DynamoDBS3Export(
     bucket: String,
     manifestKey: String,
@@ -148,6 +164,8 @@ object SourceSettings {
         deriveDecoder[DynamoDB].apply(cursor)
       case "dynamodb-s3-export" =>
         deriveDecoder[DynamoDBS3Export].apply(cursor)
+      case "mysql" =>
+        deriveDecoder[MySQL].apply(cursor)
       case otherwise =>
         Left(DecodingFailure(s"Unknown source type: ${otherwise}", cursor.history))
     }
@@ -173,6 +191,11 @@ object SourceSettings {
       deriveEncoder[DynamoDBS3Export]
         .encodeObject(s)
         .add("type", Json.fromString("dynamodb-s3-export"))
+        .asJson
+    case s: MySQL =>
+      deriveEncoder[MySQL]
+        .encodeObject(s)
+        .add("type", Json.fromString("mysql"))
         .asJson
   }
 }

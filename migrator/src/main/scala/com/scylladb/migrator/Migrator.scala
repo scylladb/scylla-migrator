@@ -41,6 +41,10 @@ object Migrator {
             migratorConfig.getSkipTokenRangesOrEmptySet
           )
           ScyllaMigrator.migrate(migratorConfig, scyllaTarget, sourceDF)
+        case (mysqlSource: SourceSettings.MySQL, scyllaTarget: TargetSettings.Scylla) =>
+          log.info("Starting MySQL to ScyllaDB migration")
+          val sourceDF = readers.MySQL.readDataframe(spark, mysqlSource)
+          ScyllaMigrator.migrate(migratorConfig, scyllaTarget, sourceDF)
         case (parquetSource: SourceSettings.Parquet, scyllaTarget: TargetSettings.Scylla) =>
           readers.Parquet.migrateToScylla(migratorConfig, parquetSource, scyllaTarget)(spark)
         case (cqlSource: SourceSettings.Cassandra, parquetTarget: TargetSettings.Parquet) =>
