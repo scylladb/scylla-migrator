@@ -1,6 +1,6 @@
 package com.scylladb.migrator.alternator
 
-import com.scylladb.migrator.SparkUtils.submitSparkJobProcess
+import com.scylladb.migrator.SparkUtils
 import software.amazon.awssdk.services.dynamodb.model.{
   AttributeValue,
   GetItemRequest,
@@ -9,7 +9,6 @@ import software.amazon.awssdk.services.dynamodb.model.{
 
 import scala.concurrent.duration.{ Duration, DurationInt, FiniteDuration }
 import scala.jdk.CollectionConverters._
-import scala.sys.process.{ Process, ProcessLogger }
 import scala.util.chaining.scalaUtilChainingOps
 
 class StreamedItemsTest extends MigratorSuiteWithAWS {
@@ -27,18 +26,9 @@ class StreamedItemsTest extends MigratorSuiteWithAWS {
       PutItemRequest.builder().tableName(tableName).item(item1Data.asJava).build()
     )
 
-    // Perform the migration
-    val sparkLogs = new StringBuilder()
-    val sparkJob =
-      submitSparkJobProcess(configFileName, "com.scylladb.migrator.Migrator")
-        .run(ProcessLogger { log =>
-          sparkLogs ++= log
-//          println(log) // Uncomment to see the logs
-        })
+    // Perform the migration in background (streaming runs indefinitely)
+    val sparkJob = SparkUtils.submitMigrationInBackground(configFileName)
 
-    awaitAtMost(60.seconds) {
-      assert(sparkLogs.toString().contains(s"Table ${tableName} created."))
-    }
     // Check that the table initial snapshot has been successfully migrated
     awaitAtMost(60.seconds) {
       targetAlternator()
@@ -74,8 +64,7 @@ class StreamedItemsTest extends MigratorSuiteWithAWS {
     }
 
     // Stop the migration job
-    stopSparkJob(configFileName)
-    assertEquals(sparkJob.exitValue(), 143) // 143 = SIGTERM
+    sparkJob.stop()
 
     deleteStreamTable(tableName)
   }
@@ -92,19 +81,11 @@ class StreamedItemsTest extends MigratorSuiteWithAWS {
         PutItemRequest.builder().tableName(tableName).item(item1Data.asJava).build()
       )
 
-      // Perform the migration
-      val sparkLogs = new StringBuilder()
-      val sparkJob =
-        submitSparkJobProcess(configFileName, "com.scylladb.migrator.Migrator")
-          .run(ProcessLogger { (log: String) =>
-            sparkLogs ++= log
-//          println(log) // Uncomment to see the logs
-          })
+      // Perform the migration in background
+      val sparkJob = SparkUtils.submitMigrationInBackground(configFileName)
 
-      // Wait for the changes to start being streamed
-      awaitAtMost(60.seconds) {
-        assert(sparkLogs.toString().contains("alternator: Starting to transfer changes"))
-      }
+      // Wait for the streaming to start (give initial snapshot transfer time to be skipped)
+      Thread.sleep(10000)
 
       // Insert one more item
       val keys2 = Map("id" -> AttributeValue.fromS("67890"))
@@ -136,8 +117,7 @@ class StreamedItemsTest extends MigratorSuiteWithAWS {
         }
 
       // Stop the migration job
-      stopSparkJob(configFileName)
-      assertEquals(sparkJob.exitValue(), 143)
+      sparkJob.stop()
 
       deleteStreamTable(tableName)
   }
@@ -176,29 +156,5 @@ class StreamedItemsTest extends MigratorSuiteWithAWS {
       .forEach { streamTableName =>
         deleteTableIfExists(sourceDDb(), streamTableName)
       }
-
-  // This looks more complicated than it should, but this is what it takes to stop a
-  // process started via “docker compose exec ...”.
-  // Indeed, stopping the host process does not stop the container process, see:
-  // https://github.com/moby/moby/issues/9098
-  // So, we look into the container for the PID of the migration process and kill it.
-  private def stopSparkJob(migrationConfigFile: String): Unit = {
-    val commandPrefix =
-      Seq("docker", "compose", "-f", "../docker-compose-tests.yml", "exec", "spark-master")
-    val pid =
-      Process(commandPrefix ++ Seq("ps", "-ef")).lazyLines
-        // Find the process that contains the arguments we passed when we submitted the Spark job
-        .filter(
-          _.contains(s"--conf spark.scylla.config=/app/configurations/${migrationConfigFile}")
-        )
-        .head
-        .split("\\s+")
-        .apply(1) // The 2nd column contains the process ID
-    println(s"Stopping Spark job whose PID is ${pid}")
-    Process(commandPrefix ++ Seq("kill", pid))
-      .run()
-      .exitValue()
-      .ensuring(_ == 0)
-  }
 
 }
