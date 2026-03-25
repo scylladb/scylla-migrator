@@ -87,7 +87,7 @@ services:
       --tablets-mode-for-new-keyspaces disabled
 
   s3:
-    image: localstack/localstack:s3-latest
+    image: localstack/localstack:s3-community-archive
     ports:
       - "127.0.0.1:4566:4566"            # LocalStack Gateway
     environment:
