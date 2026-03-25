@@ -95,11 +95,9 @@ abstract class ParquetMigratorSuite extends MigratorSuite(sourcePort = 0) {
       ParquetWriter.Options(writeMode = ParquetFileWriter.Mode.OVERWRITE)
     )
 
-  def toContainerParquetUri(path: Path): String = {
-    require(path.startsWith(parquetHostRoot), s"Unexpected parquet file location: $path")
-    val relative = parquetHostRoot.relativize(path)
-    Paths.get("/app/parquet").resolve(relative).toUri.toString
-  }
+  /** Convert a host-side parquet path to the URI that Spark will use when reading/tracking it. */
+  def toContainerParquetUri(path: Path): String =
+    path.toAbsolutePath.toUri.toString
 
   def listDataFiles(root: Path): Set[Path] =
     Using.resource(Files.walk(root)) { stream =>

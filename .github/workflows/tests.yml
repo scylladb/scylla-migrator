@@ -69,7 +69,6 @@ jobs:
 
   test-integration-scylla:
     name: Integration tests (Scylla)
-    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -79,27 +78,20 @@ jobs:
           java-version: 17
           cache: sbt
       - uses: sbt/setup-sbt@v1
-      - name: Restore Spark Docker image cache
-        id: spark-cache
+      - name: Cache SBT compilation artifacts
         uses: actions/cache@v4
         with:
-          path: /tmp/spark-image.tar
-          key: spark-image-${{ hashFiles('dockerfiles/spark/**') }}
-      - name: Load cached Spark image
-        if: steps.spark-cache.outputs.cache-hit == 'true'
-        run: docker load < /tmp/spark-image.tar
-      - name: Pre-create JAR directory and start services
-        run: |
-          mkdir -p migrator/target/scala-2.13
-          make start-services-scylla
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Download assembly JAR
-        uses: actions/download-artifact@v4
-        with:
-          name: migrator-jar
-          path: migrator/target/scala-2.13/
+          path: |
+            target/
+            migrator/target/scala-2.13/classes/
+            tests/target/scala-2.13/classes/
+            spark-kinesis-dynamodb/target/scala-2.13/classes/
+            project/target/
+          key: sbt-target-${{ runner.os }}-${{ hashFiles('**/*.scala', '**/*.sbt', 'project/build.properties') }}
+          restore-keys: |
+            sbt-target-${{ runner.os }}-
+      - name: Start services
+        run: make start-services-scylla
       - name: Wait for services
         run: make wait-for-services-scylla
       - name: Dump container logs on failure
@@ -115,9 +107,6 @@ jobs:
       - name: Stop services
         if: always()
         run: make stop-services
-      - name: Save Spark image to cache
-        if: steps.spark-cache.outputs.cache-hit != 'true'
-        run: docker save spark-migrator -o /tmp/spark-image.tar
       - name: Upload coverage report
         if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
@@ -129,7 +118,6 @@ jobs:
 
   test-integration-alternator:
     name: Integration tests (Alternator)
-    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -139,27 +127,20 @@ jobs:
           java-version: 17
           cache: sbt
       - uses: sbt/setup-sbt@v1
-      - name: Restore Spark Docker image cache
-        id: spark-cache
+      - name: Cache SBT compilation artifacts
         uses: actions/cache@v4
         with:
-          path: /tmp/spark-image.tar
-          key: spark-image-${{ hashFiles('dockerfiles/spark/**') }}
-      - name: Load cached Spark image
-        if: steps.spark-cache.outputs.cache-hit == 'true'
-        run: docker load < /tmp/spark-image.tar
-      - name: Pre-create JAR directory and start services
-        run: |
-          mkdir -p migrator/target/scala-2.13
-          make start-services-alternator
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Download assembly JAR
-        uses: actions/download-artifact@v4
-        with:
-          name: migrator-jar
-          path: migrator/target/scala-2.13/
+          path: |
+            target/
+            migrator/target/scala-2.13/classes/
+            tests/target/scala-2.13/classes/
+            spark-kinesis-dynamodb/target/scala-2.13/classes/
+            project/target/
+          key: sbt-target-${{ runner.os }}-${{ hashFiles('**/*.scala', '**/*.sbt', 'project/build.properties') }}
+          restore-keys: |
+            sbt-target-${{ runner.os }}-
+      - name: Start services
+        run: make start-services-alternator
       - name: Wait for services
         run: make wait-for-services-alternator
       - name: Dump container logs on failure
@@ -171,9 +152,6 @@ jobs:
           COVERAGE: ${{ github.event_name == 'push' && 'true' || 'false' }}
       - name: Stop services
         run: make stop-services
-      - name: Save Spark image to cache
-        if: steps.spark-cache.outputs.cache-hit != 'true'
-        run: docker save spark-migrator -o /tmp/spark-image.tar
       - name: Upload coverage report
         if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
@@ -185,7 +163,6 @@ jobs:
 
   test-cassandra-compat:
     name: Cassandra ${{ matrix.version }}.x compat
-    needs: build
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -199,27 +176,20 @@ jobs:
           java-version: 17
           cache: sbt
       - uses: sbt/setup-sbt@v1
-      - name: Restore Spark Docker image cache
-        id: spark-cache
+      - name: Cache SBT compilation artifacts
         uses: actions/cache@v4
         with:
-          path: /tmp/spark-image.tar
-          key: spark-image-${{ hashFiles('dockerfiles/spark/**') }}
-      - name: Load cached Spark image
-        if: steps.spark-cache.outputs.cache-hit == 'true'
-        run: docker load < /tmp/spark-image.tar
-      - name: Pre-create JAR directory and start services
-        run: |
-          mkdir -p migrator/target/scala-2.13
-          make start-services-cassandra CASSANDRA_VERSION=${{ matrix.version }}
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Download assembly JAR
-        uses: actions/download-artifact@v4
-        with:
-          name: migrator-jar
-          path: migrator/target/scala-2.13/
+          path: |
+            target/
+            migrator/target/scala-2.13/classes/
+            tests/target/scala-2.13/classes/
+            spark-kinesis-dynamodb/target/scala-2.13/classes/
+            project/target/
+          key: sbt-target-${{ runner.os }}-${{ hashFiles('**/*.scala', '**/*.sbt', 'project/build.properties') }}
+          restore-keys: |
+            sbt-target-${{ runner.os }}-
+      - name: Start services
+        run: make start-services-cassandra CASSANDRA_VERSION=${{ matrix.version }}
       - name: Wait for services
         run: make wait-for-services-cassandra CASSANDRA_VERSION=${{ matrix.version }}
       - name: Dump container logs on failure
@@ -230,6 +200,3 @@ jobs:
       - name: Stop services
         if: always()
         run: make stop-services
-      - name: Save Spark image to cache
-        if: steps.spark-cache.outputs.cache-hit != 'true'
-        run: docker save spark-migrator -o /tmp/spark-image.tar

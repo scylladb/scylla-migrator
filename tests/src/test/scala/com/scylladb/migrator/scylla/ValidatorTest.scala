@@ -3,7 +3,9 @@ package com.scylladb.migrator.scylla
 import com.datastax.oss.driver.api.querybuilder.QueryBuilder
 import com.datastax.oss.driver.api.querybuilder.QueryBuilder.literal
 import com.datastax.oss.driver.api.querybuilder.term.Term
+import com.scylladb.migrator.{ CassandraCompat, Integration }
 import com.scylladb.migrator.SparkUtils.{ performValidation, successfullyPerformMigration }
+import org.junit.experimental.categories.Category
 
 import scala.concurrent.duration.{ Duration, DurationInt }
 import scala.jdk.CollectionConverters._
@@ -46,7 +48,10 @@ abstract class ValidatorTest(version: CassandraVersion) extends MigratorSuite(ve
 
 }
 
+@Category(Array(classOf[Integration], classOf[CassandraCompat]))
 class Cassandra2ValidatorTest extends ValidatorTest(CassandraVersion.V2)
+@Category(Array(classOf[Integration], classOf[CassandraCompat]))
 class Cassandra3ValidatorTest extends ValidatorTest(CassandraVersion.V3)
 class Cassandra4ValidatorTest extends ValidatorTest(CassandraVersion.V4)
+@Category(Array(classOf[Integration], classOf[CassandraCompat]))
 class Cassandra5ValidatorTest extends ValidatorTest(CassandraVersion.V5)

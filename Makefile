@@ -115,59 +115,52 @@ spark-image: ## Pull or build the Spark Docker image
 	docker tag "$${IMAGE}" spark-migrator
 	echo "SPARK_IMAGE=$${IMAGE}" >> "$${GITHUB_ENV:-/dev/null}"
 
-start-services: spark-image ## Start all Docker Compose test services
+start-services: ## Start all Docker Compose test services
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
 	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
-	docker compose -f $(COMPOSE_FILE) up -d
+	docker compose -f $(COMPOSE_FILE) up -d dynamodb cassandra cassandra2 cassandra3 cassandra5 scylla-source scylla s3
 
-start-services-scylla: spark-image ## Start services needed for Scylla integration tests
-	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
-	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
-	docker compose -f $(COMPOSE_FILE) up -d cassandra cassandra5 cassandra3 cassandra2 scylla-source scylla spark-master spark-worker
+start-services-scylla: ## Start services needed for Scylla integration tests
+	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla ./tests/docker/scylla-source
+	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla ./tests/docker/scylla-source
+	docker compose -f $(COMPOSE_FILE) up -d cassandra scylla-source scylla
 
-start-services-alternator: spark-image ## Start services needed for Alternator integration tests
+start-services-alternator: ## Start services needed for Alternator integration tests
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
 	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
-	docker compose -f $(COMPOSE_FILE) up -d dynamodb scylla s3 spark-master spark-worker
+	docker compose -f $(COMPOSE_FILE) up -d dynamodb scylla s3
 
-start-services-aws: spark-image ## Start only services needed for AWS tests
+start-services-aws: ## Start only services needed for AWS tests
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
 	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
-	docker compose -f $(COMPOSE_FILE) up -d scylla spark-master spark-worker
+	docker compose -f $(COMPOSE_FILE) up -d scylla
 
 wait-for-services: ## Wait for all test services to become ready
-	$(Q)$(call wait-for-port,8000)
-	$(call wait-for-port,8001)
-	$(call wait-for-port,4566)
-	$(call wait-for-cql,scylla)
-	$(call wait-for-cql,cassandra)
-	$(call wait-for-cql,scylla-source)
-	$(call wait-for-port,8080)
-	$(call wait-for-port,8081)
+	$(Q)($(call wait-for-port,8000)) & p1=$$!
+	($(call wait-for-port,8001)) & p2=$$!
+	($(call wait-for-port,4566)) & p3=$$!
+	($(call wait-for-cql,scylla)) & p4=$$!
+	($(call wait-for-cql,cassandra)) & p5=$$!
+	($(call wait-for-cql,scylla-source)) & p6=$$!
+	wait $$p1; wait $$p2; wait $$p3; wait $$p4; wait $$p5; wait $$p6
 
 wait-for-services-scylla: ## Wait for Scylla test services to become ready
-	$(Q)$(call wait-for-cql,cassandra)
-	$(call wait-for-cql,cassandra5)
-	$(call wait-for-cql,cassandra3)
-	$(call wait-for-cql,cassandra2)
-	$(call wait-for-cql,scylla-source)
-	$(call wait-for-cql,scylla)
-	$(call wait-for-port,8080)
-	$(call wait-for-port,8081)
+	$(Q)($(call wait-for-cql,cassandra)) & p1=$$!
+	($(call wait-for-cql,scylla-source)) & p2=$$!
+	($(call wait-for-cql,scylla)) & p3=$$!
+	wait $$p1; wait $$p2; wait $$p3
 
 wait-for-services-alternator: ## Wait for Alternator test services to become ready
-	$(Q)$(call wait-for-port,8000)
-	$(call wait-for-port,8001)
-	$(call wait-for-port,4566)
-	$(call wait-for-cql,scylla)
-	$(call wait-for-port,8080)
-	$(call wait-for-port,8081)
+	$(Q)($(call wait-for-port,8000)) & p1=$$!
+	($(call wait-for-port,8001)) & p2=$$!
+	($(call wait-for-port,4566)) & p3=$$!
+	($(call wait-for-cql,scylla)) & p4=$$!
+	wait $$p1; wait $$p2; wait $$p3; wait $$p4
 
 wait-for-services-aws: ## Wait for AWS test services to become ready
-	$(Q)$(call wait-for-port,8000)
-	$(call wait-for-cql,scylla)
-	$(call wait-for-port,8080)
-	$(call wait-for-port,8081)
+	$(Q)($(call wait-for-port,8000)) & p1=$$!
+	($(call wait-for-cql,scylla)) & p2=$$!
+	wait $$p1; wait $$p2
 
 stop-services: ## Stop all Docker Compose test services
 	$(Q)docker compose -f $(COMPOSE_FILE) down
@@ -183,16 +176,15 @@ else
 _CASSANDRA_SERVICE := cassandra$(CASSANDRA_VERSION)
 endif
 
-start-services-cassandra: spark-image ## Start services for a single Cassandra version (CASSANDRA_VERSION=...)
+start-services-cassandra: ## Start services for a single Cassandra version (CASSANDRA_VERSION=...)
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla ./tests/docker/$(_CASSANDRA_SERVICE)
 	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla ./tests/docker/$(_CASSANDRA_SERVICE)
-	docker compose -f $(COMPOSE_FILE) up -d $(_CASSANDRA_SERVICE) scylla spark-master spark-worker
+	docker compose -f $(COMPOSE_FILE) up -d $(_CASSANDRA_SERVICE) scylla
 
 wait-for-services-cassandra: ## Wait for a single Cassandra version to become ready (CASSANDRA_VERSION=...)
-	$(Q)$(call wait-for-cql,$(_CASSANDRA_SERVICE))
-	$(call wait-for-cql,scylla)
-	$(call wait-for-port,8080)
-	$(call wait-for-port,8081)
+	$(Q)($(call wait-for-cql,$(_CASSANDRA_SERVICE))) & p1=$$!
+	($(call wait-for-cql,scylla)) & p2=$$!
+	wait $$p1; wait $$p2
 
 test-integration-cassandra: ## Run integration tests for a single Cassandra version (CASSANDRA_VERSION=...)
 	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.scylla.Cassandra$(CASSANDRA_VERSION)* -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.E2E" $(SBT_COVERAGE_SUFFIX)
@@ -203,8 +195,8 @@ test-unit: ## Run unit tests (no services required)
 test-integration: ## Run integration tests (requires services, excludes AWS, benchmarks, and E2E)
 	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.AWS,com.scylladb.migrator.E2E" $(SBT_COVERAGE_SUFFIX)
 
-test-integration-scylla: ## Run all Scylla integration tests (requires all CQL sources running)
-	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.scylla.* -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.E2E" $(SBT_COVERAGE_SUFFIX)
+test-integration-scylla: ## Run Scylla integration tests (Cassandra compat tests run in their own matrix job)
+	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.scylla.* -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.E2E,com.scylladb.migrator.CassandraCompat" $(SBT_COVERAGE_SUFFIX)
 
 test-integration-alternator: ## Run Alternator integration tests only (excludes AWS and E2E benchmarks)
 	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.alternator.* com.scylladb.migrator.writers.* -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.AWS,com.scylladb.migrator.E2E" $(SBT_COVERAGE_SUFFIX)
@@ -236,11 +228,14 @@ test-benchmark-e2e-sanity: ## Run E2E sanity suite (small row counts, ~2min, for
 	$(Q)$(MAKE) test-benchmark-e2e E2E_CQL_ROWS=1000 E2E_DDB_ROWS=100
 
 test-benchmark-e2e-sanity-scylla: ## Run Scylla-only E2E sanity (no DynamoDB services needed)
-	$(Q)$(MAKE) test-benchmark-e2e-cassandra-scylla E2E_CQL_ROWS=1000
-	$(Q)$(MAKE) test-benchmark-e2e-scylla-scylla E2E_CQL_ROWS=1000
-	$(Q)$(MAKE) test-benchmark-e2e-scylla-parquet E2E_CQL_ROWS=1000
-	$(Q)$(MAKE) test-benchmark-e2e-parquet-scylla E2E_CQL_ROWS=1000
-	$(Q)$(MAKE) test-benchmark-e2e-cassandra-parquet E2E_CQL_ROWS=1000
+	# Single sbt invocation with sequential commands to avoid repeated JVM startup.
+	# Order matters: ScyllaToParquet must run before ParquetToScylla (produces its input).
+	$(Q)sbt -De2e.cql.rows=1000 \
+		"testOnly com.scylladb.migrator.scylla.CassandraToScyllaE2EBenchmark" \
+		"testOnly com.scylladb.migrator.scylla.ScyllaToScyllaE2EBenchmark" \
+		"testOnly com.scylladb.migrator.scylla.ScyllaToParquetE2EBenchmark" \
+		"testOnly com.scylladb.migrator.scylla.ParquetToScyllaE2EBenchmark" \
+		"testOnly com.scylladb.migrator.scylla.CassandraToParquetE2EBenchmark"
 
 test-benchmark-e2e: ## Run all E2E throughput benchmarks (requires services)
 	# Sequential execution is required: parquet-scylla depends on scylla-parquet output,
