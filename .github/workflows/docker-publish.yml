@@ -5,8 +5,8 @@ on:
     types: [published]
   workflow_dispatch:
     inputs:
-      version:
-        description: "Version tag (e.g. 2.0.0). The image will be tagged as scylladb/scylla-migrator:<version> and scylladb/scylla-migrator:latest."
+      tag:
+        description: "Git tag to build (e.g. v2.0.0)"
         required: true
 
 env:
@@ -17,15 +17,34 @@ jobs:
     name: Build and push Docker image
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-
-      - name: Resolve version
-        id: version
+      - name: Resolve git tag
+        id: resolve
         run: |
           if [ "${{ github.event_name }}" = "release" ]; then
-            echo "tag=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            echo "git_tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "git_tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.resolve.outputs.git_tag }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve Docker tags
+        id: tags
+        run: |
+          GIT_TAG="${{ steps.resolve.outputs.git_tag }}"
+          VERSION="${GIT_TAG#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+          # Find the latest version tag by semver sort
+          LATEST=$(git tag -l 'v*' | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
+          if [ "${VERSION}" = "${LATEST}" ]; then
+            echo "is_latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_latest=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Set up Docker Buildx
@@ -46,5 +65,5 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: |
-            scylladb/scylla-migrator:${{ steps.version.outputs.tag }}
-            scylladb/scylla-migrator:latest
+            scylladb/scylla-migrator:${{ steps.tags.outputs.version }}
+            ${{ steps.tags.outputs.is_latest == 'true' && 'scylladb/scylla-migrator:latest' || '' }}
