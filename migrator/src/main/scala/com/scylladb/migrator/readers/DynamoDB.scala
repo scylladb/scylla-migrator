@@ -76,11 +76,17 @@ object DynamoDB {
         .table
 
     val maybeTtlDescription =
-      Option(
-        dynamoDbClient
-          .describeTimeToLive(DescribeTimeToLiveRequest.builder().tableName(table).build())
-          .timeToLiveDescription
-      )
+      try
+        Option(
+          dynamoDbClient
+            .describeTimeToLive(DescribeTimeToLiveRequest.builder().tableName(table).build())
+            .timeToLiveDescription
+        )
+      catch {
+        case e: software.amazon.awssdk.services.dynamodb.model.DynamoDbException =>
+          log.warn(s"Could not describe TTL for table ${table}: ${e.getMessage}")
+          None
+      }
 
     val jobConf =
       makeJobConf(

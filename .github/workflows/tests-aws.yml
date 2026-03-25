@@ -6,6 +6,18 @@ on:
     paths:
       - '**.scala'
       - '**.sbt'
+      - 'Makefile'
+      - 'docker-compose-tests.yml'
+      - '.github/workflows/**'
+
+  pull_request:
+    paths:
+      - '**.scala'
+      - '**.sbt'
+      - 'Makefile'
+      - 'docker-compose-tests.yml'
+      - '.github/workflows/**'
+
   workflow_dispatch:
 
 env:
@@ -50,10 +62,11 @@ jobs:
           role-session-name: GitHub_to_AWS_via_FederatedOIDC
       - name: Wait for services
         run: make wait-for-services-aws
+      - name: Run AWS integration tests
+        run: make test-integration-aws
       - name: Dump container logs on failure
         if: failure()
         run: make dump-logs
-      - name: Run AWS integration tests
-        run: make test-integration-aws
       - name: Stop services
+        if: always()
         run: make stop-services
