@@ -9,6 +9,9 @@ on:
         description: "Version tag (e.g. 2.0.0). The image will be tagged as scylladb/scylla-migrator:<version> and scylladb/scylla-migrator:latest."
         required: true
 
+env:
+  BUILDKIT_PROGRESS: plain
+
 jobs:
   publish:
     name: Build and push Docker image
@@ -40,6 +43,8 @@ jobs:
           context: .
           file: Dockerfile.release
           push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: |
             scylladb/scylla-migrator:${{ steps.version.outputs.tag }}
             scylladb/scylla-migrator:latest
