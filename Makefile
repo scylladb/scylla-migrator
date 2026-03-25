@@ -2,7 +2,7 @@ SHELL := bash
 .ONESHELL:
 .SHELLFLAGS := -ec
 
-.PHONY: help build docker-build-jar lint lint-fix \
+.PHONY: help build docker-build-jar docker-image lint lint-fix \
         spark-image start-services stop-services wait-for-services \
         start-services-scylla wait-for-services-scylla \
         start-services-cassandra wait-for-services-cassandra test-integration-cassandra \
@@ -20,6 +20,8 @@ SHELL := bash
 
 COMPOSE_FILE := docker-compose-tests.yml
 CACHE_REPO ?= scylladb/migrator-cache
+DOCKER_IMAGE ?= scylladb/scylla-migrator
+DOCKER_TAG ?= latest
 MAX_ATTEMPTS ?= 480
 COVERAGE ?= false
 VERBOSE ?= false
@@ -87,6 +89,9 @@ build: ## Build assembly JAR
 # a local JDK/sbt installation. Not used by CI workflows.
 docker-build-jar: ## Build assembly JAR using Docker (local-dev convenience)
 	$(Q)docker buildx build --file Dockerfile --output type=local,dest=./migrator/target/scala-2.13 .
+
+docker-image: ## Build the migrator Docker image
+	$(Q)docker buildx build --file Dockerfile.release -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
 
 spark-image: ## Pull or build the Spark Docker image
 	$(Q)HASH=$$(find dockerfiles/spark -type f | sort | xargs sha256sum | sha256sum | cut -d' ' -f1 | head -c 16)
