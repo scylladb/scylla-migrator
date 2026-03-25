@@ -86,6 +86,39 @@ services:
       --alternator-write-isolation only_rmw_uses_lwt
       --tablets-mode-for-new-keyspaces disabled
 
+  # Old Scylla (< 2025.1.4): does not reject INDEXES consumed capacity.
+  scylla-old:
+    image: scylladb/scylla:6.1
+    volumes:
+      - "./tests/docker/scylla-old:/var/lib/scylla"
+    ports:
+      - "8003:8000"
+      - "9048:9042"
+    expose:
+      - 9048
+    command: >
+      --smp 1
+      --memory 2048M
+      --alternator-port 8000
+      --alternator-write-isolation only_rmw_uses_lwt
+
+  # New Scylla (> 2025.1.4) with tablets keyspace (tablets enabled for new keyspaces).
+  scylla-tablets:
+    image: scylladb/scylla:latest
+    volumes:
+      - "./tests/docker/scylla-tablets:/var/lib/scylla"
+    ports:
+      - "8004:8000"
+      - "9049:9042"
+    expose:
+      - 9049
+    command: >
+      --smp 1
+      --memory 2048M
+      --alternator-port 8000
+      --alternator-write-isolation only_rmw_uses_lwt
+      --tablets-mode-for-new-keyspaces enabled
+
   s3:
     image: localstack/localstack:s3-latest
     ports:

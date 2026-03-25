@@ -198,5 +198,9 @@ tests/docker/scylla-source/*
 !tests/docker/scylla-source/.gitkeep
 tests/docker/scylla/*
 !tests/docker/scylla/.gitkeep
+tests/docker/scylla-old/*
+!tests/docker/scylla-old/.gitkeep
+tests/docker/scylla-tablets/*
+!tests/docker/scylla-tablets/.gitkeep
 tests/docker/parquet/*
 !tests/docker/parquet/.gitkeep

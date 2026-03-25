@@ -39,13 +39,16 @@ trait MigratorSuite extends munit.FunSuite {
   /** Client of a source DynamoDB instance */
   def sourceDDb: Fixture[DynamoDbClient]
 
+  /** The host port of the target Alternator instance. Override to test against a different target. */
+  def targetAlternatorPort: Int = 8000
+
   /** Client of a target Alternator instance */
   val targetAlternator: Fixture[DynamoDbClient] = new Fixture[DynamoDbClient]("targetAlternator") {
     private var client: DynamoDbClient = null
     def apply(): DynamoDbClient = client
     override def beforeAll(): Unit =
       client = DynamoUtils.buildDynamoClient(
-        endpoint = Some(DynamoDBEndpoint("http://localhost", 8000)),
+        endpoint = Some(DynamoDBEndpoint("http://localhost", targetAlternatorPort)),
         creds =
           Some(StaticCredentialsProvider.create(AwsBasicCredentials.create("dummy", "dummy"))),
         region       = Some("dummy"),

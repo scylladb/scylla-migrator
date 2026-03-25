@@ -36,6 +36,7 @@ endif
 
 DOCKER_SPARK_BIND_DIRS := ./tests/docker/parquet ./tests/docker/spark-master ./tests/docker/aws-profile
 DOCKER_SCYLLA_BIND_DIRS := ./tests/docker/scylla ./tests/docker/scylla-source ./tests/docker/cassandra5 ./tests/docker/cassandra3 ./tests/docker/cassandra2
+DOCKER_SCYLLA_ALT_BIND_DIRS := ./tests/docker/scylla-old ./tests/docker/scylla-tablets
 
 # Parameterized Cassandra version for per-version testing (2, 3, 4, or 5)
 CASSANDRA_VERSION ?= 4
@@ -111,8 +112,8 @@ spark-image: ## Pull or build the Spark Docker image
 	echo "SPARK_IMAGE=$${IMAGE}" >> "$${GITHUB_ENV:-/dev/null}"
 
 start-services: spark-image ## Start all Docker Compose test services
-	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
-	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
+	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS) $(DOCKER_SCYLLA_ALT_BIND_DIRS)
+	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS) $(DOCKER_SCYLLA_ALT_BIND_DIRS)
 	docker compose -f $(COMPOSE_FILE) up -d
 
 start-services-scylla: spark-image ## Start services needed for Scylla integration tests
@@ -121,9 +122,9 @@ start-services-scylla: spark-image ## Start services needed for Scylla integrati
 	docker compose -f $(COMPOSE_FILE) up -d cassandra cassandra5 cassandra3 cassandra2 scylla-source scylla spark-master spark-worker
 
 start-services-alternator: spark-image ## Start services needed for Alternator integration tests
-	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
-	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
-	docker compose -f $(COMPOSE_FILE) up -d dynamodb scylla s3 spark-master spark-worker
+	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla $(DOCKER_SCYLLA_ALT_BIND_DIRS)
+	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla $(DOCKER_SCYLLA_ALT_BIND_DIRS)
+	docker compose -f $(COMPOSE_FILE) up -d dynamodb scylla scylla-old scylla-tablets s3 spark-master spark-worker
 
 start-services-aws: spark-image ## Start only services needed for AWS tests
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
@@ -155,6 +156,8 @@ wait-for-services-alternator: ## Wait for Alternator test services to become rea
 	$(call wait-for-port,8001)
 	$(call wait-for-port,4566)
 	$(call wait-for-cql,scylla)
+	$(call wait-for-cql,scylla-old)
+	$(call wait-for-cql,scylla-tablets)
 	$(call wait-for-port,8080)
 	$(call wait-for-port,8081)
 
