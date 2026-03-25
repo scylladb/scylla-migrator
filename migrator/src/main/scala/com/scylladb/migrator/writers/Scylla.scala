@@ -99,6 +99,28 @@ object Scylla {
       }
     }
 
+  /** Columns that the Spark Cassandra Connector considers internal and filters from the write path
+    * (see `TableWriter.InternalColumns`). If these columns are present in the source DataFrame, the
+    * Row will have more values than the connector's `selectedColumns`, causing
+    * `SqlRowWriter.readColumnValues` to fail with "Invalid row size".
+    *
+    * We drop them from the DataFrame before writing so that both sides agree on the column count.
+    */
+  // Mirrors the private TableWriter.InternalColumns from spark-scylladb-connector 4.1.0.
+  // If the connector version changes, verify this set is still in sync.
+  private[writers] val InternalColumns: Set[String] = Set("solr_query")
+
+  /** Drop columns that the Spark Cassandra Connector treats as internal (e.g. DSE's `solr_query`).
+    * The connector filters these from `selectedColumns` but `SqlRowWriter` still validates
+    * `row.size == selectedColumns.size`, so the DataFrame must not contain them.
+    */
+  private[writers] def dropInternalColumns(df: DataFrame): DataFrame = {
+    val toDrop = df.schema.fieldNames.filter(InternalColumns.contains)
+    if (toDrop.nonEmpty) {
+      df.drop(toDrop.toSeq: _*)
+    } else df
+  }
+
   def writeDataframe(
     target: TargetSettings.Scylla,
     renames: List[Rename],
@@ -107,6 +129,8 @@ object Scylla {
     tokenRangeAccumulator: Option[TokenRangeAccumulator],
     source: SourceSettings
   )(implicit spark: SparkSession): Unit = {
+    val cleanDf = dropInternalColumns(df)
+
     val connector = Connectors.targetConnector(spark.sparkContext.getConf, target)
 
     val consistencyLevel = target.consistencyLevel match {
@@ -159,7 +183,7 @@ object Scylla {
     // DataFrame; the access to the rows is positional anyway and the field names
     // are only used to construct the columns part of the INSERT statement.
     val renamedSchema = renames
-      .foldLeft(df) { case (acc, Rename(from, to)) =>
+      .foldLeft(cleanDf) { case (acc, Rename(from, to)) =>
         acc.withColumnRenamed(from, to)
       }
       .schema
@@ -175,9 +199,9 @@ object Scylla {
     // pads the resulting value with trailing zeros corresponding to the scale of the
     // Decimal type. Some users don't like this so we conditionally strip those.
     val rdd =
-      if (!target.stripTrailingZerosForDecimals) df.rdd
+      if (!target.stripTrailingZerosForDecimals) cleanDf.rdd
       else
-        df.rdd.map { row =>
+        cleanDf.rdd.map { row =>
           Row.fromSeq(row.toSeq.map {
             case x: java.math.BigDecimal => x.stripTrailingZeros()
             case x                       => x
@@ -195,7 +219,7 @@ object Scylla {
           connector.withSessionDo(Schema.tableFromCassandra(_, target.keyspace, target.table))
         val targetPkNames = tableDef.primaryKey.map(_.columnName).toSet
 
-        val pkResolution = resolvePrimaryKeyColumns(targetPkNames, renames, df.schema)
+        val pkResolution = resolvePrimaryKeyColumns(targetPkNames, renames, cleanDf.schema)
         pkResolution.unresolvedSourcePkNames.foreach { sourcePkName =>
           log.warn(s"Primary key column '${sourcePkName}' not found in source DataFrame schema")
         }

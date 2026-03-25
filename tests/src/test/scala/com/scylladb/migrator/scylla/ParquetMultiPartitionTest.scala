@@ -1,12 +1,12 @@
 package com.scylladb.migrator.scylla
 
 import com.datastax.oss.driver.api.querybuilder.QueryBuilder
+import com.scylladb.migrator.SparkUtils
 import com.scylladb.migrator.config.MigratorConfig
 
 import java.nio.file.Files
 import scala.concurrent.duration._
 import scala.jdk.CollectionConverters._
-import scala.sys.process.Process
 import scala.util.chaining._
 
 class ParquetMultiPartitionTest extends ParquetMigratorSuite {
@@ -22,39 +22,14 @@ class ParquetMultiPartitionTest extends ParquetMigratorSuite {
     */
   private def performMigrationWithSmallPartitions(
     configFile: String = configFileName
-  ): Unit = {
-    Process(
-      Seq(
-        "docker",
-        "compose",
-        "-f",
-        "../docker-compose-tests.yml",
-        "exec",
-        "spark-master",
-        "/spark/bin/spark-submit",
-        "--class",
-        "com.scylladb.migrator.Migrator",
-        "--master",
-        "spark://spark-master:7077",
-        "--conf",
-        "spark.driver.host=spark-master",
-        "--conf",
-        s"spark.scylla.config=/app/configurations/${configFile}",
-        "--conf",
-        "spark.sql.files.maxPartitionBytes=65536", // 64KB - forces multiple partitions
-        "--conf",
-        "spark.sql.files.openCostInBytes=4096", // 4KB - small open cost
-        "--executor-cores",
-        "2",
-        "--executor-memory",
-        "4G",
-        "/jars/scylla-migrator-assembly.jar"
+  ): Unit =
+    SparkUtils.successfullyPerformMigrationWithConfigs(
+      configFile,
+      Map(
+        "spark.sql.files.maxPartitionBytes" -> "65536", // 64KB - forces multiple partitions
+        "spark.sql.files.openCostInBytes"   -> "4096" // 4KB - small open cost
       )
-    ).run()
-      .exitValue()
-      .ensuring(statusCode => statusCode == 0, "Spark job with small partitions failed")
-    ()
-  }
+    )
 
   withTableAndSavepoints("multipartitiontest", "multipartition", "parquet-multipartition-test")
     .test(

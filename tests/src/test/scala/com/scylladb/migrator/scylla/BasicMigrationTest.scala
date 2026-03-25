@@ -3,7 +3,9 @@ package com.scylladb.migrator.scylla
 import com.datastax.oss.driver.api.querybuilder.QueryBuilder
 import com.datastax.oss.driver.api.querybuilder.QueryBuilder.literal
 import com.datastax.oss.driver.api.querybuilder.term.Term
+import com.scylladb.migrator.{ CassandraCompat, Integration }
 import com.scylladb.migrator.SparkUtils.successfullyPerformMigration
+import org.junit.experimental.categories.Category
 
 import scala.jdk.CollectionConverters._
 import scala.util.chaining._
@@ -44,7 +46,10 @@ abstract class BasicMigrationTest(version: CassandraVersion) extends MigratorSui
 
 }
 
+@Category(Array(classOf[Integration], classOf[CassandraCompat]))
 class Cassandra2BasicMigrationTest extends BasicMigrationTest(CassandraVersion.V2)
+@Category(Array(classOf[Integration], classOf[CassandraCompat]))
 class Cassandra3BasicMigrationTest extends BasicMigrationTest(CassandraVersion.V3)
 class Cassandra4BasicMigrationTest extends BasicMigrationTest(CassandraVersion.V4)
+@Category(Array(classOf[Integration], classOf[CassandraCompat]))
 class Cassandra5BasicMigrationTest extends BasicMigrationTest(CassandraVersion.V5)
