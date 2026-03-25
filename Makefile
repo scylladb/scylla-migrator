@@ -156,7 +156,8 @@ wait-for-services-scylla: ## Wait for Scylla test services to become ready
 	$(call wait-for-port,8081)
 
 wait-for-services-alternator: ## Wait for Alternator test services to become ready
-	$(Q)$(call wait-for-port,8000)
+	$(Q)docker compose -f $(COMPOSE_FILE) logs dynamodb scylla s3 spark-master spark-worker
+	$(call wait-for-port,8000)
 	$(call wait-for-port,8001)
 	$(call wait-for-port,4566)
 	$(call wait-for-cql,scylla)
