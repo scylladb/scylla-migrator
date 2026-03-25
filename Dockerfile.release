@@ -13,7 +13,7 @@ COPY . /app
 RUN export TERM=xterm-color && sbt -mem 8192 migrator/assembly
 
 # Stage 2: Runtime image with Spark and the migrator JAR
-FROM apache/spark:4.0.2-java17
+FROM apache/spark:4.0.2-scala2.13-java17-r-ubuntu
 
 USER root
 
