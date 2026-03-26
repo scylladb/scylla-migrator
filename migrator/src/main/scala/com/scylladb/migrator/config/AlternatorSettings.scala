@@ -14,7 +14,8 @@ case class AlternatorSettings(
   connectionMaxIdleTimeMs: Option[Long] = None,
   connectionTimeToLiveMs: Option[Long] = None,
   connectionAcquisitionTimeoutMs: Option[Long] = None,
-  connectionTimeoutMs: Option[Long] = None
+  connectionTimeoutMs: Option[Long] = None,
+  maxItemsPerBatch: Option[Int] = None
 )
 
 object AlternatorSettings {

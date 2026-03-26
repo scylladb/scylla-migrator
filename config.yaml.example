@@ -278,6 +278,10 @@ target:
 #   #  connectionAcquisitionTimeoutMs: 10000
 #   #  # Maximum time to wait for TCP handshake in ms (default: 15000)
 #   #  connectionTimeoutMs: 15000
+#   #  # Maximum items per BatchWriteItem request. DynamoDB limits this to 25,
+#   #  # but Alternator defaults the limit to 100
+#   #  # See https://docs.scylladb.com/manual/stable/alternator/compatibility.html#configurable-or-different-limits
+#   #  maxItemsPerBatch: 100
 
 # Savepoints are configuration files (like this one), saved by the migrator as it
 # runs. Their purpose is to skip token ranges that have already been copied. This
