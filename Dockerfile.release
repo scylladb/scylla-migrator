@@ -18,9 +18,7 @@ FROM apache/spark:4.0.2-scala2.13-java17-r-ubuntu
 USER root
 
 COPY --from=build /app/migrator/target/scala-2.13/scylla-migrator-assembly.jar /jars/scylla-migrator-assembly.jar
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-ENTRYPOINT ["spark-submit", \
-    "--class", "com.scylladb.migrator.Migrator", \
-    "--master", "local[*]", \
-    "--conf", "spark.driver.host=localhost", \
-    "/jars/scylla-migrator-assembly.jar"]
+ENTRYPOINT ["docker-entrypoint.sh"]
