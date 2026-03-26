@@ -17,8 +17,8 @@ object Validator {
     (config.source, config.target) match {
       case (cassandraSource: SourceSettings.Cassandra, scyllaTarget: TargetSettings.Scylla) =>
         ScyllaValidator.runValidation(cassandraSource, scyllaTarget, config)
-      case (dynamoSource: SourceSettings.DynamoDB, alternatorTarget: TargetSettings.DynamoDB) =>
-        AlternatorValidator.runValidation(dynamoSource, alternatorTarget, config)
+      case (dynamoSource: SourceSettings.DynamoDBLike, dynamoTarget: TargetSettings.DynamoDBLike) =>
+        AlternatorValidator.runValidation(dynamoSource, dynamoTarget, config)
       case _ =>
         sys.error(
           "Unsupported combination of source and target " +

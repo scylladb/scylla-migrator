@@ -12,7 +12,7 @@ source:
   scanSegments: 10
 
 target:
-  type: dynamodb
+  type: alternator
   table: Issue103Items
   region: dummy
   endpoint:

@@ -12,7 +12,7 @@ source:
   readThroughput: 25
 
 target:
-  type: dynamodb
+  type: alternator
   table: bench_e2e_ddb
   region: dummy
   endpoint:

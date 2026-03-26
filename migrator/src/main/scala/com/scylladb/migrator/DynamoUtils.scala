@@ -80,6 +80,7 @@ object DynamoUtils {
     "scylla.migrator.alternator.connection_acquisition_timeout_ms"
   private val AlternatorConnectionTimeoutMsConfig =
     "scylla.migrator.alternator.connection_timeout_ms"
+  private val UseAlternatorClientConfig = "scylla.migrator.use_alternator_client"
 
   class RemoveConsumedCapacityInterceptor extends ExecutionInterceptor {
     override def modifyRequest(ctx: Context.ModifyRequest, attrs: ExecutionAttributes): SdkRequest =
@@ -102,7 +103,7 @@ object DynamoUtils {
 
   def replicateTableDefinition(
     sourceDescription: TableDescription,
-    target: TargetSettings.DynamoDB
+    target: TargetSettings.DynamoDBLike
   ): TableDescription = {
     // If non-existent, replicate
     val targetClient =
@@ -113,7 +114,7 @@ object DynamoUtils {
         if (target.removeConsumedCapacity.getOrElse(false))
           Seq(new RemoveConsumedCapacityInterceptor)
         else Nil,
-        target.alternator
+        target.alternatorSettings
       )
 
     log.info("Checking for table existence at destination")
@@ -219,7 +220,7 @@ object DynamoUtils {
     }
   }
 
-  def enableDynamoStream(source: SourceSettings.DynamoDB): Unit = {
+  def enableDynamoStream(source: SourceSettings.DynamoDBLike): Unit = {
     val sourceClient =
       buildDynamoClient(
         source.endpoint,
@@ -228,7 +229,7 @@ object DynamoUtils {
         if (source.removeConsumedCapacity.getOrElse(false))
           Seq(new RemoveConsumedCapacityInterceptor)
         else Nil,
-        source.alternator
+        source.alternatorSettings
       )
     val sourceStreamsClient =
       buildDynamoStreamsClient(
@@ -283,11 +284,13 @@ object DynamoUtils {
     alternatorSettings: Option[AlternatorSettings] = None
   ): DynamoDbClient = {
     val baseBuilder: DynamoDbClientBuilder =
-      if (endpoint.isDefined) {
-        val altBuilder = AlternatorDynamoDbClient.builder()
-        applyAlternatorSettings(altBuilder, alternatorSettings)
-        altBuilder
-      } else DynamoDbClient.builder()
+      alternatorSettings match {
+        case Some(_) =>
+          val altBuilder = AlternatorDynamoDbClient.builder()
+          applyAlternatorSettings(altBuilder, alternatorSettings)
+          altBuilder
+        case None => DynamoDbClient.builder()
+      }
     val builder =
       AwsUtils.configureClientBuilder(baseBuilder, endpoint, region, creds)
     val conf = ClientOverrideConfiguration.builder()
@@ -403,6 +406,7 @@ object DynamoUtils {
     )
 
     jobConf.set(RemoveConsumedCapacityConfig, removeConsumedCapacity.toString)
+    jobConf.set(UseAlternatorClientConfig, alternatorSettings.isDefined.toString)
 
     jobConf.set("mapred.output.format.class", classOf[DynamoDBOutputFormat].getName)
     jobConf.set("mapred.input.format.class", classOf[DynamoDBInputFormat].getName)
@@ -486,56 +490,55 @@ object DynamoUtils {
     private var conf: Configuration = null
 
     override def apply(builder: DynamoDbClientBuilder): DynamoDbClientBuilder = {
+      val useAlternator = conf.get(UseAlternatorClientConfig, "false").toBoolean
       val effectiveBuilder: DynamoDbClientBuilder =
-        Option(conf.get(DynamoDBConstants.ENDPOINT)) match {
-          case Some(customEndpoint) =>
-            val altBuilder = AlternatorDynamoDbClient.builder()
+        if (useAlternator) {
+          val altBuilder = AlternatorDynamoDbClient.builder()
+          for (customEndpoint <- Option(conf.get(DynamoDBConstants.ENDPOINT)))
             altBuilder.endpointOverride(URI.create(customEndpoint))
-            for (region <- Option(conf.get(DynamoDBConstants.REGION)))
-              altBuilder.region(Region.of(region))
-            (
-              Option(conf.get(DynamoDBConstants.DYNAMODB_ACCESS_KEY_CONF)),
-              Option(conf.get(DynamoDBConstants.DYNAMODB_SECRET_KEY_CONF))
-            ) match {
-              case (Some(accessKey), Some(secretKey)) =>
-                val awsCreds =
-                  Option(conf.get(DynamoDBConstants.DYNAMODB_SESSION_TOKEN_CONF)) match {
-                    case Some(token) =>
-                      AwsSessionCredentials.create(accessKey, secretKey, token)
-                    case None =>
-                      AwsBasicCredentials.create(accessKey, secretKey)
-                  }
-                altBuilder.credentialsProvider(StaticCredentialsProvider.create(awsCreds))
-              case _ => // No credentials configured - use anonymous (Alternator default)
-            }
-            applyAlternatorSettings(
-              altBuilder,
-              Some(
-                AlternatorSettings(
-                  datacenter = Option(conf.get(AlternatorDatacenterConfig)),
-                  rack       = Option(conf.get(AlternatorRackConfig)),
-                  activeRefreshIntervalMs =
-                    Option(conf.get(AlternatorActiveRefreshConfig)).map(_.toLong),
-                  idleRefreshIntervalMs =
-                    Option(conf.get(AlternatorIdleRefreshConfig)).map(_.toLong),
-                  compression = Option(conf.get(AlternatorCompressionConfig)).map(_.toBoolean),
-                  optimizeHeaders =
-                    Option(conf.get(AlternatorOptimizeHeadersConfig)).map(_.toBoolean),
-                  maxConnections = Option(conf.get(AlternatorMaxConnectionsConfig)).map(_.toInt),
-                  connectionMaxIdleTimeMs =
-                    Option(conf.get(AlternatorConnectionMaxIdleTimeMsConfig)).map(_.toLong),
-                  connectionTimeToLiveMs =
-                    Option(conf.get(AlternatorConnectionTimeToLiveMsConfig)).map(_.toLong),
-                  connectionAcquisitionTimeoutMs =
-                    Option(conf.get(AlternatorConnectionAcquisitionTimeoutMsConfig)).map(_.toLong),
-                  connectionTimeoutMs =
-                    Option(conf.get(AlternatorConnectionTimeoutMsConfig)).map(_.toLong)
-                )
+          for (region <- Option(conf.get(DynamoDBConstants.REGION)))
+            altBuilder.region(Region.of(region))
+          (
+            Option(conf.get(DynamoDBConstants.DYNAMODB_ACCESS_KEY_CONF)),
+            Option(conf.get(DynamoDBConstants.DYNAMODB_SECRET_KEY_CONF))
+          ) match {
+            case (Some(accessKey), Some(secretKey)) =>
+              val awsCreds =
+                Option(conf.get(DynamoDBConstants.DYNAMODB_SESSION_TOKEN_CONF)) match {
+                  case Some(token) =>
+                    AwsSessionCredentials.create(accessKey, secretKey, token)
+                  case None =>
+                    AwsBasicCredentials.create(accessKey, secretKey)
+                }
+              altBuilder.credentialsProvider(StaticCredentialsProvider.create(awsCreds))
+            case _ => // No credentials configured - use anonymous (Alternator default)
+          }
+          applyAlternatorSettings(
+            altBuilder,
+            Some(
+              AlternatorSettings(
+                datacenter = Option(conf.get(AlternatorDatacenterConfig)),
+                rack       = Option(conf.get(AlternatorRackConfig)),
+                activeRefreshIntervalMs =
+                  Option(conf.get(AlternatorActiveRefreshConfig)).map(_.toLong),
+                idleRefreshIntervalMs = Option(conf.get(AlternatorIdleRefreshConfig)).map(_.toLong),
+                compression = Option(conf.get(AlternatorCompressionConfig)).map(_.toBoolean),
+                optimizeHeaders =
+                  Option(conf.get(AlternatorOptimizeHeadersConfig)).map(_.toBoolean),
+                maxConnections = Option(conf.get(AlternatorMaxConnectionsConfig)).map(_.toInt),
+                connectionMaxIdleTimeMs =
+                  Option(conf.get(AlternatorConnectionMaxIdleTimeMsConfig)).map(_.toLong),
+                connectionTimeToLiveMs =
+                  Option(conf.get(AlternatorConnectionTimeToLiveMsConfig)).map(_.toLong),
+                connectionAcquisitionTimeoutMs =
+                  Option(conf.get(AlternatorConnectionAcquisitionTimeoutMsConfig)).map(_.toLong),
+                connectionTimeoutMs =
+                  Option(conf.get(AlternatorConnectionTimeoutMsConfig)).map(_.toLong)
               )
             )
-            altBuilder
-          case None => builder
-        }
+          )
+          altBuilder
+        } else builder
       val overrideConf = ClientOverrideConfiguration.builder()
       if (conf.get(RemoveConsumedCapacityConfig, "false").toBoolean)
         overrideConf.addExecutionInterceptor(new RemoveConsumedCapacityInterceptor)

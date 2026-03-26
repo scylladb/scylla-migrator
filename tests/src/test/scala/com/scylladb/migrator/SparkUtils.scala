@@ -142,6 +142,8 @@ object SparkUtils {
         c.copy(host = "localhost", port = cqlHostPortMap.getOrElse(c.host, c.port))
       case d: SourceSettings.DynamoDB =>
         d.copy(endpoint = d.endpoint.map(remapEndpoint))
+      case a: SourceSettings.Alternator =>
+        a.copy(endpoint = a.endpoint.map(remapEndpoint))
       case p: SourceSettings.Parquet =>
         p.copy(
           path     = remapContainerPath(p.path),
@@ -155,6 +157,8 @@ object SparkUtils {
         s.copy(host = "localhost", port = cqlHostPortMap.getOrElse(s.host, s.port))
       case d: TargetSettings.DynamoDB =>
         d.copy(endpoint = d.endpoint.map(remapEndpoint))
+      case a: TargetSettings.Alternator =>
+        a.copy(endpoint = a.endpoint.map(remapEndpoint))
       case p: TargetSettings.Parquet =>
         p.copy(path = remapContainerPath(p.path))
       case s: TargetSettings.DynamoDBS3Export =>

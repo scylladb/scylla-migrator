@@ -54,18 +54,18 @@ object Migrator {
         readers.Parquet.migrateToScylla(config, parquetSource, scyllaTarget)
       case (cqlSource: SourceSettings.Cassandra, parquetTarget: TargetSettings.Parquet) =>
         ScyllaMigrator.migrateToParquet(cqlSource, parquetTarget, config)
-      case (dynamoSource: SourceSettings.DynamoDB, alternatorTarget: TargetSettings.DynamoDB) =>
-        AlternatorMigrator.migrateFromDynamoDB(dynamoSource, alternatorTarget, config)
+      case (dynamoSource: SourceSettings.DynamoDBLike, dynamoTarget: TargetSettings.DynamoDBLike) =>
+        AlternatorMigrator.migrateFromDynamoDB(dynamoSource, dynamoTarget, config)
       case (
-            dynamoSource: SourceSettings.DynamoDB,
+            dynamoSource: SourceSettings.DynamoDBLike,
             s3ExportTarget: TargetSettings.DynamoDBS3Export
           ) =>
         AlternatorMigrator.migrateToS3Export(dynamoSource, s3ExportTarget, config)
       case (
             s3Source: SourceSettings.DynamoDBS3Export,
-            alternatorTarget: TargetSettings.DynamoDB
+            dynamoTarget: TargetSettings.DynamoDBLike
           ) =>
-        AlternatorMigrator.migrateFromS3Export(s3Source, alternatorTarget, config)
+        AlternatorMigrator.migrateFromS3Export(s3Source, dynamoTarget, config)
       case (source, target) =>
         sys.error(
           s"Unsupported combination of source and target: " +
