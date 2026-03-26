@@ -273,6 +273,13 @@ test-benchmark: start-services ## Start services and run all benchmarks (JMH + E
 test-benchmark-e2e-sanity: ## Run E2E sanity suite (small row counts, ~2min, for CI)
 	$(Q)$(MAKE) test-benchmark-e2e E2E_CQL_ROWS=1000 E2E_DDB_ROWS=100
 
+test-benchmark-e2e-sanity-dynamodb: ## Run DynamoDB E2E sanity (requires DynamoDB services)
+	# Order matters: DynamoDBToS3Export must run before S3ExportToAlternator (produces its input).
+	$(Q)sbt -De2e.ddb.rows=100 \
+		"testOnly com.scylladb.migrator.alternator.DynamoDBToAlternatorE2EBenchmark" \
+		"testOnly com.scylladb.migrator.alternator.DynamoDBToS3ExportE2EBenchmark" \
+		"testOnly com.scylladb.migrator.alternator.S3ExportToAlternatorE2EBenchmark"
+
 test-benchmark-e2e-sanity-scylla: ## Run Scylla-only E2E sanity (no DynamoDB services needed)
 	# Single sbt invocation with sequential commands to avoid repeated JVM startup.
 	# Order matters: ScyllaToParquet must run before ParquetToScylla (produces its input).
