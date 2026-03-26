@@ -28,8 +28,30 @@ class DynamoDBS3ExportMigrationTest extends MigratorSuiteWithDynamoDBLocal {
   }
 
   withResources("test-bucket", "BasicTest").test(
-    "Export data from DynamoDB to S3, and import from S3 to Alternator"
+    "Export data from DynamoDB to S3, and import from S3 to Alternator (PAY_PER_REQUEST)"
   ) { case (bucketName, tableName) =>
+    runS3ExportMigration(
+      bucketName,
+      tableName,
+      "dynamodb-s3-export-to-alternator-basic.yaml"
+    )
+  }
+
+  withResources("test-bucket", "BasicTest").test(
+    "Export data from DynamoDB to S3, and import from S3 to Alternator (PROVISIONED)"
+  ) { case (bucketName, tableName) =>
+    runS3ExportMigration(
+      bucketName,
+      tableName,
+      "dynamodb-s3-export-to-alternator-basic-provisioned.yaml"
+    )
+  }
+
+  private def runS3ExportMigration(
+    bucketName: String,
+    tableName: String,
+    configFile: String
+  ): Unit = {
     // Ideally, we would like to perform an export from the DynamoDB source database, but
     // it seems impossible to tell DynamoDB to export to our local S3 instance. Instead,
     // we copy the files that resulted from a manual DynamoDB export into our local S3
@@ -46,7 +68,7 @@ class DynamoDBS3ExportMigrationTest extends MigratorSuiteWithDynamoDBLocal {
       })
 
     // Perform the migration
-    successfullyPerformMigration("dynamodb-s3-export-to-alternator-basic.yaml")
+    successfullyPerformMigration(configFile)
 
     // Check that the schema has been correctly defined on the target table
     checkSchemaWasMigrated(

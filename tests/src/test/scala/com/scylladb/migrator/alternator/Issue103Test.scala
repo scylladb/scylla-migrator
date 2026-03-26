@@ -8,7 +8,15 @@ import scala.jdk.CollectionConverters._
 // Reproduction of https://github.com/scylladb/scylla-migrator/issues/103
 class Issue103Test extends MigratorSuiteWithDynamoDBLocal {
 
-  withTable("Issue103Items").test("Issue #103 is fixed") { tableName =>
+  withTable("Issue103Items").test("Issue #103 is fixed (PAY_PER_REQUEST)") { tableName =>
+    runIssue103Test(tableName, "dynamodb-to-alternator-issue-103.yaml")
+  }
+
+  withTable("Issue103Items").test("Issue #103 is fixed (PROVISIONED)") { tableName =>
+    runIssue103Test(tableName, "dynamodb-to-alternator-issue-103-provisioned.yaml")
+  }
+
+  private def runIssue103Test(tableName: String, configFile: String): Unit = {
     // Insert two items
     val keys1 = Map("id" -> AttributeValue.fromS("4"))
     val attrs1 = Map(
@@ -35,7 +43,7 @@ class Issue103Test extends MigratorSuiteWithDynamoDBLocal {
     )
 
     // Perform the migration
-    successfullyPerformMigration("dynamodb-to-alternator-issue-103.yaml")
+    successfullyPerformMigration(configFile)
 
     // Check that both items have been correctly migrated to the target table
     checkItemWasMigrated(tableName, keys1, item1Data)

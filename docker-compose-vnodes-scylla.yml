@@ -1,0 +1,17 @@
+# Overlay that forces vnodes mode on ScyllaDB services (scylla + scylla-source).
+# Use with docker-compose-scylla.yml.
+services:
+  scylla-source:
+    command: >
+      --smp 1
+      --memory 2048M
+      --alternator-port 8000
+      --alternator-write-isolation only_rmw_uses_lwt
+      --tablets-mode-for-new-keyspaces disabled
+  scylla:
+    command: >
+      --smp 1
+      --memory 2048M
+      --alternator-port 8000
+      --alternator-write-isolation only_rmw_uses_lwt
+      --tablets-mode-for-new-keyspaces disabled

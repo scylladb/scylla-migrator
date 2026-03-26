@@ -16,12 +16,29 @@ class SkippedSegmentsTest extends MigratorSuiteWithDynamoDBLocal {
 
   override val munitTimeout: Duration = 120.seconds
 
-  withTable("SkippedSegments").test("Run partial migrations") { tableName =>
+  withTable("SkippedSegments").test("Run partial migrations (PAY_PER_REQUEST)") { tableName =>
+    runPartialMigrations(
+      tableName,
+      "dynamodb-to-alternator-part1.yaml",
+      "dynamodb-to-alternator-part2.yaml"
+    )
+  }
+
+  withTable("SkippedSegments").test("Run partial migrations (PROVISIONED)") { tableName =>
+    runPartialMigrations(
+      tableName,
+      "dynamodb-to-alternator-part1-provisioned.yaml",
+      "dynamodb-to-alternator-part2-provisioned.yaml"
+    )
+  }
+
+  private def runPartialMigrations(
+    tableName: String,
+    configPart1: String,
+    configPart2: String
+  ): Unit = {
     // We rely on the fact that both config files have `scanSegments: 3` and
     // complementary `skipSegments` properties
-    val configPart1 = "dynamodb-to-alternator-part1.yaml"
-    val configPart2 = "dynamodb-to-alternator-part2.yaml"
-
     createRandomData(tableName)
 
     // Initially, the target table does not exist
@@ -36,10 +53,10 @@ class SkippedSegmentsTest extends MigratorSuiteWithDynamoDBLocal {
     // Perform the first part of the migration
     successfullyPerformMigration(configPart1)
 
-    // Verify that some items have been copied to the target database …
+    // Verify that some items have been copied to the target database ...
     val itemCount = targetAlternatorItemCount(tableName)
     assert(itemCount > 50L && itemCount < 150L, s"Unexpected item count: ${itemCount}")
-    // … but not all of them, hence the validator fails
+    // ... but not all of them, hence the validator fails
     assertEquals(performValidation(configPart2), 1)
 
     // Perform the other (complementary) part of the migration

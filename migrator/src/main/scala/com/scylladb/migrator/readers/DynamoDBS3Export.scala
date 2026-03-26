@@ -197,7 +197,18 @@ object DynamoDBS3Export {
               .build()
           ): _*
         )
-        .provisionedThroughput(ProvisionedThroughputDescription.builder().build())
+        .provisionedThroughput(
+          source.tableDescription.provisionedThroughput match {
+            case Some(pt) =>
+              ProvisionedThroughputDescription
+                .builder()
+                .readCapacityUnits(pt.readCapacityUnits)
+                .writeCapacityUnits(pt.writeCapacityUnits)
+                .build()
+            case None =>
+              ProvisionedThroughputDescription.builder().build()
+          }
+        )
         .billingModeSummary(
           BillingModeSummary
             .builder()
