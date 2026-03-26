@@ -542,8 +542,7 @@ object DynamoUtils {
                     Option(conf.get(AlternatorConnectionAcquisitionTimeoutMsConfig)).map(_.toLong),
                   connectionTimeoutMs =
                     Option(conf.get(AlternatorConnectionTimeoutMsConfig)).map(_.toLong),
-                  maxItemsPerBatch =
-                    Option(conf.get(AlternatorMaxItemsPerBatchConfig)).map(_.toInt)
+                  maxItemsPerBatch = Option(conf.get(AlternatorMaxItemsPerBatchConfig)).map(_.toInt)
                 )
               )
             )
