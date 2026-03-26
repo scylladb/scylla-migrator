@@ -80,13 +80,26 @@ object SourceSettings {
     case class TableDescription(
       attributeDefinitions: Seq[AttributeDefinition],
       keySchema: Seq[KeySchema],
-      billingMode: Option[BillingMode] = None
+      billingMode: Option[BillingMode] = None,
+      provisionedThroughput: Option[ProvisionedThroughputConfig] = None
     )
 
     object TableDescription {
       import com.scylladb.migrator.config.BillingModeCodec._
       implicit val decoder: Decoder[TableDescription] = deriveDecoder[TableDescription]
       implicit val encoder: Encoder[TableDescription] = deriveEncoder[TableDescription]
+    }
+
+    case class ProvisionedThroughputConfig(
+      readCapacityUnits: Long,
+      writeCapacityUnits: Long
+    )
+
+    object ProvisionedThroughputConfig {
+      implicit val decoder: Decoder[ProvisionedThroughputConfig] =
+        deriveDecoder[ProvisionedThroughputConfig]
+      implicit val encoder: Encoder[ProvisionedThroughputConfig] =
+        deriveEncoder[ProvisionedThroughputConfig]
     }
 
     case class AttributeDefinition(name: String, `type`: AttributeType)

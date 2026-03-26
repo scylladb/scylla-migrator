@@ -28,12 +28,22 @@ class DynamoDBS3ExportMigrationTest extends MigratorSuiteWithDynamoDBLocal {
   }
 
   withResources("test-bucket", "BasicTest").test(
-    "Export data from DynamoDB to S3, and import from S3 to Alternator"
+    "Export data from DynamoDB to S3, and import from S3 to Alternator (PAY_PER_REQUEST)"
   ) { case (bucketName, tableName) =>
     runS3ExportMigration(
       bucketName,
       tableName,
       "dynamodb-s3-export-to-alternator-basic.yaml"
+    )
+  }
+
+  withResources("test-bucket", "BasicTest").test(
+    "Export data from DynamoDB to S3, and import from S3 to Alternator (PROVISIONED)"
+  ) { case (bucketName, tableName) =>
+    runS3ExportMigration(
+      bucketName,
+      tableName,
+      "dynamodb-s3-export-to-alternator-basic-provisioned.yaml"
     )
   }
 
