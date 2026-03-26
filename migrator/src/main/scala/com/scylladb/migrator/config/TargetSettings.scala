@@ -26,6 +26,23 @@ object TargetSettings {
     dropNullPrimaryKeys: Option[Boolean] = None
   ) extends TargetSettings
 
+  /** Common trait for DynamoDB-protocol targets (both AWS DynamoDB and Scylla Alternator). */
+  sealed trait DynamoDBLike extends TargetSettings {
+    def endpoint: Option[DynamoDBEndpoint]
+    def region: Option[String]
+    def credentials: Option[AWSCredentials]
+    def table: String
+    def writeThroughput: Option[Int]
+    def throughputWritePercent: Option[Float]
+    def streamChanges: Boolean
+    def skipInitialSnapshotTransfer: Option[Boolean]
+    def removeConsumedCapacity: Option[Boolean]
+    def billingMode: Option[BillingMode]
+    def alternatorSettings: Option[AlternatorSettings]
+    lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
+      AwsUtils.computeFinalCredentials(credentials, endpoint, region)
+  }
+
   case class DynamoDB(
     endpoint: Option[DynamoDBEndpoint],
     region: Option[String],
@@ -36,11 +53,49 @@ object TargetSettings {
     streamChanges: Boolean,
     skipInitialSnapshotTransfer: Option[Boolean],
     removeConsumedCapacity: Option[Boolean] = Some(true),
+    billingMode: Option[BillingMode] = None
+  ) extends DynamoDBLike {
+    val alternatorSettings: Option[AlternatorSettings] = None
+  }
+
+  case class Alternator(
+    endpoint: Option[DynamoDBEndpoint],
+    region: Option[String],
+    credentials: Option[AWSCredentials],
+    table: String,
+    writeThroughput: Option[Int],
+    throughputWritePercent: Option[Float],
+    streamChanges: Boolean,
+    skipInitialSnapshotTransfer: Option[Boolean],
+    removeConsumedCapacity: Option[Boolean] = Some(true),
     billingMode: Option[BillingMode] = None,
-    alternator: Option[AlternatorSettings] = None
-  ) extends TargetSettings {
-    lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
-      AwsUtils.computeFinalCredentials(credentials, endpoint, region)
+    datacenter: Option[String] = None,
+    rack: Option[String] = None,
+    activeRefreshIntervalMs: Option[Long] = None,
+    idleRefreshIntervalMs: Option[Long] = None,
+    compression: Option[Boolean] = None,
+    optimizeHeaders: Option[Boolean] = None,
+    maxConnections: Option[Int] = None,
+    connectionMaxIdleTimeMs: Option[Long] = None,
+    connectionTimeToLiveMs: Option[Long] = None,
+    connectionAcquisitionTimeoutMs: Option[Long] = None,
+    connectionTimeoutMs: Option[Long] = None
+  ) extends DynamoDBLike {
+    val alternatorSettings: Option[AlternatorSettings] = Some(
+      AlternatorSettings(
+        datacenter                     = datacenter,
+        rack                           = rack,
+        activeRefreshIntervalMs        = activeRefreshIntervalMs,
+        idleRefreshIntervalMs          = idleRefreshIntervalMs,
+        compression                    = compression,
+        optimizeHeaders                = optimizeHeaders,
+        maxConnections                 = maxConnections,
+        connectionMaxIdleTimeMs        = connectionMaxIdleTimeMs,
+        connectionTimeToLiveMs         = connectionTimeToLiveMs,
+        connectionAcquisitionTimeoutMs = connectionAcquisitionTimeoutMs,
+        connectionTimeoutMs            = connectionTimeoutMs
+      )
+    )
   }
 
   case class Parquet(
@@ -66,6 +121,8 @@ object TargetSettings {
           deriveDecoder[Scylla].apply(cursor)
         case "dynamodb" | "dynamo" =>
           deriveDecoder[DynamoDB].apply(cursor)
+        case "alternator" =>
+          deriveDecoder[Alternator].apply(cursor)
         case "parquet" =>
           for {
             path        <- cursor.get[String]("path")
@@ -119,6 +176,9 @@ object TargetSettings {
 
       case t: DynamoDB =>
         deriveEncoder[DynamoDB].encodeObject(t).add("type", Json.fromString("dynamodb")).asJson
+
+      case t: Alternator =>
+        deriveEncoder[Alternator].encodeObject(t).add("type", Json.fromString("alternator")).asJson
 
       case t: Parquet =>
         deriveEncoder[Parquet].encodeObject(t).add("type", Json.fromString("parquet")).asJson

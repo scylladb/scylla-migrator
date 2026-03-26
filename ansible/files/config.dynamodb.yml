@@ -26,7 +26,7 @@ source:
   maxMapTasks: 700
 
 target:
-  type: dynamodb
+  type: alternator
   table: "YOUR_TABLE_NAME"
   # For scyllaDB - Alternator target, you need to specify endpoint URL.
   # If you have multiple workers, you could use /etc/hosts, and add 

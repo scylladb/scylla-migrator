@@ -17,8 +17,8 @@ object AlternatorValidator {
     *   A list of comparison failures (which is empty if the data are the same in both databases).
     */
   def runValidation(
-    sourceSettings: SourceSettings.DynamoDB,
-    targetSettings: TargetSettings.DynamoDB,
+    sourceSettings: SourceSettings.DynamoDBLike,
+    targetSettings: TargetSettings.DynamoDBLike,
     config: MigratorConfig
   )(implicit spark: SparkSession): List[RowComparisonFailure] = {
 

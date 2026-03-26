@@ -24,7 +24,7 @@ object DynamoDB {
 
   def readRDD(
     spark: SparkSession,
-    source: SourceSettings.DynamoDB,
+    source: SourceSettings.DynamoDBLike,
     skipSegments: Option[Set[Int]]
   ): (RDD[(Text, DynamoDBItemWritable)], TableDescription) =
     readRDD(
@@ -39,10 +39,10 @@ object DynamoDB {
       source.throughputReadPercent,
       skipSegments,
       source.removeConsumedCapacity.getOrElse(false),
-      source.alternator
+      source.alternatorSettings
     )
 
-  /** Overload of `readRDD` that does not depend on `SourceSettings.DynamoDB`
+  /** Overload of `readRDD` that does not depend on `SourceSettings.DynamoDBLike`
     */
   def readRDD(
     spark: SparkSession,

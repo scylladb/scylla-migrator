@@ -23,7 +23,7 @@ object DynamoDB {
   val log = LogManager.getLogger("com.scylladb.migrator.writers.DynamoDB")
 
   def deleteRDD(
-    target: TargetSettings.DynamoDB,
+    target: TargetSettings.DynamoDBLike,
     targetTableDesc: TableDescription,
     rdd: RDD[util.Map[String, AttributeValue]]
   )(implicit spark: SparkSession): Unit = {
@@ -37,7 +37,7 @@ object DynamoDB {
           target.finalCredentials.map(_.toProvider),
           target.region,
           Seq.empty,
-          target.alternator
+          target.alternatorSettings
         )
 
         try
@@ -77,7 +77,7 @@ object DynamoDB {
   }
 
   def writeRDD(
-    target: TargetSettings.DynamoDB,
+    target: TargetSettings.DynamoDBLike,
     renamesMap: Map[String, String],
     rdd: RDD[(Text, DynamoDBItemWritable)],
     targetTableDesc: TableDescription
@@ -93,7 +93,7 @@ object DynamoDB {
       maybeMaxMapTasks  = None,
       target.finalCredentials,
       target.removeConsumedCapacity.getOrElse(false),
-      target.alternator
+      target.alternatorSettings
     )
     jobConf.set(DynamoDBConstants.OUTPUT_TABLE_NAME, target.table)
     val writeThroughput =

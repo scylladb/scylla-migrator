@@ -132,7 +132,7 @@ class DynamoStreamReplicationIntegrationTest extends MigratorSuiteWithDynamoDBLo
         .parallelize(streamEvents, 1)
         .asInstanceOf[RDD[Option[DynamoStreamReplication.DynamoItem]]]
 
-      val targetSettings = TargetSettings.DynamoDB(
+      val targetSettings = TargetSettings.Alternator(
         table                       = tableName,
         region                      = Some("eu-central-1"),
         endpoint                    = Some(DynamoDBEndpoint("http://localhost", 8000)),

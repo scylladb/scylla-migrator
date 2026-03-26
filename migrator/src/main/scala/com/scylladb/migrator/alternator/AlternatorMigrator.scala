@@ -19,8 +19,8 @@ object AlternatorMigrator {
   private val log = LogManager.getLogger("com.scylladb.migrator.alternator")
 
   def migrateFromDynamoDB(
-    source: SourceSettings.DynamoDB,
-    target: TargetSettings.DynamoDB,
+    source: SourceSettings.DynamoDBLike,
+    target: TargetSettings.DynamoDBLike,
     migratorConfig: MigratorConfig
   )(implicit spark: SparkSession): Unit = {
     val (sourceRDD, sourceTableDesc) =
@@ -30,7 +30,7 @@ object AlternatorMigrator {
   }
 
   def migrateToS3Export(
-    source: SourceSettings.DynamoDB,
+    source: SourceSettings.DynamoDBLike,
     target: TargetSettings.DynamoDBS3Export,
     migratorConfig: MigratorConfig
   )(implicit spark: SparkSession): Unit = {
@@ -53,7 +53,7 @@ object AlternatorMigrator {
 
   def migrateFromS3Export(
     source: SourceSettings.DynamoDBS3Export,
-    target: TargetSettings.DynamoDB,
+    target: TargetSettings.DynamoDBLike,
     migratorConfig: MigratorConfig
   )(implicit spark: SparkSession): Unit = {
     val (sourceRDD, sourceTableDesc) = readers.DynamoDBS3Export.readRDD(source)(spark.sparkContext)
@@ -84,8 +84,8 @@ object AlternatorMigrator {
   def migrate(
     sourceRDD: RDD[(Text, DynamoDBItemWritable)],
     sourceTableDesc: TableDescription,
-    maybeStreamedSource: Option[SourceSettings.DynamoDB],
-    target: TargetSettings.DynamoDB,
+    maybeStreamedSource: Option[SourceSettings.DynamoDBLike],
+    target: TargetSettings.DynamoDBLike,
     migratorConfig: MigratorConfig
   )(implicit spark: SparkSession): Unit = {
 

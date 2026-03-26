@@ -40,7 +40,7 @@ object DynamoStreamReplication {
 
   private[writers] def run(
     msgs: RDD[Option[DynamoItem]],
-    target: TargetSettings.DynamoDB,
+    target: TargetSettings.DynamoDBLike,
     renamesMap: Map[String, String],
     targetTableDesc: TableDescription
   )(implicit spark: SparkSession): Unit = {
@@ -58,7 +58,7 @@ object DynamoStreamReplication {
             target.finalCredentials.map(_.toProvider),
             target.region,
             Seq.empty,
-            target.alternator
+            target.alternatorSettings
           )
         try
           partition.foreach { item =>
@@ -116,8 +116,8 @@ object DynamoStreamReplication {
   def createDStream(
     spark: SparkSession,
     streamingContext: StreamingContext,
-    src: SourceSettings.DynamoDB,
-    target: TargetSettings.DynamoDB,
+    src: SourceSettings.DynamoDBLike,
+    target: TargetSettings.DynamoDBLike,
     targetTableDesc: TableDescription,
     renamesMap: Map[String, String]
   ): Unit =
