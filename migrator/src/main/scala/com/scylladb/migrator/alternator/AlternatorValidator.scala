@@ -2,8 +2,8 @@ package com.scylladb.migrator.alternator
 
 import com.scylladb.migrator.DynamoUtils
 import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
-import com.scylladb.migrator.validation.RowComparisonFailure
 import com.scylladb.migrator.readers
+import com.scylladb.migrator.validation.RowComparisonFailure
 import org.apache.logging.log4j.LogManager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
@@ -92,7 +92,7 @@ object AlternatorValidator {
       if (missingRowCount > 0) {
         log.info(s"Detected ${missingRowCount} missing rows, copying from source to target")
 
-        // Alias fields needed in the closure to avoid serializing the whole settings objects
+        // Alias fields to avoid serializing the whole settings objects in the closure
         val targetEndpoint    = targetSettings.endpoint
         val targetCredentials = targetSettings.finalCredentials
         val targetRegion      = targetSettings.region
