@@ -11,7 +11,7 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{ DataFrame, Row, SparkSession }
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.util.LongAccumulator
-import com.datastax.oss.driver.api.core.ConsistencyLevel
+import com.scylladb.migrator.ConsistencyLevelUtils
 
 import scala.collection.immutable.ArraySeq
 import java.util.Locale
@@ -133,22 +133,10 @@ object Scylla {
 
     val connector = Connectors.targetConnector(spark.sparkContext.getConf, target)
 
-    val consistencyLevel = target.consistencyLevel match {
-      case "LOCAL_QUORUM" => ConsistencyLevel.LOCAL_QUORUM
-      case "QUORUM"       => ConsistencyLevel.QUORUM
-      case "LOCAL_ONE"    => ConsistencyLevel.LOCAL_ONE
-      case "ONE"          => ConsistencyLevel.ONE
-      case _              => ConsistencyLevel.LOCAL_QUORUM // Default for Target is LOCAL_QUORUM
-    }
-    if (consistencyLevel.toString == target.consistencyLevel) {
-      log.info(
-        s"Using consistencyLevel [${consistencyLevel}] for TARGET based on target config [${target.consistencyLevel}]"
-      )
-    } else {
-      log.info(
-        s"Using DEFAULT consistencyLevel [${consistencyLevel}] for TARGET based on unrecognized target config [${target.consistencyLevel}]"
-      )
-    }
+    val consistencyLevel = ConsistencyLevelUtils.parseConsistencyLevel(target.consistencyLevel)
+    log.info(
+      s"Using consistencyLevel [${consistencyLevel}] for TARGET based on target config [${target.consistencyLevel}]"
+    )
 
     val tempWriteConf = WriteConf
       .fromSparkConf(spark.sparkContext.getConf)

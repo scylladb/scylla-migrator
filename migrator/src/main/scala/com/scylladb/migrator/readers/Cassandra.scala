@@ -13,7 +13,7 @@ import org.apache.spark.sql.cassandra.{ CassandraSQLRow, DataTypeConverter }
 import org.apache.spark.sql.types.{ IntegerType, LongType, StructField, StructType }
 import org.apache.spark.sql.{ DataFrame, Encoders, Row, SparkSession }
 import org.apache.spark.unsafe.types.UTF8String
-import com.datastax.oss.driver.api.core.ConsistencyLevel
+import com.scylladb.migrator.ConsistencyLevelUtils
 import com.scylladb.migrator.scylla.SourceDataFrame
 
 import scala.collection.immutable.ArraySeq
@@ -327,22 +327,10 @@ object Cassandra {
     skipExplosion: Boolean = false
   ): SourceDataFrame = {
     val connector = Connectors.sourceConnector(spark.sparkContext.getConf, source)
-    val consistencyLevel = source.consistencyLevel match {
-      case "LOCAL_QUORUM" => ConsistencyLevel.LOCAL_QUORUM
-      case "QUORUM"       => ConsistencyLevel.QUORUM
-      case "LOCAL_ONE"    => ConsistencyLevel.LOCAL_ONE
-      case "ONE"          => ConsistencyLevel.ONE
-      case _              => ConsistencyLevel.LOCAL_QUORUM
-    }
-    if (consistencyLevel.toString == source.consistencyLevel) {
-      log.info(
-        s"Using consistencyLevel [${consistencyLevel}] for SOURCE based on source config [${source.consistencyLevel}]"
-      )
-    } else {
-      log.info(
-        s"Using DEFAULT consistencyLevel [${consistencyLevel}] for SOURCE based on unrecognized source config [${source.consistencyLevel}]"
-      )
-    }
+    val consistencyLevel = ConsistencyLevelUtils.parseConsistencyLevel(source.consistencyLevel)
+    log.info(
+      s"Using consistencyLevel [${consistencyLevel}] for SOURCE based on source config [${source.consistencyLevel}]"
+    )
 
     val readConf = ReadConf
       .fromSparkConf(spark.sparkContext.getConf)
