@@ -327,3 +327,8 @@ savepoints:
 #   floatingPointTolerance: 0.001
 #   # What difference in ms should we allow between timestamps?
 #   timestampMsTolerance: 0
+#   # If true, rows that exist in the source but are missing in the target will be
+#   # copied to the target during validation. Only missing rows are copied — rows
+#   # with value differences are still only reported, never overwritten.
+#   # Defaults to false.
+#   copyMissingRows: false

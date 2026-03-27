@@ -1,6 +1,7 @@
 package com.scylladb.migrator.scylla
 
 import com.datastax.spark.connector.{
+  toRDDFunctions,
   toSparkContextFunctions,
   ColumnName,
   SomeColumns,
@@ -8,6 +9,7 @@ import com.datastax.spark.connector.{
   WriteTime
 }
 import com.datastax.spark.connector.cql.{ CassandraConnector, Schema }
+import com.datastax.spark.connector.writer.{ CassandraRowWriter, WriteConf }
 import com.scylladb.migrator.Connectors
 import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
 import com.scylladb.migrator.validation.RowComparisonFailure
@@ -112,7 +114,7 @@ object ScyllaValidator {
         .withConnector(targetConnector)
     }
 
-    joined
+    val failures = joined
       .flatMap { case (l, r) =>
         RowComparisonFailure.compareCassandraRows(
           l,
@@ -127,6 +129,38 @@ object ScyllaValidator {
       .take(validationConfig.failuresToFetch)
       .toList
 
+    if (validationConfig.copyMissingRows) {
+      val missingRowCount = failures.count(
+        _.items.contains(RowComparisonFailure.Item.MissingTargetRow)
+      )
+      if (missingRowCount > 0) {
+        log.info(s"Detected ${missingRowCount} missing rows, copying from source to target")
+
+        val writeColumnSelector = {
+          val regularColumns = sourceTableDef.regularColumns.map { colDef =>
+            ColumnName(config.renamesMap(colDef.columnName))
+          }
+          val primaryKeyColumns =
+            (sourceTableDef.partitionKey ++ sourceTableDef.clusteringColumns)
+              .map(colDef => ColumnName(config.renamesMap(colDef.columnName)))
+          SomeColumns(primaryKeyColumns ++ regularColumns: _*)
+        }
+
+        joined
+          .filter { case (_, r) => r.isEmpty }
+          .map { case (sourceRow, _) => sourceRow }
+          .saveToCassandra(
+            targetSettings.keyspace,
+            targetSettings.table,
+            writeColumnSelector,
+            WriteConf.fromSparkConf(spark.sparkContext.getConf)
+          )(targetConnector, CassandraRowWriter.Factory)
+
+        log.info(s"Finished copying missing rows to target")
+      }
+    }
+
+    failures
   }
 
 }

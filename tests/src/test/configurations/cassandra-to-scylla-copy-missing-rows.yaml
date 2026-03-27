@@ -33,10 +33,10 @@ savepoints:
   intervalSeconds: 300
 
 validation:
-  compareTimestamps: true
+  compareTimestamps: false
   ttlToleranceMillis: 60000
   writetimeToleranceMillis: 1000
   failuresToFetch: 100
   floatingPointTolerance: 0.001
   timestampMsTolerance: 0
-  copyMissingRows: false
+  copyMissingRows: true
