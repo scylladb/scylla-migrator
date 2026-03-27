@@ -13,7 +13,7 @@ import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSett
 import com.scylladb.migrator.validation.RowComparisonFailure
 import org.apache.logging.log4j.LogManager
 import org.apache.spark.sql.SparkSession
-import com.datastax.oss.driver.api.core.ConsistencyLevel
+import com.scylladb.migrator.ConsistencyLevelUtils
 import com.datastax.spark.connector.rdd.ReadConf
 
 /** The C* to Scylla migration validator */
@@ -60,22 +60,11 @@ object ScyllaValidator {
         (sourceTableDef.partitionKey ++ sourceTableDef.clusteringColumns)
           .map(colDef => ColumnName(colDef.columnName, config.renamesMap.get(colDef.columnName)))
 
-      val consistencyLevel = sourceSettings.consistencyLevel match {
-        case "LOCAL_QUORUM" => ConsistencyLevel.LOCAL_QUORUM
-        case "QUORUM"       => ConsistencyLevel.QUORUM
-        case "LOCAL_ONE"    => ConsistencyLevel.LOCAL_ONE
-        case "ONE"          => ConsistencyLevel.ONE
-        case _              => ConsistencyLevel.LOCAL_QUORUM
-      }
-      if (consistencyLevel.toString == sourceSettings.consistencyLevel) {
-        log.info(
-          s"Using consistencyLevel [${consistencyLevel}] for VALIDATOR SOURCE based on validator source config [${sourceSettings.consistencyLevel}]"
-        )
-      } else {
-        log.info(
-          s"Using DEFAULT consistencyLevel [${consistencyLevel}] for VALIDATOR SOURCE based on unrecognized validator source config [${sourceSettings.consistencyLevel}]"
-        )
-      }
+      val consistencyLevel =
+        ConsistencyLevelUtils.parseConsistencyLevel(sourceSettings.consistencyLevel)
+      log.info(
+        s"Using consistencyLevel [${consistencyLevel}] for VALIDATOR SOURCE based on validator source config [${sourceSettings.consistencyLevel}]"
+      )
 
       spark.sparkContext
         .cassandraTable(sourceSettings.keyspace, sourceSettings.table)
