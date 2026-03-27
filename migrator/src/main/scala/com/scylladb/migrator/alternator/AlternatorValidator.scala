@@ -93,11 +93,11 @@ object AlternatorValidator {
         log.info(s"Detected ${missingRowCount} missing rows, copying from source to target")
 
         // Alias fields to avoid serializing the whole settings objects in the closure
-        val targetEndpoint    = targetSettings.endpoint
+        val targetEndpoint = targetSettings.endpoint
         val targetCredentials = targetSettings.finalCredentials
-        val targetRegion      = targetSettings.region
-        val targetTable       = targetSettings.table
-        val targetAlternator  = targetSettings.alternator
+        val targetRegion = targetSettings.region
+        val targetTable = targetSettings.table
+        val targetAlternator = targetSettings.alternator
 
         joinedRdd
           .filter { case (_, (_, r)) => r.isEmpty }
@@ -118,7 +118,8 @@ object AlternatorValidator {
                     item.put(renamedColumn(k), DdbValue.toAttributeValue(v))
                   }
                   dynamoDB.putItem(
-                    PutItemRequest.builder()
+                    PutItemRequest
+                      .builder()
                       .tableName(targetTable)
                       .item(item)
                       .build()
