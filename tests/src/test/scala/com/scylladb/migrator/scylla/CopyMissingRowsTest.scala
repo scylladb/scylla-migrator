@@ -49,8 +49,8 @@ abstract class CopyMissingRowsTest(version: CassandraVersion) extends MigratorSu
     // Validate with copyMissingRows enabled — detects the missing row and copies it
     assertEquals(performValidation(copyMissingConfigFile), 1, "Should detect missing row")
 
-    // Validate again — the missing row should now be present in the target
-    assertEquals(performValidation(basicConfigFile), 0, "Row should have been copied to target")
+    // Validate again without timestamp comparison — the copied row has fresh timestamps
+    assertEquals(performValidation(copyMissingConfigFile), 0, "Row should have been copied to target")
   }
 
 }

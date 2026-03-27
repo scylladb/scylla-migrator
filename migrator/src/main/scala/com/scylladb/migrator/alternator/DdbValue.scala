@@ -44,15 +44,15 @@ object DdbValue {
 
   def toAttributeValue(ddbValue: DdbValue): AttributeValue =
     ddbValue match {
-      case S(v)      => AttributeValue.fromS(v)
-      case N(v)      => AttributeValue.fromN(v)
-      case Bool(v)   => AttributeValue.fromBool(v)
-      case L(vs)     => AttributeValue.fromL(vs.map(toAttributeValue).asJava)
-      case Null(v)   => AttributeValue.fromNul(v)
-      case B(v)      => AttributeValue.fromB(v)
-      case M(vs)     => AttributeValue.fromM(vs.view.mapValues(toAttributeValue).toMap.asJava)
-      case Ss(vs)    => AttributeValue.fromSs(vs.toList.asJava)
-      case Ns(vs)    => AttributeValue.fromNs(vs.toList.asJava)
-      case Bs(vs)    => AttributeValue.fromBs(vs.toList.asJava)
+      case S(v)    => AttributeValue.fromS(v)
+      case N(v)    => AttributeValue.fromN(v)
+      case Bool(v) => AttributeValue.fromBool(v)
+      case L(vs)   => AttributeValue.fromL(vs.map(toAttributeValue).asJava)
+      case Null(v) => AttributeValue.fromNul(v)
+      case B(v)    => AttributeValue.fromB(v)
+      case M(vs)   => AttributeValue.fromM(vs.view.mapValues(toAttributeValue).toMap.asJava)
+      case Ss(vs)  => AttributeValue.fromSs(vs.toList.asJava)
+      case Ns(vs)  => AttributeValue.fromNs(vs.toList.asJava)
+      case Bs(vs)  => AttributeValue.fromBs(vs.toList.asJava)
     }
 }
