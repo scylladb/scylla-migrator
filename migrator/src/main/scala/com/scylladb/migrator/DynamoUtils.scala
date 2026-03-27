@@ -80,6 +80,8 @@ object DynamoUtils {
     "scylla.migrator.alternator.connection_acquisition_timeout_ms"
   private val AlternatorConnectionTimeoutMsConfig =
     "scylla.migrator.alternator.connection_timeout_ms"
+  private val AlternatorMaxItemsPerBatchConfig =
+    "scylla.migrator.alternator.max_items_per_batch"
 
   class RemoveConsumedCapacityInterceptor extends ExecutionInterceptor {
     override def modifyRequest(ctx: Context.ModifyRequest, attrs: ExecutionAttributes): SdkRequest =
@@ -451,6 +453,16 @@ object DynamoUtils {
         AlternatorConnectionTimeoutMsConfig,
         settings.connectionTimeoutMs.map(_.toString)
       )
+      setOptionalConf(
+        jobConf,
+        AlternatorMaxItemsPerBatchConfig,
+        settings.maxItemsPerBatch.map(_.toString)
+      )
+      setOptionalConf(
+        jobConf,
+        DynamoDBConstants.MAX_ITEMS_PER_BATCH,
+        settings.maxItemsPerBatch.map(_.toString)
+      )
     }
   }
 
@@ -529,7 +541,8 @@ object DynamoUtils {
                   connectionAcquisitionTimeoutMs =
                     Option(conf.get(AlternatorConnectionAcquisitionTimeoutMsConfig)).map(_.toLong),
                   connectionTimeoutMs =
-                    Option(conf.get(AlternatorConnectionTimeoutMsConfig)).map(_.toLong)
+                    Option(conf.get(AlternatorConnectionTimeoutMsConfig)).map(_.toLong),
+                  maxItemsPerBatch = Option(conf.get(AlternatorMaxItemsPerBatchConfig)).map(_.toInt)
                 )
               )
             )
