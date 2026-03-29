@@ -19,18 +19,28 @@ object AlternatorMigrator {
   private val log = LogManager.getLogger("com.scylladb.migrator.alternator")
 
   def migrateFromDynamoDB(
-    source: SourceSettings.DynamoDB,
-    target: TargetSettings.DynamoDB,
+    source: SourceSettings.DynamoDBLike,
+    target: TargetSettings.DynamoDBLike,
     migratorConfig: MigratorConfig
   )(implicit spark: SparkSession): Unit = {
     val (sourceRDD, sourceTableDesc) =
       readers.DynamoDB.readRDD(spark, source, migratorConfig.skipSegments)
-    val maybeStreamedSource = if (target.streamChanges) Some(source) else None
+    val maybeStreamedSource = source match {
+      case d: SourceSettings.DynamoDB if target.streamChanges => Some(d)
+      case _                                                  => None
+    }
+    if (target.streamChanges && maybeStreamedSource.isEmpty) {
+      throw new IllegalArgumentException(
+        "streamChanges is true on the target, but the source does not support DynamoDB Streams. " +
+          "This combination should have been rejected at config-parse time. " +
+          "Stream replication cannot proceed."
+      )
+    }
     migrate(sourceRDD, sourceTableDesc, maybeStreamedSource, target, migratorConfig)
   }
 
   def migrateToS3Export(
-    source: SourceSettings.DynamoDB,
+    source: SourceSettings.DynamoDBLike,
     target: TargetSettings.DynamoDBS3Export,
     migratorConfig: MigratorConfig
   )(implicit spark: SparkSession): Unit = {
@@ -53,7 +63,7 @@ object AlternatorMigrator {
 
   def migrateFromS3Export(
     source: SourceSettings.DynamoDBS3Export,
-    target: TargetSettings.DynamoDB,
+    target: TargetSettings.DynamoDBLike,
     migratorConfig: MigratorConfig
   )(implicit spark: SparkSession): Unit = {
     val (sourceRDD, sourceTableDesc) = readers.DynamoDBS3Export.readRDD(source)(spark.sparkContext)
@@ -62,9 +72,6 @@ object AlternatorMigrator {
       sourceRDD.map { item =>
         (new Text(), new DynamoDBItemWritable(item.asJava))
       }
-    if (target.streamChanges) {
-      log.warn("'streamChanges: true' is not supported when the source is a DynamoDB S3 export.")
-    }
     migrate(normalizedRDD, sourceTableDesc, None, target, migratorConfig)
   }
 
@@ -85,7 +92,7 @@ object AlternatorMigrator {
     sourceRDD: RDD[(Text, DynamoDBItemWritable)],
     sourceTableDesc: TableDescription,
     maybeStreamedSource: Option[SourceSettings.DynamoDB],
-    target: TargetSettings.DynamoDB,
+    target: TargetSettings.DynamoDBLike,
     migratorConfig: MigratorConfig
   )(implicit spark: SparkSession): Unit = {
 
@@ -106,7 +113,7 @@ object AlternatorMigrator {
         )
       }
 
-      if (target.streamChanges && target.skipInitialSnapshotTransfer.contains(true)) {
+      if (maybeStreamedSource.isDefined && target.skipInitialSnapshotTransfer.contains(true)) {
         log.info("Skip transferring table snapshot")
       } else {
         Using.resource(DynamoDbSavepointsManager(migratorConfig, sourceRDD, spark.sparkContext)) {

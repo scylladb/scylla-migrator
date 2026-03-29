@@ -4,7 +4,7 @@ source:
   region: us-east-1
 
 target:
-  type: dynamodb
+  type: alternator
   table: StreamedItemsSkipSnapshotTest
   region: dummy
   endpoint:

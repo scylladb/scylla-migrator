@@ -1,7 +1,7 @@
 package com.scylladb.migrator
 
 import com.scylladb.alternator.AlternatorDynamoDbClient
-import com.scylladb.alternator.routing.{ ClusterScope, DatacenterScope, RackScope }
+import com.scylladb.alternator.routing.{ ClusterScope, DatacenterScope, RackScope, RoutingScope }
 import com.scylladb.alternator.RequestCompressionAlgorithm
 import com.scylladb.migrator.config.{
   AlternatorSettings,
@@ -19,7 +19,6 @@ import software.amazon.awssdk.auth.credentials.{
   AwsBasicCredentials,
   AwsCredentialsProvider,
   AwsSessionCredentials,
-  DefaultCredentialsProvider,
   StaticCredentialsProvider
 }
 import software.amazon.awssdk.regions.Region
@@ -58,7 +57,7 @@ import software.amazon.awssdk.services.dynamodb.streams.DynamoDbStreamsClient
 
 import java.net.URI
 import java.util.stream.Collectors
-import scala.util.{ Failure, Success, Try }
+import scala.util.{ Failure, Success, Try, Using }
 import scala.jdk.OptionConverters._
 
 object DynamoUtils {
@@ -80,6 +79,107 @@ object DynamoUtils {
     "scylla.migrator.alternator.connection_acquisition_timeout_ms"
   private val AlternatorConnectionTimeoutMsConfig =
     "scylla.migrator.alternator.connection_timeout_ms"
+  private val UseAlternatorClientConfig = "scylla.migrator.use_alternator_client"
+
+  /** Write all [[AlternatorSettings]] fields into a Hadoop configuration. */
+  private[migrator] def writeAlternatorSettingsToConf(
+    jobConf: JobConf,
+    settings: AlternatorSettings
+  ): Unit = {
+    setOptionalConf(jobConf, AlternatorDatacenterConfig, settings.datacenter)
+    setOptionalConf(jobConf, AlternatorRackConfig, settings.rack)
+    setOptionalConf(
+      jobConf,
+      AlternatorActiveRefreshConfig,
+      settings.activeRefreshIntervalMs.map(_.toString)
+    )
+    setOptionalConf(
+      jobConf,
+      AlternatorIdleRefreshConfig,
+      settings.idleRefreshIntervalMs.map(_.toString)
+    )
+    setOptionalConf(jobConf, AlternatorCompressionConfig, settings.compression.map(_.toString))
+    setOptionalConf(
+      jobConf,
+      AlternatorOptimizeHeadersConfig,
+      settings.optimizeHeaders.map(_.toString)
+    )
+    setOptionalConf(
+      jobConf,
+      AlternatorMaxConnectionsConfig,
+      settings.maxConnections.map(_.toString)
+    )
+    setOptionalConf(
+      jobConf,
+      AlternatorConnectionMaxIdleTimeMsConfig,
+      settings.connectionMaxIdleTimeMs.map(_.toString)
+    )
+    setOptionalConf(
+      jobConf,
+      AlternatorConnectionTimeToLiveMsConfig,
+      settings.connectionTimeToLiveMs.map(_.toString)
+    )
+    setOptionalConf(
+      jobConf,
+      AlternatorConnectionAcquisitionTimeoutMsConfig,
+      settings.connectionAcquisitionTimeoutMs.map(_.toString)
+    )
+    setOptionalConf(
+      jobConf,
+      AlternatorConnectionTimeoutMsConfig,
+      settings.connectionTimeoutMs.map(_.toString)
+    )
+  }
+
+  /** Read [[AlternatorSettings]] fields from a Hadoop configuration.
+    *
+    * These settings were already validated at config-parse time, so a parse failure here indicates
+    * corruption in the Hadoop config round-trip and should be treated as a fatal error.
+    */
+  private[migrator] def readAlternatorSettingsFromConf(conf: Configuration): AlternatorSettings = {
+    def parseLong(key: String): Option[Long] =
+      Option(conf.get(key)).map { s =>
+        Try(s.toLong).getOrElse(
+          throw new IllegalStateException(
+            s"Failed to parse Hadoop config '$key' value '$s' as Long"
+          )
+        )
+      }
+    def parseInt(key: String): Option[Int] =
+      Option(conf.get(key)).map { s =>
+        Try(s.toInt).getOrElse(
+          throw new IllegalStateException(
+            s"Failed to parse Hadoop config '$key' value '$s' as Int"
+          )
+        )
+      }
+    def parseBoolean(key: String): Option[Boolean] =
+      Option(conf.get(key)).map { s =>
+        Try(s.toBoolean).getOrElse(
+          throw new IllegalStateException(
+            s"Failed to parse Hadoop config '$key' value '$s' as Boolean"
+          )
+        )
+      }
+    AlternatorSettings(
+      datacenter                     = Option(conf.get(AlternatorDatacenterConfig)),
+      rack                           = Option(conf.get(AlternatorRackConfig)),
+      activeRefreshIntervalMs        = parseLong(AlternatorActiveRefreshConfig),
+      idleRefreshIntervalMs          = parseLong(AlternatorIdleRefreshConfig),
+      compression                    = parseBoolean(AlternatorCompressionConfig),
+      optimizeHeaders                = parseBoolean(AlternatorOptimizeHeadersConfig),
+      maxConnections                 = parseInt(AlternatorMaxConnectionsConfig),
+      connectionMaxIdleTimeMs        = parseLong(AlternatorConnectionMaxIdleTimeMsConfig),
+      connectionTimeToLiveMs         = parseLong(AlternatorConnectionTimeToLiveMsConfig),
+      connectionAcquisitionTimeoutMs = parseLong(AlternatorConnectionAcquisitionTimeoutMsConfig),
+      connectionTimeoutMs            = parseLong(AlternatorConnectionTimeoutMsConfig)
+    )
+  }
+
+  /** Build the interceptor list for removing `ConsumedCapacity` from DynamoDB responses. */
+  def removeConsumedCapacityInterceptors(remove: Boolean): Seq[ExecutionInterceptor] =
+    if (remove) Seq(new RemoveConsumedCapacityInterceptor)
+    else Nil
 
   class RemoveConsumedCapacityInterceptor extends ExecutionInterceptor {
     override def modifyRequest(ctx: Context.ModifyRequest, attrs: ExecutionAttributes): SdkRequest =
@@ -102,178 +202,189 @@ object DynamoUtils {
 
   def replicateTableDefinition(
     sourceDescription: TableDescription,
-    target: TargetSettings.DynamoDB
-  ): TableDescription = {
-    // If non-existent, replicate
-    val targetClient =
+    target: TargetSettings.DynamoDBLike
+  ): TableDescription =
+    Using.resource(
       buildDynamoClient(
         target.endpoint,
         target.finalCredentials.map(_.toProvider),
         target.region,
-        if (target.removeConsumedCapacity.getOrElse(false))
-          Seq(new RemoveConsumedCapacityInterceptor)
-        else Nil,
-        target.alternator
+        removeConsumedCapacityInterceptors(target.removeConsumedCapacity),
+        target.alternatorSettings
       )
+    ) { targetClient =>
+      log.info("Checking for table existence at destination")
+      val describeTargetTableRequest =
+        DescribeTableRequest.builder().tableName(target.table).build()
+      val targetDescription = Try(targetClient.describeTable(describeTargetTableRequest))
+      targetDescription match {
+        case Success(desc) =>
+          log.info(s"Table ${target.table} exists at destination")
+          desc.table()
 
-    log.info("Checking for table existence at destination")
-    val describeTargetTableRequest =
-      DescribeTableRequest.builder().tableName(target.table).build()
-    val targetDescription = Try(targetClient.describeTable(describeTargetTableRequest))
-    targetDescription match {
-      case Success(desc) =>
-        log.info(s"Table ${target.table} exists at destination")
-        desc.table()
+        case Failure(e: ResourceNotFoundException) =>
+          val requestBuilder = CreateTableRequest
+            .builder()
+            .tableName(target.table)
+            .keySchema(sourceDescription.keySchema)
+            .attributeDefinitions(sourceDescription.attributeDefinitions)
 
-      case Failure(e: ResourceNotFoundException) =>
-        val requestBuilder = CreateTableRequest
-          .builder()
-          .tableName(target.table)
-          .keySchema(sourceDescription.keySchema)
-          .attributeDefinitions(sourceDescription.attributeDefinitions)
+          target.billingMode match {
+            case Some(BillingMode.PROVISIONED)
+                if (sourceDescription.provisionedThroughput.readCapacityUnits == 0L ||
+                  sourceDescription.provisionedThroughput.writeCapacityUnits == 0L) =>
+              throw new RuntimeException(
+                "readCapacityUnits and writeCapacityUnits must be set for PROVISIONED billing mode"
+              )
 
-        target.billingMode match {
-          case Some(BillingMode.PROVISIONED)
-              if (sourceDescription.provisionedThroughput.readCapacityUnits == 0L ||
-                sourceDescription.provisionedThroughput.writeCapacityUnits == 0) =>
-            throw new RuntimeException(
-              "readCapacityUnits and writeCapacityUnits must be set for PROVISIONED billing mode"
-            )
-
-          case Some(BillingMode.PROVISIONED) | None
-              if (sourceDescription.provisionedThroughput.readCapacityUnits != 0L &&
-                sourceDescription.provisionedThroughput.writeCapacityUnits != 0) =>
-            log.info(
-              "BillingMode PROVISIONED will be used since writeCapacityUnits and readCapacityUnits are set"
-            )
-            requestBuilder.billingMode(BillingMode.PROVISIONED)
-            requestBuilder.provisionedThroughput(
-              ProvisionedThroughput
-                .builder()
-                .readCapacityUnits(sourceDescription.provisionedThroughput.readCapacityUnits)
-                .writeCapacityUnits(sourceDescription.provisionedThroughput.writeCapacityUnits)
-                .build()
-            )
-
-          // billing mode = PAY_PER_REQUEST or empty ( for backward compatibility )
-          case _ => requestBuilder.billingMode(BillingMode.PAY_PER_REQUEST)
-        }
-        if (sourceDescription.hasLocalSecondaryIndexes) {
-          requestBuilder.localSecondaryIndexes(
-            sourceDescription.localSecondaryIndexes.stream
-              .map(index =>
-                LocalSecondaryIndex
+            case Some(BillingMode.PROVISIONED) | None
+                if (sourceDescription.provisionedThroughput.readCapacityUnits != 0L &&
+                  sourceDescription.provisionedThroughput.writeCapacityUnits != 0L) =>
+              log.info(
+                "BillingMode PROVISIONED will be used since writeCapacityUnits and readCapacityUnits are set"
+              )
+              requestBuilder.billingMode(BillingMode.PROVISIONED)
+              requestBuilder.provisionedThroughput(
+                ProvisionedThroughput
                   .builder()
-                  .indexName(index.indexName())
-                  .keySchema(index.keySchema())
-                  .projection(index.projection())
+                  .readCapacityUnits(sourceDescription.provisionedThroughput.readCapacityUnits)
+                  .writeCapacityUnits(sourceDescription.provisionedThroughput.writeCapacityUnits)
                   .build()
               )
-              .collect(Collectors.toList[LocalSecondaryIndex])
-          )
-        }
-        if (sourceDescription.hasGlobalSecondaryIndexes) {
-          requestBuilder.globalSecondaryIndexes(
-            sourceDescription.globalSecondaryIndexes.stream
-              .map { index =>
-                val builder =
-                  GlobalSecondaryIndex
+
+            // billing mode = PAY_PER_REQUEST or empty ( for backward compatibility )
+            case _ => requestBuilder.billingMode(BillingMode.PAY_PER_REQUEST)
+          }
+          if (sourceDescription.hasLocalSecondaryIndexes) {
+            requestBuilder.localSecondaryIndexes(
+              sourceDescription.localSecondaryIndexes.stream
+                .map(index =>
+                  LocalSecondaryIndex
                     .builder()
                     .indexName(index.indexName())
                     .keySchema(index.keySchema())
                     .projection(index.projection())
-                if (target.billingMode.forall(_ == BillingMode.PROVISIONED))
-                  builder.provisionedThroughput(
-                    ProvisionedThroughput
-                      .builder()
-                      .readCapacityUnits(index.provisionedThroughput.readCapacityUnits)
-                      .writeCapacityUnits(index.provisionedThroughput.writeCapacityUnits)
-                      .build()
-                  )
-                builder.build()
-              }
-              .collect(Collectors.toList[GlobalSecondaryIndex])
-          )
-        }
-
-        log.info(
-          s"Table ${target.table} does not exist at destination - creating it according to definition:"
-        )
-        log.info(sourceDescription.toString)
-        targetClient.createTable(requestBuilder.build())
-        log.info(s"Table ${target.table} created.")
-
-        val waiterResponse =
-          targetClient.waiter().waitUntilTableExists(describeTargetTableRequest).matched
-        waiterResponse.response.toScala match {
-          case Some(describeTableResponse) => describeTableResponse.table
-          case None =>
-            throw new RuntimeException(
-              "Unable to replicate table definition",
-              waiterResponse.exception.get
+                    .build()
+                )
+                .collect(Collectors.toList[LocalSecondaryIndex])
             )
-        }
+          }
+          if (sourceDescription.hasGlobalSecondaryIndexes) {
+            requestBuilder.globalSecondaryIndexes(
+              sourceDescription.globalSecondaryIndexes.stream
+                .map { index =>
+                  val builder =
+                    GlobalSecondaryIndex
+                      .builder()
+                      .indexName(index.indexName())
+                      .keySchema(index.keySchema())
+                      .projection(index.projection())
+                  if (target.billingMode.forall(_ == BillingMode.PROVISIONED))
+                    builder.provisionedThroughput(
+                      ProvisionedThroughput
+                        .builder()
+                        .readCapacityUnits(index.provisionedThroughput.readCapacityUnits)
+                        .writeCapacityUnits(index.provisionedThroughput.writeCapacityUnits)
+                        .build()
+                    )
+                  builder.build()
+                }
+                .collect(Collectors.toList[GlobalSecondaryIndex])
+            )
+          }
 
-      case Failure(otherwise) =>
-        throw new RuntimeException("Failed to check for table existence", otherwise)
+          log.info(
+            s"Table ${target.table} does not exist at destination - creating it according to definition:"
+          )
+          log.info(sourceDescription.toString)
+          targetClient.createTable(requestBuilder.build())
+          log.info(s"Table ${target.table} created.")
+
+          val waiterResponse =
+            targetClient.waiter().waitUntilTableExists(describeTargetTableRequest).matched
+          waiterResponse.response.toScala match {
+            case Some(describeTableResponse) => describeTableResponse.table
+            case None =>
+              waiterResponse.exception.toScala match {
+                case Some(ex) =>
+                  throw new RuntimeException("Unable to replicate table definition", ex)
+                case None =>
+                  throw new RuntimeException(
+                    "Unable to replicate table definition: waiter returned neither response nor exception"
+                  )
+              }
+          }
+
+        case Failure(otherwise) =>
+          throw new RuntimeException("Failed to check for table existence", otherwise)
+      }
     }
-  }
 
-  def enableDynamoStream(source: SourceSettings.DynamoDB): Unit = {
-    val sourceClient =
+  def enableDynamoStream(source: SourceSettings.DynamoDB): Unit =
+    Using.resource(
       buildDynamoClient(
         source.endpoint,
         source.finalCredentials.map(_.toProvider),
         source.region,
-        if (source.removeConsumedCapacity.getOrElse(false))
-          Seq(new RemoveConsumedCapacityInterceptor)
-        else Nil,
-        source.alternator
+        removeConsumedCapacityInterceptors(source.removeConsumedCapacity),
+        source.alternatorSettings
       )
-    val sourceStreamsClient =
-      buildDynamoStreamsClient(
-        source.endpoint,
-        source.finalCredentials.map(_.toProvider),
-        source.region
-      )
-
-    sourceClient
-      .updateTable(
-        UpdateTableRequest
-          .builder()
-          .tableName(source.table)
-          .streamSpecification(
-            StreamSpecification
+    ) { sourceClient =>
+      Using.resource(
+        buildDynamoStreamsClient(
+          source.endpoint,
+          source.finalCredentials.map(_.toProvider),
+          source.region
+        )
+      ) { sourceStreamsClient =>
+        sourceClient
+          .updateTable(
+            UpdateTableRequest
               .builder()
-              .streamEnabled(true)
-              .streamViewType(StreamViewType.NEW_IMAGE)
+              .tableName(source.table)
+              .streamSpecification(
+                StreamSpecification
+                  .builder()
+                  .streamEnabled(true)
+                  .streamViewType(StreamViewType.NEW_IMAGE)
+                  .build()
+              )
               .build()
           )
-          .build()
-      )
 
-    var done = false
-    while (!done) {
-      val tableDesc =
-        sourceClient.describeTable(DescribeTableRequest.builder().tableName(source.table).build())
-      val latestStreamArn = tableDesc.table.latestStreamArn
-      val describeStream =
-        sourceStreamsClient.describeStream(
-          DescribeStreamRequest.builder().streamArn(latestStreamArn).build()
-        )
+        val maxRetries = 60 // 60 * 5s = 5 minutes
+        var retries = 0
+        var done = false
+        while (!done) {
+          val tableDesc =
+            sourceClient.describeTable(
+              DescribeTableRequest.builder().tableName(source.table).build()
+            )
+          val latestStreamArn = tableDesc.table.latestStreamArn
+          val describeStream =
+            sourceStreamsClient.describeStream(
+              DescribeStreamRequest.builder().streamArn(latestStreamArn).build()
+            )
 
-      val streamStatus = describeStream.streamDescription.streamStatus
-      if (streamStatus == StreamStatus.ENABLED) {
-        log.info("Stream enabled successfully")
-        done = true
-      } else {
-        log.info(
-          s"Stream not yet enabled (status ${streamStatus}); waiting for 5 seconds and retrying"
-        )
-        Thread.sleep(5000)
+          val streamStatus = describeStream.streamDescription.streamStatus
+          if (streamStatus == StreamStatus.ENABLED) {
+            log.info("Stream enabled successfully")
+            done = true
+          } else {
+            retries += 1
+            if (retries >= maxRetries)
+              throw new RuntimeException(
+                s"Timed out waiting for stream on table '${source.table}' to become ENABLED " +
+                  s"(last status: ${streamStatus}). Gave up after ${maxRetries} retries (${maxRetries * 5} seconds)."
+              )
+            log.info(
+              s"Stream not yet enabled (status ${streamStatus}); waiting for 5 seconds and retrying (attempt ${retries}/${maxRetries})"
+            )
+            Thread.sleep(5000)
+          }
+        }
       }
     }
-  }
 
   def buildDynamoClient(
     endpoint: Option[DynamoDBEndpoint],
@@ -283,11 +394,13 @@ object DynamoUtils {
     alternatorSettings: Option[AlternatorSettings] = None
   ): DynamoDbClient = {
     val baseBuilder: DynamoDbClientBuilder =
-      if (endpoint.isDefined) {
-        val altBuilder = AlternatorDynamoDbClient.builder()
-        applyAlternatorSettings(altBuilder, alternatorSettings)
-        altBuilder
-      } else DynamoDbClient.builder()
+      alternatorSettings match {
+        case Some(settings) =>
+          val altBuilder = AlternatorDynamoDbClient.builder()
+          applyAlternatorSettings(altBuilder, settings)
+          altBuilder
+        case None => DynamoDbClient.builder()
+      }
     val builder =
       AwsUtils.configureClientBuilder(baseBuilder, endpoint, region, creds)
     val conf = ClientOverrideConfiguration.builder()
@@ -297,37 +410,37 @@ object DynamoUtils {
 
   private def applyAlternatorSettings(
     altBuilder: AlternatorDynamoDbClient.AlternatorDynamoDbClientBuilder,
-    alternatorSettings: Option[AlternatorSettings]
-  ): Unit =
-    for (settings <- alternatorSettings) {
-      val routingScope = (settings.datacenter, settings.rack) match {
+    settings: AlternatorSettings
+  ): Unit = {
+    val routingScope: Option[RoutingScope] =
+      (settings.datacenter, settings.rack) match {
         case (Some(dc), Some(rack)) =>
-          RackScope.of(dc, rack, DatacenterScope.of(dc, ClusterScope.create()))
+          Some(RackScope.of(dc, rack, DatacenterScope.of(dc, ClusterScope.create())))
         case (Some(dc), None) =>
-          DatacenterScope.of(dc, ClusterScope.create())
-        case _ => null
+          Some(DatacenterScope.of(dc, ClusterScope.create()))
+        case _ => None
       }
-      if (routingScope != null)
-        altBuilder.withRoutingScope(routingScope)
-      for (interval <- settings.activeRefreshIntervalMs)
-        altBuilder.withActiveRefreshIntervalMs(interval)
-      for (interval <- settings.idleRefreshIntervalMs)
-        altBuilder.withIdleRefreshIntervalMs(interval)
-      if (settings.compression.getOrElse(false))
-        altBuilder.withCompressionAlgorithm(RequestCompressionAlgorithm.GZIP)
-      if (settings.optimizeHeaders.getOrElse(false))
-        altBuilder.withOptimizeHeaders(true)
-      for (maxConns <- settings.maxConnections)
-        altBuilder.withMaxConnections(maxConns)
-      for (idleTime <- settings.connectionMaxIdleTimeMs)
-        altBuilder.withConnectionMaxIdleTimeMs(idleTime)
-      for (ttl <- settings.connectionTimeToLiveMs)
-        altBuilder.withConnectionTimeToLiveMs(ttl)
-      for (timeout <- settings.connectionAcquisitionTimeoutMs)
-        altBuilder.withConnectionAcquisitionTimeoutMs(timeout)
-      for (timeout <- settings.connectionTimeoutMs)
-        altBuilder.withConnectionTimeoutMs(timeout)
+    for (scope <- routingScope)
+      altBuilder.withRoutingScope(scope)
+    for (interval <- settings.activeRefreshIntervalMs)
+      altBuilder.withActiveRefreshIntervalMs(interval)
+    for (interval <- settings.idleRefreshIntervalMs)
+      altBuilder.withIdleRefreshIntervalMs(interval)
+    settings.compression.foreach { enabled =>
+      if (enabled) altBuilder.withCompressionAlgorithm(RequestCompressionAlgorithm.GZIP)
     }
+    settings.optimizeHeaders.foreach(altBuilder.withOptimizeHeaders)
+    for (maxConns <- settings.maxConnections)
+      altBuilder.withMaxConnections(maxConns)
+    for (idleTime <- settings.connectionMaxIdleTimeMs)
+      altBuilder.withConnectionMaxIdleTimeMs(idleTime)
+    for (ttl <- settings.connectionTimeToLiveMs)
+      altBuilder.withConnectionTimeToLiveMs(ttl)
+    for (timeout <- settings.connectionAcquisitionTimeoutMs)
+      altBuilder.withConnectionAcquisitionTimeoutMs(timeout)
+    for (timeout <- settings.connectionTimeoutMs)
+      altBuilder.withConnectionTimeoutMs(timeout)
+  }
 
   def buildDynamoStreamsClient(
     endpoint: Option[DynamoDBEndpoint],
@@ -397,61 +510,20 @@ object DynamoUtils {
     // YARN environment. We disable it to be agnostic to the type of cluster.
     jobConf.set(DynamoDBConstants.YARN_RESOURCE_MANAGER_ENABLED, "false")
 
-    jobConf.set(
-      DynamoDBConstants.CUSTOM_CLIENT_BUILDER_TRANSFORMER,
-      classOf[AlternatorLoadBalancingEnabler].getName
-    )
+    if (alternatorSettings.isDefined)
+      jobConf.set(
+        DynamoDBConstants.CUSTOM_CLIENT_BUILDER_TRANSFORMER,
+        classOf[AlternatorLoadBalancingEnabler].getName
+      )
 
     jobConf.set(RemoveConsumedCapacityConfig, removeConsumedCapacity.toString)
+    jobConf.set(UseAlternatorClientConfig, alternatorSettings.isDefined.toString)
 
     jobConf.set("mapred.output.format.class", classOf[DynamoDBOutputFormat].getName)
     jobConf.set("mapred.input.format.class", classOf[DynamoDBInputFormat].getName)
 
-    for (settings <- alternatorSettings) {
-      setOptionalConf(jobConf, AlternatorDatacenterConfig, settings.datacenter)
-      setOptionalConf(jobConf, AlternatorRackConfig, settings.rack)
-      setOptionalConf(
-        jobConf,
-        AlternatorActiveRefreshConfig,
-        settings.activeRefreshIntervalMs.map(_.toString)
-      )
-      setOptionalConf(
-        jobConf,
-        AlternatorIdleRefreshConfig,
-        settings.idleRefreshIntervalMs.map(_.toString)
-      )
-      setOptionalConf(jobConf, AlternatorCompressionConfig, settings.compression.map(_.toString))
-      setOptionalConf(
-        jobConf,
-        AlternatorOptimizeHeadersConfig,
-        settings.optimizeHeaders.map(_.toString)
-      )
-      setOptionalConf(
-        jobConf,
-        AlternatorMaxConnectionsConfig,
-        settings.maxConnections.map(_.toString)
-      )
-      setOptionalConf(
-        jobConf,
-        AlternatorConnectionMaxIdleTimeMsConfig,
-        settings.connectionMaxIdleTimeMs.map(_.toString)
-      )
-      setOptionalConf(
-        jobConf,
-        AlternatorConnectionTimeToLiveMsConfig,
-        settings.connectionTimeToLiveMs.map(_.toString)
-      )
-      setOptionalConf(
-        jobConf,
-        AlternatorConnectionAcquisitionTimeoutMsConfig,
-        settings.connectionAcquisitionTimeoutMs.map(_.toString)
-      )
-      setOptionalConf(
-        jobConf,
-        AlternatorConnectionTimeoutMsConfig,
-        settings.connectionTimeoutMs.map(_.toString)
-      )
-    }
+    for (settings <- alternatorSettings)
+      writeAlternatorSettingsToConf(jobConf, settings)
   }
 
   /** @return
@@ -486,56 +558,42 @@ object DynamoUtils {
     private var conf: Configuration = null
 
     override def apply(builder: DynamoDbClientBuilder): DynamoDbClientBuilder = {
+      val useAlternator = conf.get(UseAlternatorClientConfig, "false").toBoolean
       val effectiveBuilder: DynamoDbClientBuilder =
-        Option(conf.get(DynamoDBConstants.ENDPOINT)) match {
-          case Some(customEndpoint) =>
-            val altBuilder = AlternatorDynamoDbClient.builder()
+        if (useAlternator) {
+          val altBuilder = AlternatorDynamoDbClient.builder()
+          for (customEndpoint <- Option(conf.get(DynamoDBConstants.ENDPOINT)))
             altBuilder.endpointOverride(URI.create(customEndpoint))
-            for (region <- Option(conf.get(DynamoDBConstants.REGION)))
-              altBuilder.region(Region.of(region))
-            (
-              Option(conf.get(DynamoDBConstants.DYNAMODB_ACCESS_KEY_CONF)),
-              Option(conf.get(DynamoDBConstants.DYNAMODB_SECRET_KEY_CONF))
-            ) match {
-              case (Some(accessKey), Some(secretKey)) =>
-                val awsCreds =
-                  Option(conf.get(DynamoDBConstants.DYNAMODB_SESSION_TOKEN_CONF)) match {
-                    case Some(token) =>
-                      AwsSessionCredentials.create(accessKey, secretKey, token)
-                    case None =>
-                      AwsBasicCredentials.create(accessKey, secretKey)
-                  }
-                altBuilder.credentialsProvider(StaticCredentialsProvider.create(awsCreds))
-              case _ => // No credentials configured - use anonymous (Alternator default)
-            }
-            applyAlternatorSettings(
-              altBuilder,
-              Some(
-                AlternatorSettings(
-                  datacenter = Option(conf.get(AlternatorDatacenterConfig)),
-                  rack       = Option(conf.get(AlternatorRackConfig)),
-                  activeRefreshIntervalMs =
-                    Option(conf.get(AlternatorActiveRefreshConfig)).map(_.toLong),
-                  idleRefreshIntervalMs =
-                    Option(conf.get(AlternatorIdleRefreshConfig)).map(_.toLong),
-                  compression = Option(conf.get(AlternatorCompressionConfig)).map(_.toBoolean),
-                  optimizeHeaders =
-                    Option(conf.get(AlternatorOptimizeHeadersConfig)).map(_.toBoolean),
-                  maxConnections = Option(conf.get(AlternatorMaxConnectionsConfig)).map(_.toInt),
-                  connectionMaxIdleTimeMs =
-                    Option(conf.get(AlternatorConnectionMaxIdleTimeMsConfig)).map(_.toLong),
-                  connectionTimeToLiveMs =
-                    Option(conf.get(AlternatorConnectionTimeToLiveMsConfig)).map(_.toLong),
-                  connectionAcquisitionTimeoutMs =
-                    Option(conf.get(AlternatorConnectionAcquisitionTimeoutMsConfig)).map(_.toLong),
-                  connectionTimeoutMs =
-                    Option(conf.get(AlternatorConnectionTimeoutMsConfig)).map(_.toLong)
-                )
+          for (region <- Option(conf.get(DynamoDBConstants.REGION)))
+            altBuilder.region(Region.of(region))
+          (
+            Option(conf.get(DynamoDBConstants.DYNAMODB_ACCESS_KEY_CONF)),
+            Option(conf.get(DynamoDBConstants.DYNAMODB_SECRET_KEY_CONF))
+          ) match {
+            case (Some(accessKey), Some(secretKey)) =>
+              val awsCreds =
+                Option(conf.get(DynamoDBConstants.DYNAMODB_SESSION_TOKEN_CONF)) match {
+                  case Some(token) =>
+                    AwsSessionCredentials.create(accessKey, secretKey, token)
+                  case None =>
+                    AwsBasicCredentials.create(accessKey, secretKey)
+                }
+              altBuilder.credentialsProvider(StaticCredentialsProvider.create(awsCreds))
+            case (Some(_), None) | (None, Some(_)) =>
+              throw new IllegalStateException(
+                "Incomplete DynamoDB credentials in Hadoop config: both accessKey and secretKey must be set, or neither."
               )
+            case _ => // No credentials configured - use anonymous (Alternator default)
+          }
+          val settings = readAlternatorSettingsFromConf(conf)
+          val validationErrors = AlternatorSettings.validate(settings)
+          if (validationErrors.nonEmpty)
+            throw new IllegalStateException(
+              s"AlternatorSettings validation failed after Hadoop config round-trip: ${validationErrors.mkString("; ")}"
             )
-            altBuilder
-          case None => builder
-        }
+          applyAlternatorSettings(altBuilder, settings)
+          altBuilder
+        } else builder
       val overrideConf = ClientOverrideConfiguration.builder()
       if (conf.get(RemoveConsumedCapacityConfig, "false").toBoolean)
         overrideConf.addExecutionInterceptor(new RemoveConsumedCapacityInterceptor)

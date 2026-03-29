@@ -20,7 +20,7 @@ source:
     billingMode: PAY_PER_REQUEST
 
 target:
-  type: dynamodb
+  type: alternator
   table: BasicTest
   region: dummy
   endpoint:

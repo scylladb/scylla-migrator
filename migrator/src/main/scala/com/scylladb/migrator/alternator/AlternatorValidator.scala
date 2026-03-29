@@ -17,8 +17,8 @@ object AlternatorValidator {
     *   A list of comparison failures (which is empty if the data are the same in both databases).
     */
   def runValidation(
-    sourceSettings: SourceSettings.DynamoDB,
-    targetSettings: TargetSettings.DynamoDB,
+    sourceSettings: SourceSettings.DynamoDBLike,
+    targetSettings: TargetSettings.DynamoDBLike,
     config: MigratorConfig
   )(implicit spark: SparkSession): List[RowComparisonFailure] = {
 
@@ -46,7 +46,8 @@ object AlternatorValidator {
       sourceSettings.readThroughput,
       sourceSettings.throughputReadPercent,
       skipSegments           = None,
-      removeConsumedCapacity = targetSettings.removeConsumedCapacity.getOrElse(false)
+      removeConsumedCapacity = targetSettings.removeConsumedCapacity,
+      alternatorSettings     = targetSettings.alternatorSettings
     )
 
     // Define some aliases to prevent the Spark engine to try to serialize the whole object graph
