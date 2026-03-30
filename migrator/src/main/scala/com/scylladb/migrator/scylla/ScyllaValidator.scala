@@ -15,6 +15,7 @@ import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSett
 import com.scylladb.migrator.validation.RowComparisonFailure
 import org.apache.logging.log4j.LogManager
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.storage.StorageLevel
 import com.scylladb.migrator.ConsistencyLevelUtils
 import com.datastax.spark.connector.rdd.ReadConf
 
@@ -23,6 +24,17 @@ object ScyllaValidator {
 
   private val log = LogManager.getLogger("com.scylladb.migrator.scylla")
 
+  /** Validates that the target Scylla database contains the same data as the source Cassandra
+    * database.
+    *
+    * When `copyMissingRows` is enabled in the validation config, rows that exist in the source but
+    * are missing in the target are copied to the target. Note that the returned failure list is a
+    * snapshot taken ''before'' the copy, so it may contain `MissingTargetRow` entries for rows that
+    * have since been written. A subsequent re-validation can be used to confirm convergence.
+    *
+    * @return
+    *   A list of comparison failures (which is empty if the data are the same in both databases).
+    */
   def runValidation(
     sourceSettings: SourceSettings.Cassandra,
     targetSettings: TargetSettings.Scylla,
@@ -62,6 +74,11 @@ object ScyllaValidator {
         (sourceTableDef.partitionKey ++ sourceTableDef.clusteringColumns)
           .map(colDef => ColumnName(colDef.columnName, config.renamesMap.get(colDef.columnName)))
 
+      val consistencyLevel =
+        ConsistencyLevelUtils.parseConsistencyLevel(sourceSettings.consistencyLevel)
+      log.info(
+        s"Using consistencyLevel [${consistencyLevel}] for VALIDATOR SOURCE based on validator source config [${sourceSettings.consistencyLevel}]"
+      )
       val consistencyLevel =
         ConsistencyLevelUtils.parseConsistencyLevel(sourceSettings.consistencyLevel)
       log.info(
@@ -114,27 +131,28 @@ object ScyllaValidator {
         .withConnector(targetConnector)
     }
 
-    val failures = joined
-      .flatMap { case (l, r) =>
-        RowComparisonFailure.compareCassandraRows(
-          l,
-          r,
-          validationConfig.floatingPointTolerance,
-          validationConfig.timestampMsTolerance,
-          validationConfig.ttlToleranceMillis,
-          validationConfig.writetimeToleranceMillis,
-          validationConfig.compareTimestamps
-        )
-      }
-      .take(validationConfig.failuresToFetch)
-      .toList
+    val cachedJoined =
+      if (validationConfig.copyMissingRows) joined.persist(StorageLevel.MEMORY_AND_DISK)
+      else joined
 
-    if (validationConfig.copyMissingRows) {
-      val missingRowCount = failures.count(
-        _.items.contains(RowComparisonFailure.Item.MissingTargetRow)
-      )
-      if (missingRowCount > 0) {
-        log.info(s"Detected ${missingRowCount} missing rows, copying from source to target")
+    try {
+      val failures = cachedJoined
+        .flatMap { case (l, r) =>
+          RowComparisonFailure.compareCassandraRows(
+            l,
+            r,
+            validationConfig.floatingPointTolerance,
+            validationConfig.timestampMsTolerance,
+            validationConfig.ttlToleranceMillis,
+            validationConfig.writetimeToleranceMillis,
+            validationConfig.compareTimestamps
+          )
+        }
+        .take(validationConfig.failuresToFetch)
+        .toList
+
+      if (validationConfig.copyMissingRows) {
+        log.info("Copying missing rows from source to target")
 
         val writeColumnSelector = {
           val regularColumns = sourceTableDef.regularColumns.map { colDef =>
@@ -146,21 +164,29 @@ object ScyllaValidator {
           SomeColumns(primaryKeyColumns ++ regularColumns: _*)
         }
 
-        joined
+        val targetConsistencyLevel =
+          ConsistencyLevelUtils.parseConsistencyLevel(targetSettings.consistencyLevel)
+
+        val writeConf = WriteConf
+          .fromSparkConf(spark.sparkContext.getConf)
+          .copy(consistencyLevel = targetConsistencyLevel)
+
+        cachedJoined
           .filter { case (_, r) => r.isEmpty }
           .map { case (sourceRow, _) => sourceRow }
           .saveToCassandra(
             targetSettings.keyspace,
             targetSettings.table,
             writeColumnSelector,
-            WriteConf.fromSparkConf(spark.sparkContext.getConf)
+            writeConf
           )(targetConnector, CassandraRowWriter.Factory)
 
-        log.info(s"Finished copying missing rows to target")
+        log.info("Finished copying missing rows to target")
       }
-    }
 
-    failures
+      failures
+    } finally
+      if (validationConfig.copyMissingRows) cachedJoined.unpersist()
   }
 
 }

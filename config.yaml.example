@@ -330,5 +330,10 @@ savepoints:
 #   # If true, rows that exist in the source but are missing in the target will be
 #   # copied to the target during validation. Only missing rows are copied — rows
 #   # with value differences are still only reported, never overwritten.
+#   # Note: for Cassandra/Scylla, copied rows are written with current timestamps,
+#   # not the original source timestamps. A follow-up validation with
+#   # compareTimestamps: true may report writetime mismatches on copied rows.
+#   # Use compareTimestamps: false for re-validation after a copy, or widen
+#   # writetimeToleranceMillis accordingly.
 #   # Defaults to false.
 #   copyMissingRows: false

@@ -7,16 +7,64 @@ import com.scylladb.migrator.validation.RowComparisonFailure
 import org.apache.logging.log4j.LogManager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
-import software.amazon.awssdk.services.dynamodb.model.{ AttributeValue, PutItemRequest }
+import org.apache.spark.storage.StorageLevel
+import software.amazon.awssdk.services.dynamodb.model.{
+  AttributeValue,
+  BatchWriteItemRequest,
+  PutRequest,
+  WriteRequest
+}
 
 import scala.jdk.CollectionConverters._
 
 object AlternatorValidator {
 
   private val log = LogManager.getLogger("com.scylladb.migrator.alternator")
+  private val MaxBatchWriteSize = 25
+  private val MaxBatchRetries = 3
+  private val RetryBaseDelayMs = 100
+
+  /** Writes a batch of items via BatchWriteItem, retrying unprocessed items up to
+    * [[MaxBatchRetries]] times with linear back-off.
+    */
+  private def batchWriteWithRetry(
+    dynamoDB: software.amazon.awssdk.services.dynamodb.DynamoDbClient,
+    tableName: String,
+    items: java.util.List[WriteRequest]
+  ): Unit = {
+    var unprocessed: java.util.List[WriteRequest] = items
+    var attempt = 0
+    while (!unprocessed.isEmpty && attempt < MaxBatchRetries) {
+      val response = dynamoDB.batchWriteItem(
+        BatchWriteItemRequest
+          .builder()
+          .requestItems(java.util.Collections.singletonMap(tableName, unprocessed))
+          .build()
+      )
+      val remaining = response.unprocessedItems.get(tableName)
+      unprocessed =
+        if (remaining != null) remaining
+        else java.util.Collections.emptyList[WriteRequest]()
+      if (!unprocessed.isEmpty) {
+        attempt += 1
+        if (attempt < MaxBatchRetries)
+          Thread.sleep(RetryBaseDelayMs.toLong * attempt)
+      }
+    }
+    if (!unprocessed.isEmpty)
+      throw new RuntimeException(
+        s"BatchWriteItem still has ${unprocessed.size()} unprocessed items " +
+          s"for table $tableName after $MaxBatchRetries attempts"
+      )
+  }
 
   /** Checks that the target Alternator database contains the same data as the source DynamoDB
     * database.
+    *
+    * When `copyMissingRows` is enabled in the validation config, rows that exist in the source but
+    * are missing in the target are copied to the target. Note that the returned failure list is a
+    * snapshot taken ''before'' the copy, so it may contain `MissingTargetRow` entries for rows that
+    * have since been written. A subsequent re-validation can be used to confirm convergence.
     *
     * @return
     *   A list of comparison failures (which is empty if the data are the same in both databases).
@@ -73,33 +121,33 @@ object AlternatorValidator {
 
     val joinedRdd = sourceByKey.leftOuterJoin(targetByKey)
 
-    val failures = joinedRdd
-      .flatMap { case (_, (l, r)) =>
-        RowComparisonFailure.compareDynamoDBRows(
-          l,
-          r,
-          renamedColumn,
-          configValidation.floatingPointTolerance
-        )
-      }
-      .take(configValidation.failuresToFetch)
-      .toList
+    val cachedJoined =
+      if (configValidation.copyMissingRows) joinedRdd.persist(StorageLevel.MEMORY_AND_DISK)
+      else joinedRdd
 
-    if (configValidation.copyMissingRows) {
-      val missingRowCount = failures.count(
-        _.items.contains(RowComparisonFailure.Item.MissingTargetRow)
-      )
-      if (missingRowCount > 0) {
-        log.info(s"Detected ${missingRowCount} missing rows, copying from source to target")
+    try {
+      val failures = cachedJoined
+        .flatMap { case (_, (l, r)) =>
+          RowComparisonFailure.compareDynamoDBRows(
+            l,
+            r,
+            renamedColumn,
+            configValidation.floatingPointTolerance
+          )
+        }
+        .take(configValidation.failuresToFetch)
+        .toList
 
-        // Alias fields to avoid serializing the whole settings objects in the closure
+      if (configValidation.copyMissingRows) {
+        log.info("Copying missing rows from source to target")
+
         val targetEndpoint = targetSettings.endpoint
         val targetCredentials = targetSettings.finalCredentials
         val targetRegion = targetSettings.region
         val targetTable = targetSettings.table
         val targetAlternator = targetSettings.alternator
 
-        joinedRdd
+        cachedJoined
           .filter { case (_, (_, r)) => r.isEmpty }
           .map { case (_, (sourceItem, _)) => sourceItem }
           .foreachPartition { partition =>
@@ -112,29 +160,34 @@ object AlternatorValidator {
                 targetAlternator
               )
               try
-                partition.foreach { sourceItem =>
-                  val item = new java.util.HashMap[String, AttributeValue]()
-                  sourceItem.foreach { case (k, v) =>
-                    item.put(renamedColumn(k), DdbValue.toAttributeValue(v))
-                  }
-                  dynamoDB.putItem(
-                    PutItemRequest
-                      .builder()
-                      .tableName(targetTable)
-                      .item(item)
-                      .build()
-                  )
+                partition.grouped(MaxBatchWriteSize).foreach { batch =>
+                  val writeRequests = batch
+                    .map { sourceItem =>
+                      val item = new java.util.HashMap[String, AttributeValue]()
+                      sourceItem.foreach { case (k, v) =>
+                        item.put(renamedColumn(k), DdbValue.toAttributeValue(v))
+                      }
+                      WriteRequest
+                        .builder()
+                        .putRequest(PutRequest.builder().item(item).build())
+                        .build()
+                    }
+                    .toList
+                    .asJava
+
+                  batchWriteWithRetry(dynamoDB, targetTable, writeRequests)
                 }
               finally
                 dynamoDB.close()
             }
           }
 
-        log.info(s"Finished copying missing rows to target")
+        log.info("Finished copying missing rows to target")
       }
-    }
 
-    failures
+      failures
+    } finally
+      if (configValidation.copyMissingRows) cachedJoined.unpersist()
   }
 
 }
