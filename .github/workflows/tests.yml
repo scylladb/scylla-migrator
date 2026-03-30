@@ -9,7 +9,7 @@ on:
       - 'Makefile'
       - 'Dockerfile'
       - 'dockerfiles/**'
-      - 'docker-compose-tests.yml'
+      - 'docker-compose-*.yml'
       - '.github/workflows/**'
 
   pull_request:
@@ -19,7 +19,7 @@ on:
       - 'Makefile'
       - 'Dockerfile'
       - 'dockerfiles/**'
-      - 'docker-compose-tests.yml'
+      - 'docker-compose-*.yml'
       - '.github/workflows/**'
 
 jobs:
@@ -96,7 +96,7 @@ jobs:
         run: make wait-for-services-scylla
       - name: Dump container logs on failure
         if: failure()
-        run: make dump-logs
+        run: make dump-logs-scylla
       - name: Run Scylla integration tests
         run: make test-integration-scylla
         env:
@@ -106,7 +106,7 @@ jobs:
         run: make test-benchmark-e2e-sanity-scylla
       - name: Stop services
         if: always()
-        run: make stop-services
+        run: make stop-services-scylla
       - name: Upload coverage report
         if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
@@ -116,9 +116,25 @@ jobs:
             tests/target/scala-2.13/scoverage-report/
             migrator/target/scala-2.13/scoverage-report/
 
-  test-integration-alternator:
-    name: Integration tests (Alternator)
+  test-integration-dynamodb:
+    name: Integration tests (DynamoDB ${{ matrix.name }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: "scylla-6.2"
+            scylla-version: "6.2"
+            tablets-mode: "tablets"
+          - name: "latest-vnodes"
+            scylla-version: "latest"
+            tablets-mode: "vnodes"
+          - name: "latest-tablets"
+            scylla-version: "latest"
+            tablets-mode: "tablets"
+    env:
+      SCYLLA_VERSION: ${{ matrix.scylla-version }}
+      TABLETS_MODE: ${{ matrix.tablets-mode }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
@@ -140,29 +156,33 @@ jobs:
           restore-keys: |
             sbt-target-${{ runner.os }}-
       - name: Start services
-        run: make start-services-alternator
+        run: make start-services-dynamodb
       - name: Wait for services
-        run: make wait-for-services-alternator
+        run: make wait-for-services-dynamodb
       - name: Dump container logs on failure
         if: failure()
-        run: make dump-logs
-      - name: Run Alternator integration tests
-        run: make test-integration-alternator
+        run: make dump-logs-dynamodb
+      - name: Run DynamoDB integration tests
+        run: make test-integration-dynamodb
         env:
           COVERAGE: ${{ github.event_name == 'push' && 'true' || 'false' }}
+      - name: Run E2E sanity tests (DynamoDB)
+        if: success()
+        run: make test-benchmark-e2e-sanity-dynamodb
       - name: Stop services
-        run: make stop-services
+        if: always()
+        run: make stop-services-dynamodb
       - name: Upload coverage report
         if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-report-alternator
+          name: coverage-report-dynamodb-${{ matrix.name }}
           path: |
             tests/target/scala-2.13/scoverage-report/
             migrator/target/scala-2.13/scoverage-report/
 
-  test-cassandra-compat:
-    name: Cassandra ${{ matrix.version }}.x compat
+  test-integration-cassandra:
+    name: Integration tests (Cassandra ${{ matrix.version }}.x)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -194,9 +214,9 @@ jobs:
         run: make wait-for-services-cassandra CASSANDRA_VERSION=${{ matrix.version }}
       - name: Dump container logs on failure
         if: failure()
-        run: make dump-logs
-      - name: Run Cassandra ${{ matrix.version }}.x integration tests
+        run: make dump-logs-scylla
+      - name: Run Cassandra ${{ matrix.version }}.x tests
         run: make test-integration-cassandra CASSANDRA_VERSION=${{ matrix.version }}
       - name: Stop services
         if: always()
-        run: make stop-services
+        run: make stop-services-scylla

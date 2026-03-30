@@ -222,4 +222,42 @@ class DynamoUtilsTest extends munit.FunSuite {
     assertEquals(jobConf.get("scylla.migrator.remove_consumed_capacity"), "true")
   }
 
+  // --- Section 6: alternator maxItemsPerBatch ---
+
+  test("maxItemsPerBatch is set on the JobConf when provided via alternator settings") {
+    val jobConf = new JobConf()
+    val alternator = config.AlternatorSettings(maxItemsPerBatch = Some(100))
+    DynamoUtils.setDynamoDBJobConf(
+      jobConf,
+      None,
+      None,
+      None,
+      None,
+      None,
+      alternatorSettings = Some(alternator)
+    )
+    assertEquals(jobConf.get(DynamoDBConstants.MAX_ITEMS_PER_BATCH), "100")
+  }
+
+  test("maxItemsPerBatch is not set on the JobConf when omitted from alternator settings") {
+    val jobConf = new JobConf()
+    val alternator = config.AlternatorSettings()
+    DynamoUtils.setDynamoDBJobConf(
+      jobConf,
+      None,
+      None,
+      None,
+      None,
+      None,
+      alternatorSettings = Some(alternator)
+    )
+    assertEquals(jobConf.get(DynamoDBConstants.MAX_ITEMS_PER_BATCH), null)
+  }
+
+  test("maxItemsPerBatch is not set when no alternator settings are provided") {
+    val jobConf = new JobConf()
+    DynamoUtils.setDynamoDBJobConf(jobConf, None, None, None, None, None)
+    assertEquals(jobConf.get(DynamoDBConstants.MAX_ITEMS_PER_BATCH), null)
+  }
+
 }

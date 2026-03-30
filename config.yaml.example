@@ -278,6 +278,10 @@ target:
 #   #  connectionAcquisitionTimeoutMs: 10000
 #   #  # Maximum time to wait for TCP handshake in ms (default: 15000)
 #   #  connectionTimeoutMs: 15000
+#   #  # Maximum items per BatchWriteItem request. DynamoDB limits this to 25,
+#   #  # but Alternator defaults the limit to 100
+#   #  # See https://docs.scylladb.com/manual/stable/alternator/compatibility.html#configurable-or-different-limits
+#   #  maxItemsPerBatch: 100
 
 # Savepoints are configuration files (like this one), saved by the migrator as it
 # runs. Their purpose is to skip token ranges that have already been copied. This
@@ -326,5 +330,10 @@ savepoints:
 #   # If true, rows that exist in the source but are missing in the target will be
 #   # copied to the target during validation. Only missing rows are copied — rows
 #   # with value differences are still only reported, never overwritten.
+#   # Note: for Cassandra/Scylla, copied rows are written with current timestamps,
+#   # not the original source timestamps. A follow-up validation with
+#   # compareTimestamps: true may report writetime mismatches on copied rows.
+#   # Use compareTimestamps: false for re-validation after a copy, or widen
+#   # writetimeToleranceMillis accordingly.
 #   # Defaults to false.
 #   copyMissingRows: false

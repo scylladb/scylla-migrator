@@ -35,6 +35,33 @@ class DynamoDBTargetSettingParserTest extends munit.FunSuite {
     assertEquals(parsedSettings.skipInitialSnapshotTransfer, Some(true))
   }
 
+  test("alternator maxItemsPerBatch is optional and defaults to None") {
+    val config =
+      """type: dynamodb
+        |table: Dummy
+        |streamChanges: false
+        |alternator:
+        |  datacenter: dc1
+        |""".stripMargin
+
+    val parsedSettings = parseDynamoDBTargetSettings(config)
+    assert(parsedSettings.alternator.isDefined)
+    assertEquals(parsedSettings.alternator.get.maxItemsPerBatch, None)
+  }
+
+  test("alternator maxItemsPerBatch is parsed when set") {
+    val config =
+      """type: dynamodb
+        |table: Dummy
+        |streamChanges: false
+        |alternator:
+        |  maxItemsPerBatch: 100
+        |""".stripMargin
+
+    val parsedSettings = parseDynamoDBTargetSettings(config)
+    assertEquals(parsedSettings.alternator.get.maxItemsPerBatch, Some(100))
+  }
+
   private def parseDynamoDBTargetSettings(yamlContent: String): TargetSettings.DynamoDB =
     yaml.parser
       .parse(yamlContent)

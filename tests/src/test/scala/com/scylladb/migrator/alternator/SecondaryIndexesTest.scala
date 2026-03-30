@@ -108,9 +108,17 @@ class SecondaryIndexesTest extends MigratorSuiteWithDynamoDBLocal {
     }
   )
 
-  withResources.test("The secondary indexes of a table are correctly replicated") { _ =>
+  withResources.test(
+    "The secondary indexes of a table are correctly replicated (PAY_PER_REQUEST)"
+  ) { _ =>
     successfullyPerformMigration("dynamodb-to-alternator-secondary-indexes.yaml")
     checkSchemaWasMigrated(tableName)
+  }
+
+  withResources.test("The secondary indexes of a table are correctly replicated (PROVISIONED)") {
+    _ =>
+      successfullyPerformMigration("dynamodb-to-alternator-secondary-indexes-provisioned.yaml")
+      checkSchemaWasMigrated(tableName)
   }
 
 }

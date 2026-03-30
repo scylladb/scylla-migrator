@@ -37,7 +37,8 @@ class CopyMissingRowsTest extends MigratorSuiteWithDynamoDBLocal {
     // Validate with copyMissingRows enabled — detects the missing row and copies it
     assertEquals(performValidation(copyMissingConfigFile), 1, "Should detect missing row")
 
-    // Validate again — the missing row should now be present in the target
+    // Re-validate with normal settings — basicConfigFile is fine here because DynamoDB validation
+    // does not compare writetimes/TTLs, so the copied row passes without timestamp concerns
     assertEquals(performValidation(basicConfigFile), 0, "Row should have been copied to target")
   }
 
