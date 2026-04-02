@@ -44,6 +44,42 @@ source:
   # Optional condition to filter source table data that will be migrated
   # where: race_start_date = '2015-05-27' AND race_end_date = '2015-05-27'
 
+# Example for loading from MySQL:
+# source:
+#   type: mysql
+#   host: mysql-server
+#   port: 3306
+#   database: mydb
+#   table: mytable
+#   credentials:
+#     username: <user>
+#     password: <pass>
+#   # Number of rows to fetch per JDBC round-trip. Defaults to 1000 if omitted.
+#   # Use lower values (e.g. 100) for tables with large blobs, higher values
+#   # (e.g. 1000+) for small rows.
+#   fetchSize: 1000
+#   # Optional - columns forming the primary key, required for validation
+#   # primaryKey:
+#   #   - id
+#   # Optional - partition the read across multiple Spark tasks
+#   # partitionColumn: id
+#   # numPartitions: 8
+#   # lowerBound and upperBound must be numeric. For DATE/TIMESTAMP partition
+#   # columns, use epoch milliseconds (e.g. 1704067200000 for 2024-01-01).
+#   # lowerBound: 0
+#   # upperBound: 1000000
+#   # Optional - filter rows (treated as trusted SQL input, not sanitized)
+#   # where: "status = 'active'"
+#   # Optional - extra JDBC connection properties (e.g. SSL, timeouts)
+#   # connectionProperties:
+#   #   connectTimeout: "5000"
+#   #   socketTimeout: "30000"
+#   #
+#   # NOTE: Resume/savepoint support is not available for MySQL migrations.
+#   # If a migration is interrupted, it must be restarted from the beginning.
+#   # For large tables, ensure your target schema uses upsert semantics
+#   # (e.g. ScyllaDB INSERT) so that re-running the migration is safe.
+
 # Example for loading from Parquet:
 # source:
 #   type: parquet
@@ -327,3 +363,8 @@ savepoints:
 #   floatingPointTolerance: 0.001
 #   # What difference in ms should we allow between timestamps?
 #   timestampMsTolerance: 0
+#   # Optional - columns to hash for MySQL-to-ScyllaDB validation (use source-side names;
+#   # renames are applied automatically)
+#   # hashColumns:
+#   #   - large_text_column
+#   #   - blob_column

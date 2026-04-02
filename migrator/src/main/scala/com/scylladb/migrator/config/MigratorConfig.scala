@@ -52,7 +52,7 @@ object MigratorConfig {
   implicit val migratorConfigEncoder: Encoder[MigratorConfig] = deriveEncoder[MigratorConfig]
 
   def loadFrom(path: String): MigratorConfig = {
-    val configData = scala.io.Source.fromFile(path).mkString
+    val configData = scala.util.Using.resource(scala.io.Source.fromFile(path))(_.mkString)
 
     parser
       .parse(configData)
