@@ -149,6 +149,8 @@ object SparkUtils {
         )
       case s: SourceSettings.DynamoDBS3Export =>
         s.copy(endpoint = s.endpoint.map(remapEndpoint))
+      case m: SourceSettings.MySQL =>
+        m.copy(host = "localhost")
     }
     val newTarget = config.target match {
       case s: TargetSettings.Scylla =>

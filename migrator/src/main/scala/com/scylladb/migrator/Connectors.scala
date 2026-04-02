@@ -9,7 +9,7 @@ import com.datastax.spark.connector.cql.{
   NoAuthConf,
   PasswordAuthConf
 }
-import com.scylladb.migrator.config.{ Credentials, SourceSettings, TargetSettings }
+import com.scylladb.migrator.config.{ Credentials, SSLOptions, SourceSettings, TargetSettings }
 import org.apache.spark.SparkConf
 
 object Connectors {
@@ -29,15 +29,16 @@ object Connectors {
                 enabled            = sslOptions.enabled,
                 trustStorePath     = sslOptions.trustStorePath,
                 trustStorePassword = sslOptions.trustStorePassword,
-                trustStoreType     = sslOptions.trustStoreType.getOrElse("JKS"),
-                protocol           = sslOptions.protocol.getOrElse("TLS"),
+                trustStoreType =
+                  sslOptions.trustStoreType.getOrElse(SSLOptions.DefaultTrustStoreType),
+                protocol = sslOptions.protocol.getOrElse(SSLOptions.DefaultProtocol),
                 enabledAlgorithms = sslOptions.enabledAlgorithms.getOrElse(
-                  Set("TLS_RSA_WITH_AES_128_CBC_SHA", "TLS_RSA_WITH_AES_256_CBC_SHA")
+                  SSLOptions.DefaultEnabledAlgorithms
                 ),
                 clientAuthEnabled = sslOptions.clientAuthEnabled,
                 keyStorePath      = sslOptions.keyStorePath,
                 keyStorePassword  = sslOptions.keyStorePassword,
-                keyStoreType      = sslOptions.keyStoreType.getOrElse("JKS")
+                keyStoreType = sslOptions.keyStoreType.getOrElse(SSLOptions.DefaultKeyStoreType)
               )
           }
         ),
@@ -65,14 +66,15 @@ object Connectors {
                 clientAuthEnabled  = sslOptions.clientAuthEnabled,
                 trustStorePath     = sslOptions.trustStorePath,
                 trustStorePassword = sslOptions.trustStorePassword,
-                trustStoreType     = sslOptions.trustStoreType.getOrElse("JKS"),
-                protocol           = sslOptions.protocol.getOrElse("TLS"),
-                keyStorePath       = sslOptions.keyStorePath,
-                keyStorePassword   = sslOptions.keyStorePassword,
+                trustStoreType =
+                  sslOptions.trustStoreType.getOrElse(SSLOptions.DefaultTrustStoreType),
+                protocol         = sslOptions.protocol.getOrElse(SSLOptions.DefaultProtocol),
+                keyStorePath     = sslOptions.keyStorePath,
+                keyStorePassword = sslOptions.keyStorePassword,
                 enabledAlgorithms = sslOptions.enabledAlgorithms.getOrElse(
-                  Set("TLS_RSA_WITH_AES_128_CBC_SHA", "TLS_RSA_WITH_AES_256_CBC_SHA")
+                  SSLOptions.DefaultEnabledAlgorithms
                 ),
-                keyStoreType = sslOptions.keyStoreType.getOrElse("JKS")
+                keyStoreType = sslOptions.keyStoreType.getOrElse(SSLOptions.DefaultKeyStoreType)
               )
           }
         ),

@@ -50,6 +50,14 @@ object Migrator {
           config.getSkipTokenRangesOrEmptySet
         )
         ScyllaMigrator.migrate(config, scyllaTarget, sourceDF)
+      case (mysqlSource: SourceSettings.MySQL, scyllaTarget: TargetSettings.Scylla) =>
+        log.info("Starting MySQL to ScyllaDB migration")
+        log.warn(
+          "MySQL source does not support savepoints. If this migration is interrupted, " +
+            "it must be restarted from scratch. Ensure the target table supports idempotent writes."
+        )
+        val sourceDF = readers.MySQL.readDataframe(spark, mysqlSource)
+        ScyllaMigrator.migrate(config, scyllaTarget, sourceDF)
       case (parquetSource: SourceSettings.Parquet, scyllaTarget: TargetSettings.Scylla) =>
         readers.Parquet.migrateToScylla(config, parquetSource, scyllaTarget)
       case (cqlSource: SourceSettings.Cassandra, parquetTarget: TargetSettings.Parquet) =>
