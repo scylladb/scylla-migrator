@@ -1,5 +1,18 @@
 services:
 
+  mysql:
+    image: mysql:${MYSQL_VERSION:-8.0.46}
+    command: --default-authentication-plugin=mysql_native_password --innodb-use-native-aio=0
+    environment:
+      MYSQL_DATABASE: testdb
+      MYSQL_USER: migrator
+      MYSQL_PASSWORD: migrator
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "3308:3306"
+    expose:
+      - 3308
+
   dynamodb:
     command: "-jar DynamoDBLocal.jar -sharedDb -inMemory"
     image: "amazon/dynamodb-local:2.5.3"
