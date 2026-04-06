@@ -17,6 +17,7 @@ import software.amazon.awssdk.services.s3.model.{ CreateBucketRequest, PutObject
 import java.nio.file.{ Files, Path, Paths }
 import java.util.function.Consumer
 import scala.jdk.CollectionConverters._
+import scala.util.Using
 
 class DynamoDBS3ExportMigrationTest extends MigratorSuiteWithDynamoDBLocal {
 
@@ -67,8 +68,28 @@ class DynamoDBS3ExportMigrationTest extends MigratorSuiteWithDynamoDBLocal {
           }
       })
 
-    // Perform the migration
+    // Perform the migration and verify no savepoint files are created (issue #247:
+    // S3 export sources use ParallelCollectionPartitions, not HadoopPartitions,
+    // so DynamoDbSavepointsManager must not be instantiated for this path).
+    val beforeMigration = System.currentTimeMillis()
     successfullyPerformMigration(configFile)
+
+    val savepointsDir = Paths.get("docker/spark-master")
+    if (Files.exists(savepointsDir)) {
+      Using.resource(Files.list(savepointsDir)) { stream =>
+        val newSavepoints = stream
+          .iterator()
+          .asScala
+          .filter(p => Files.isRegularFile(p))
+          .filter(_.getFileName.toString.startsWith("savepoint_"))
+          .filter(p => Files.getLastModifiedTime(p).toMillis >= beforeMigration)
+          .toList
+        assert(
+          newSavepoints.isEmpty,
+          s"S3 export import should not create savepoint files, but found: $newSavepoints"
+        )
+      }
+    }
 
     // Check that the schema has been correctly defined on the target table
     checkSchemaWasMigrated(

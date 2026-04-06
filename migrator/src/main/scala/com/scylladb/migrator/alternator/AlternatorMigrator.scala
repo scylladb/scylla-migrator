@@ -26,7 +26,14 @@ object AlternatorMigrator {
     val (sourceRDD, sourceTableDesc) =
       readers.DynamoDB.readRDD(spark, source, migratorConfig.skipSegments)
     val maybeStreamedSource = if (target.streamChanges) Some(source) else None
-    migrate(sourceRDD, sourceTableDesc, maybeStreamedSource, target, migratorConfig)
+    migrate(
+      sourceRDD,
+      sourceTableDesc,
+      maybeStreamedSource,
+      target,
+      migratorConfig,
+      hadoopPartitionedSource = true
+    )
   }
 
   def migrateToS3Export(
@@ -65,7 +72,14 @@ object AlternatorMigrator {
     if (target.streamChanges) {
       log.warn("'streamChanges: true' is not supported when the source is a DynamoDB S3 export.")
     }
-    migrate(normalizedRDD, sourceTableDesc, None, target, migratorConfig)
+    migrate(
+      normalizedRDD,
+      sourceTableDesc,
+      None,
+      target,
+      migratorConfig,
+      hadoopPartitionedSource = false
+    )
   }
 
   /** @param sourceRDD
@@ -78,6 +92,11 @@ object AlternatorMigrator {
     *   Target table settings
     * @param migratorConfig
     *   The complete original configuration
+    * @param hadoopPartitionedSource
+    *   Whether the source RDD uses `HadoopPartition`s (from the DynamoDB Hadoop connector)
+    *   containing `DynamoDBSplit`s. When `true`, scan segment progress is tracked via
+    *   `DynamoDbSavepointsManager`. Must be `false` for source types whose RDDs use other partition
+    *   types (e.g., `ParallelCollectionPartition` from S3 exports).
     * @param spark
     *   Spark session
     */
@@ -86,7 +105,8 @@ object AlternatorMigrator {
     sourceTableDesc: TableDescription,
     maybeStreamedSource: Option[SourceSettings.DynamoDB],
     target: TargetSettings.DynamoDB,
-    migratorConfig: MigratorConfig
+    migratorConfig: MigratorConfig,
+    hadoopPartitionedSource: Boolean
   )(implicit spark: SparkSession): Unit = {
 
     log.info("We need to transfer: " + sourceRDD.getNumPartitions + " partitions in total")
@@ -109,10 +129,17 @@ object AlternatorMigrator {
       if (target.streamChanges && target.skipInitialSnapshotTransfer.contains(true)) {
         log.info("Skip transferring table snapshot")
       } else {
-        Using.resource(DynamoDbSavepointsManager(migratorConfig, sourceRDD, spark.sparkContext)) {
-          _ =>
+        if (hadoopPartitionedSource) {
+          Using.resource(
+            DynamoDbSavepointsManager(migratorConfig, sourceRDD, spark.sparkContext)
+          ) { _ =>
             log.info("Starting write...")
-            writers.DynamoDB.writeRDD(target, migratorConfig.renamesMap, sourceRDD, targetTableDesc)
+            writers.DynamoDB
+              .writeRDD(target, migratorConfig.renamesMap, sourceRDD, targetTableDesc)
+          }
+        } else {
+          log.info("Starting write...")
+          writers.DynamoDB.writeRDD(target, migratorConfig.renamesMap, sourceRDD, targetTableDesc)
         }
         log.info("Done transferring table snapshot")
       }
