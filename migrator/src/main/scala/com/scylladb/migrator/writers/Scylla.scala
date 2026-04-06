@@ -71,6 +71,28 @@ object Scylla {
       )
     }
 
+  private[writers] def requireNoCaseInsensitiveColumnNameCollisions(
+    fieldNames: Seq[String],
+    context: String
+  ): Unit = {
+    val collisions =
+      fieldNames
+        .groupBy(_.toLowerCase(Locale.ROOT))
+        .collect { case (_, names) if names.size > 1 => names.distinct }
+        .toList
+
+    if (collisions.nonEmpty) {
+      val collisionDetails = collisions
+        .map(names => names.mkString("[", ", ", "]"))
+        .mkString(", ")
+      throw new IllegalArgumentException(
+        s"Column name collision detected $context. " +
+          s"Multiple source columns resolve to the same target column name: $collisionDetails. " +
+          "Check the configured renames and source schema."
+      )
+    }
+  }
+
   private[writers] def dropRowsWithNullPrimaryKeys(
     rdd: RDD[Row],
     pkFieldIndices: Array[Int],
@@ -175,6 +197,10 @@ object Scylla {
         acc.withColumnRenamed(from, to)
       }
       .schema
+    requireNoCaseInsensitiveColumnNameCollisions(
+      renamedSchema.fieldNames.toSeq,
+      "after applying renames before writing to ScyllaDB"
+    )
 
     log.info("Schema after renames:")
     log.info(renamedSchema.treeString)

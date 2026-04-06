@@ -9,77 +9,154 @@ import com.datastax.spark.connector.cql.{
   NoAuthConf,
   PasswordAuthConf
 }
-import com.scylladb.migrator.config.{ Credentials, SourceSettings, TargetSettings }
+import com.scylladb.migrator.config.{ Credentials, SSLOptions, SourceSettings, TargetSettings }
 import org.apache.spark.SparkConf
 
 object Connectors {
-  def sourceConnector(sparkConf: SparkConf, sourceSettings: SourceSettings.Cassandra) =
+  private[migrator] case class SessionOptions(
+    host: String,
+    port: Int,
+    credentials: Option[Credentials],
+    sslOptions: Option[SSLOptions],
+    localDC: Option[String],
+    connections: Option[Int],
+    queryRetryCount: Int = -1
+  )
+
+  private val ConnectionHost = "spark.cassandra.connection.host"
+  private val ConnectionPort = "spark.cassandra.connection.port"
+  private val ConnectionLocalDC = "spark.cassandra.connection.localDC"
+  private val AuthUsername = "spark.cassandra.auth.username"
+  private val AuthPassword = "spark.cassandra.auth.password"
+  private val SslEnabled = "spark.cassandra.connection.ssl.enabled"
+  private val SslClientAuthEnabled = "spark.cassandra.connection.ssl.clientAuth.enabled"
+  private val SslTrustStorePath = "spark.cassandra.connection.ssl.trustStore.path"
+  private val SslTrustStorePassword = "spark.cassandra.connection.ssl.trustStore.password"
+  private val SslTrustStoreType = "spark.cassandra.connection.ssl.trustStore.type"
+  private val SslKeyStorePath = "spark.cassandra.connection.ssl.keyStore.path"
+  private val SslKeyStorePassword = "spark.cassandra.connection.ssl.keyStore.password"
+  private val SslKeyStoreType = "spark.cassandra.connection.ssl.keyStore.type"
+  private val SslProtocol = "spark.cassandra.connection.ssl.protocol"
+  private val SslEnabledAlgorithms = "spark.cassandra.connection.ssl.enabledAlgorithms"
+  private val LocalConnectionsPerExecutor = "spark.cassandra.connection.localConnectionsPerExecutor"
+  private val RemoteConnectionsPerExecutor =
+    "spark.cassandra.connection.remoteConnectionsPerExecutor"
+  private val QueryRetryCount = "spark.cassandra.query.retry.count"
+
+  private[migrator] def sourceSessionOptions(
+    sourceSettings: SourceSettings.Cassandra
+  ): SessionOptions =
+    SessionOptions(
+      host            = sourceSettings.host,
+      port            = sourceSettings.port,
+      credentials     = sourceSettings.credentials,
+      sslOptions      = sourceSettings.sslOptions,
+      localDC         = sourceSettings.localDC,
+      connections     = sourceSettings.connections,
+      queryRetryCount = -1
+    )
+
+  private[migrator] def targetSessionOptions(
+    targetSettings: TargetSettings.Scylla
+  ): SessionOptions =
+    SessionOptions(
+      host            = targetSettings.host,
+      port            = targetSettings.port,
+      credentials     = targetSettings.credentials,
+      sslOptions      = targetSettings.sslOptions,
+      localDC         = targetSettings.localDC,
+      connections     = targetSettings.connections,
+      queryRetryCount = -1
+    )
+
+  private[migrator] def sparkSessionOptions(options: SessionOptions): Map[String, String] = {
+    val base = Map(
+      ConnectionHost  -> options.host,
+      ConnectionPort  -> options.port.toString,
+      QueryRetryCount -> options.queryRetryCount.toString
+    )
+    val withCredentials = options.credentials.fold(base) { credentials =>
+      base ++ Map(
+        AuthUsername -> credentials.username,
+        AuthPassword -> credentials.password
+      )
+    }
+    val withLocalDc = options.localDC.fold(withCredentials) { dc =>
+      withCredentials + (ConnectionLocalDC -> dc)
+    }
+    val withSsl = options.sslOptions.fold(withLocalDc) { sslOptions =>
+      val requiredSslEntries = Map(
+        SslEnabled           -> sslOptions.enabled.toString,
+        SslClientAuthEnabled -> sslOptions.clientAuthEnabled.toString,
+        SslTrustStoreType ->
+          sslOptions.trustStoreType.getOrElse(SSLOptions.DefaultTrustStoreType),
+        SslKeyStoreType -> sslOptions.keyStoreType.getOrElse(SSLOptions.DefaultKeyStoreType),
+        SslProtocol     -> sslOptions.protocol.getOrElse(SSLOptions.DefaultProtocol),
+        SslEnabledAlgorithms ->
+          sslOptions.enabledAlgorithms.getOrElse(SSLOptions.DefaultEnabledAlgorithms).mkString(",")
+      )
+      val optionalSslEntries: Map[String, String] = List(
+        sslOptions.trustStorePath.map(SslTrustStorePath -> _),
+        sslOptions.trustStorePassword.map(SslTrustStorePassword -> _),
+        sslOptions.keyStorePath.map(SslKeyStorePath -> _),
+        sslOptions.keyStorePassword.map(SslKeyStorePassword -> _)
+      ).flatten.toMap
+      withLocalDc ++ requiredSslEntries ++ optionalSslEntries
+    }
+    options.connections.fold(withSsl) { connections =>
+      withSsl ++ Map(
+        LocalConnectionsPerExecutor  -> connections.toString,
+        RemoteConnectionsPerExecutor -> connections.toString
+      )
+    }
+  }
+
+  private def authConf(credentials: Option[Credentials]) =
+    credentials match {
+      case None                                  => NoAuthConf
+      case Some(Credentials(username, password)) => PasswordAuthConf(username, password)
+    }
+
+  private def cassandraSSLConf(sslOptions: Option[SSLOptions]) =
+    sslOptions match {
+      case None => CassandraConnectorConf.DefaultCassandraSSLConf
+      case Some(sslOptions) =>
+        CassandraConnectorConf.CassandraSSLConf(
+          enabled            = sslOptions.enabled,
+          clientAuthEnabled  = sslOptions.clientAuthEnabled,
+          trustStorePath     = sslOptions.trustStorePath,
+          trustStorePassword = sslOptions.trustStorePassword,
+          trustStoreType   = sslOptions.trustStoreType.getOrElse(SSLOptions.DefaultTrustStoreType),
+          protocol         = sslOptions.protocol.getOrElse(SSLOptions.DefaultProtocol),
+          keyStorePath     = sslOptions.keyStorePath,
+          keyStorePassword = sslOptions.keyStorePassword,
+          enabledAlgorithms =
+            sslOptions.enabledAlgorithms.getOrElse(SSLOptions.DefaultEnabledAlgorithms),
+          keyStoreType = sslOptions.keyStoreType.getOrElse(SSLOptions.DefaultKeyStoreType)
+        )
+    }
+
+  private def connector(
+    sparkConf: SparkConf,
+    options: SessionOptions
+  ) =
     new CassandraConnector(
       CassandraConnectorConf(sparkConf).copy(
         contactInfo = IpBasedContactInfo(
-          hosts = Set(new InetSocketAddress(sourceSettings.host, sourceSettings.port)),
-          authConf = sourceSettings.credentials match {
-            case None                                  => NoAuthConf
-            case Some(Credentials(username, password)) => PasswordAuthConf(username, password)
-          },
-          cassandraSSLConf = sourceSettings.sslOptions match {
-            case None => CassandraConnectorConf.DefaultCassandraSSLConf
-            case Some(sslOptions) =>
-              CassandraConnectorConf.CassandraSSLConf(
-                enabled            = sslOptions.enabled,
-                trustStorePath     = sslOptions.trustStorePath,
-                trustStorePassword = sslOptions.trustStorePassword,
-                trustStoreType     = sslOptions.trustStoreType.getOrElse("JKS"),
-                protocol           = sslOptions.protocol.getOrElse("TLS"),
-                enabledAlgorithms = sslOptions.enabledAlgorithms.getOrElse(
-                  Set("TLS_RSA_WITH_AES_128_CBC_SHA", "TLS_RSA_WITH_AES_256_CBC_SHA")
-                ),
-                clientAuthEnabled = sslOptions.clientAuthEnabled,
-                keyStorePath      = sslOptions.keyStorePath,
-                keyStorePassword  = sslOptions.keyStorePassword,
-                keyStoreType      = sslOptions.keyStoreType.getOrElse("JKS")
-              )
-          }
+          hosts            = Set(new InetSocketAddress(options.host, options.port)),
+          authConf         = authConf(options.credentials),
+          cassandraSSLConf = cassandraSSLConf(options.sslOptions)
         ),
-        localDC                      = sourceSettings.localDC,
-        localConnectionsPerExecutor  = sourceSettings.connections,
-        remoteConnectionsPerExecutor = sourceSettings.connections,
-        queryRetryCount              = -1
+        localDC                      = options.localDC,
+        localConnectionsPerExecutor  = options.connections,
+        remoteConnectionsPerExecutor = options.connections,
+        queryRetryCount              = options.queryRetryCount
       )
     )
 
+  def sourceConnector(sparkConf: SparkConf, sourceSettings: SourceSettings.Cassandra) =
+    connector(sparkConf, sourceSessionOptions(sourceSettings))
+
   def targetConnector(sparkConf: SparkConf, targetSettings: TargetSettings.Scylla) =
-    new CassandraConnector(
-      CassandraConnectorConf(sparkConf).copy(
-        contactInfo = IpBasedContactInfo(
-          hosts = Set(new InetSocketAddress(targetSettings.host, targetSettings.port)),
-          authConf = targetSettings.credentials match {
-            case None                                  => NoAuthConf
-            case Some(Credentials(username, password)) => PasswordAuthConf(username, password)
-          },
-          cassandraSSLConf = targetSettings.sslOptions match {
-            case None => CassandraConnectorConf.DefaultCassandraSSLConf
-            case Some(sslOptions) =>
-              CassandraConnectorConf.CassandraSSLConf(
-                enabled            = sslOptions.enabled,
-                clientAuthEnabled  = sslOptions.clientAuthEnabled,
-                trustStorePath     = sslOptions.trustStorePath,
-                trustStorePassword = sslOptions.trustStorePassword,
-                trustStoreType     = sslOptions.trustStoreType.getOrElse("JKS"),
-                protocol           = sslOptions.protocol.getOrElse("TLS"),
-                keyStorePath       = sslOptions.keyStorePath,
-                keyStorePassword   = sslOptions.keyStorePassword,
-                enabledAlgorithms = sslOptions.enabledAlgorithms.getOrElse(
-                  Set("TLS_RSA_WITH_AES_128_CBC_SHA", "TLS_RSA_WITH_AES_256_CBC_SHA")
-                ),
-                keyStoreType = sslOptions.keyStoreType.getOrElse("JKS")
-              )
-          }
-        ),
-        localDC                      = targetSettings.localDC,
-        localConnectionsPerExecutor  = targetSettings.connections,
-        remoteConnectionsPerExecutor = targetSettings.connections,
-        queryRetryCount              = -1
-      )
-    )
+    connector(sparkConf, targetSessionOptions(targetSettings))
 }

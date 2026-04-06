@@ -102,4 +102,21 @@ class CassandraRowComparisonTest extends munit.FunSuite {
     assertEquals(result, expected)
   }
 
+  test("BigDecimal and integral wrappers remain different for Cassandra validation") {
+    val left = CassandraRow.fromMap(Map("foo" -> new java.math.BigDecimal("42.0")))
+    val right = CassandraRow.fromMap(Map("foo" -> 42L))
+
+    val result = compareItems(left, Some(right))
+    val expected =
+      Some(
+        cassandraRowComparisonFailure(
+          left,
+          Some(right),
+          List(Item.DifferingFieldValues(List("foo")))
+        )
+      )
+
+    assertEquals(result, expected)
+  }
+
 }
