@@ -62,6 +62,41 @@ class DynamoDBTargetSettingParserTest extends munit.FunSuite {
     assertEquals(parsedSettings.alternator.get.maxItemsPerBatch, Some(100))
   }
 
+  test("removeConsumedCapacity decodes as None when omitted from YAML") {
+    val config =
+      """type: dynamodb
+        |table: Dummy
+        |streamChanges: false
+        |""".stripMargin
+
+    val parsedSettings = parseDynamoDBTargetSettings(config)
+    assertEquals(parsedSettings.removeConsumedCapacity, None)
+  }
+
+  test("removeConsumedCapacity decodes as Some(true) when explicitly set") {
+    val config =
+      """type: dynamodb
+        |table: Dummy
+        |streamChanges: false
+        |removeConsumedCapacity: true
+        |""".stripMargin
+
+    val parsedSettings = parseDynamoDBTargetSettings(config)
+    assertEquals(parsedSettings.removeConsumedCapacity, Some(true))
+  }
+
+  test("removeConsumedCapacity decodes as Some(false) when explicitly disabled") {
+    val config =
+      """type: dynamodb
+        |table: Dummy
+        |streamChanges: false
+        |removeConsumedCapacity: false
+        |""".stripMargin
+
+    val parsedSettings = parseDynamoDBTargetSettings(config)
+    assertEquals(parsedSettings.removeConsumedCapacity, Some(false))
+  }
+
   private def parseDynamoDBTargetSettings(yamlContent: String): TargetSettings.DynamoDB =
     yaml.parser
       .parse(yamlContent)

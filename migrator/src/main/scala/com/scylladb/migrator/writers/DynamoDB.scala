@@ -36,7 +36,9 @@ object DynamoDB {
           target.endpoint,
           target.finalCredentials.map(_.toProvider),
           target.region,
-          Seq.empty,
+          if (target.removeConsumedCapacity.getOrElse(true))
+            Seq(new DynamoUtils.RemoveConsumedCapacityInterceptor)
+          else Nil,
           target.alternator
         )
 
@@ -92,7 +94,7 @@ object DynamoDB {
       maybeScanSegments = None,
       maybeMaxMapTasks  = None,
       target.finalCredentials,
-      target.removeConsumedCapacity.getOrElse(false),
+      target.removeConsumedCapacity.getOrElse(true),
       target.alternator
     )
     jobConf.set(DynamoDBConstants.OUTPUT_TABLE_NAME, target.table)
