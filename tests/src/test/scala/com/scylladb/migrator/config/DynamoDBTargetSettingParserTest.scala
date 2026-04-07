@@ -35,11 +35,16 @@ class DynamoDBTargetSettingParserTest extends munit.FunSuite {
     assertEquals(parsedSettings.skipInitialSnapshotTransfer, Some(true))
   }
 
+<<<<<<< HEAD
   test("alternator maxItemsPerBatch is optional and defaults to None") {
+=======
+  test("removeConsumedCapacity decodes as None when omitted from YAML") {
+>>>>>>> 3d1fea0 (address the case of missing removeConsumedCapacity in the yaml (#256))
     val config =
       """type: dynamodb
         |table: Dummy
         |streamChanges: false
+<<<<<<< HEAD
         |alternator:
         |  datacenter: dc1
         |""".stripMargin
@@ -50,16 +55,45 @@ class DynamoDBTargetSettingParserTest extends munit.FunSuite {
   }
 
   test("alternator maxItemsPerBatch is parsed when set") {
+=======
+        |""".stripMargin
+
+    val parsedSettings = parseDynamoDBTargetSettings(config)
+    assertEquals(parsedSettings.removeConsumedCapacity, None)
+  }
+
+  test("removeConsumedCapacity decodes as Some(true) when explicitly set") {
+>>>>>>> 3d1fea0 (address the case of missing removeConsumedCapacity in the yaml (#256))
     val config =
       """type: dynamodb
         |table: Dummy
         |streamChanges: false
+<<<<<<< HEAD
         |alternator:
         |  maxItemsPerBatch: 100
         |""".stripMargin
 
     val parsedSettings = parseDynamoDBTargetSettings(config)
     assertEquals(parsedSettings.alternator.get.maxItemsPerBatch, Some(100))
+=======
+        |removeConsumedCapacity: true
+        |""".stripMargin
+
+    val parsedSettings = parseDynamoDBTargetSettings(config)
+    assertEquals(parsedSettings.removeConsumedCapacity, Some(true))
+  }
+
+  test("removeConsumedCapacity decodes as Some(false) when explicitly disabled") {
+    val config =
+      """type: dynamodb
+        |table: Dummy
+        |streamChanges: false
+        |removeConsumedCapacity: false
+        |""".stripMargin
+
+    val parsedSettings = parseDynamoDBTargetSettings(config)
+    assertEquals(parsedSettings.removeConsumedCapacity, Some(false))
+>>>>>>> 3d1fea0 (address the case of missing removeConsumedCapacity in the yaml (#256))
   }
 
   private def parseDynamoDBTargetSettings(yamlContent: String): TargetSettings.DynamoDB =

@@ -42,6 +42,15 @@ class DynamoUtilsTest extends munit.FunSuite {
     assertEquals(modified.returnConsumedCapacity(), null)
   }
 
+  test("Strips INDEXES returnConsumedCapacity from BatchWriteItemRequest") {
+    val request = BatchWriteItemRequest
+      .builder()
+      .returnConsumedCapacity(ReturnConsumedCapacity.INDEXES)
+      .build()
+    val modified = modifyRequest(request).asInstanceOf[BatchWriteItemRequest]
+    assertEquals(modified.returnConsumedCapacity(), null)
+  }
+
   test("Strips returnConsumedCapacity from PutItemRequest") {
     val request = PutItemRequest
       .builder()
@@ -258,6 +267,16 @@ class DynamoUtilsTest extends munit.FunSuite {
     val jobConf = new JobConf()
     DynamoUtils.setDynamoDBJobConf(jobConf, None, None, None, None, None)
     assertEquals(jobConf.get(DynamoDBConstants.MAX_ITEMS_PER_BATCH), null)
+  }
+
+  test("consumedCapacityInterceptors returns interceptor when config is None (default ON)") {
+    val interceptors = DynamoUtils.consumedCapacityInterceptors(None)
+    assertEquals(interceptors.size, 1)
+  }
+
+  test("consumedCapacityInterceptors returns empty when explicitly disabled") {
+    val interceptors = DynamoUtils.consumedCapacityInterceptors(Some(false))
+    assertEquals(interceptors.isEmpty, true)
   }
 
 }
