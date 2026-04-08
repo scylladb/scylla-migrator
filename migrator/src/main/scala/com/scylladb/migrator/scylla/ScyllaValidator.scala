@@ -10,8 +10,8 @@ import com.datastax.spark.connector.{
 }
 import com.datastax.spark.connector.cql.{ CassandraConnector, Schema, TableDef }
 import com.datastax.spark.connector.rdd.ReadConf
-import com.scylladb.migrator.{ Connectors, ConsistencyLevelUtils, readers, writers }
-import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
+import com.scylladb.migrator.{ readers, writers, Connectors, ConsistencyLevelUtils }
+import com.scylladb.migrator.config.{ CopyType, MigratorConfig, SourceSettings, TargetSettings }
 import com.scylladb.migrator.validation.RowComparisonFailure
 import org.apache.logging.log4j.LogManager
 import org.apache.spark.sql.{ Row, SparkSession }
@@ -83,12 +83,20 @@ object ScyllaValidator {
         Schema.tableFromCassandra(_, sourceSettings.keyspace, sourceSettings.table)
       )
 
+    val includePerColumnMetadata =
+      readers.Cassandra
+        .determineCopyType(sourceTableDef, sourceSettings.preserveTimestamps)
+        .fold(
+          err => throw err,
+          copyType => copyType == CopyType.WithTimestampPreservation
+        )
+
     val source = {
       val regularColumnsProjection =
         sourceTableDef.regularColumns.flatMap { colDef =>
           val alias = config.renamesMap(colDef.columnName)
 
-          if (sourceSettings.preserveTimestamps)
+          if (includePerColumnMetadata)
             List(
               ColumnName(colDef.columnName, Some(alias)),
               TTL(colDef.columnName, Some(alias + "_ttl")),
@@ -101,11 +109,6 @@ object ScyllaValidator {
         (sourceTableDef.partitionKey ++ sourceTableDef.clusteringColumns)
           .map(colDef => ColumnName(colDef.columnName, config.renamesMap.get(colDef.columnName)))
 
-      val consistencyLevel =
-        ConsistencyLevelUtils.parseConsistencyLevel(sourceSettings.consistencyLevel)
-      log.info(
-        s"Using consistencyLevel [${consistencyLevel}] for VALIDATOR SOURCE based on validator source config [${sourceSettings.consistencyLevel}]"
-      )
       val consistencyLevel =
         ConsistencyLevelUtils.parseConsistencyLevel(sourceSettings.consistencyLevel)
       log.info(
@@ -132,7 +135,7 @@ object ScyllaValidator {
         sourceTableDef.regularColumns.flatMap { colDef =>
           val renamedColName = config.renamesMap(colDef.columnName)
 
-          if (sourceSettings.preserveTimestamps)
+          if (includePerColumnMetadata)
             List(
               ColumnName(renamedColName),
               TTL(renamedColName, Some(renamedColName + "_ttl")),
@@ -181,31 +184,19 @@ object ScyllaValidator {
       if (validationConfig.copyMissingRows) {
         log.info("Copying missing rows from source to target")
 
-        val hasCollections = sourceTableDef.columnTypes.exists(_.isCollection)
-        val hasRegularColumns = sourceTableDef.regularColumns.nonEmpty
-
-        if (sourceSettings.preserveTimestamps && hasCollections)
-          throw new Exception(
-            "TTL/Writetime preservation is unsupported for tables with collection types. " +
-              "Please check in your config the option 'preserveTimestamps' and set it to false to continue."
-          )
-        if (sourceSettings.preserveTimestamps && !hasRegularColumns)
-          log.warn(
-            "No regular columns in the table - " +
-              "copying missing rows without timestamp preservation"
-          )
-
-        val includePerColumnMetadata =
-          sourceSettings.preserveTimestamps && hasRegularColumns
-
         val repairSchema =
           buildRepairSchema(sourceTableDef, config.renamesMap, includePerColumnMetadata)
+        val repairFieldNames = repairSchema.fieldNames.toIndexedSeq
 
         val rawRepairDf = spark.createDataFrame(
           cachedJoined
             .filter { case (_, r) => r.isEmpty }
             .map { case (sourceRow, _) =>
-              Row.fromSeq(sourceRow.toSeq.map(readers.Cassandra.convertValue))
+              Row.fromSeq(
+                repairFieldNames.map { fieldName =>
+                  readers.Cassandra.convertValue(sourceRow.getRaw(fieldName))
+                }
+              )
             },
           repairSchema
         )

@@ -1,7 +1,6 @@
 package com.scylladb.migrator.scylla
 
-import com.datastax.oss.driver.api.querybuilder.QueryBuilder
-import com.datastax.oss.driver.api.querybuilder.QueryBuilder.literal
+import com.scylladb.migrator.CassandraUtils.dropAndRecreateTable
 import com.scylladb.migrator.{ CassandraCompat, Integration }
 import com.scylladb.migrator.SparkUtils.{ performValidation, successfullyPerformMigration }
 import org.junit.experimental.categories.Category
@@ -61,6 +60,10 @@ abstract class CopyMissingRowsTest(version: CassandraVersion) extends MigratorSu
     s"Cassandra ${version.label}: copyMissingRows preserves source TTL and writetime"
   ) { tableName =>
     sourceCassandra().execute(
+      s"INSERT INTO ${keyspace}.${tableName} (id, foo, bar) VALUES ('11111', 'keep', 7) " +
+        s"USING TTL ${sourceInsertTtlSeconds} AND TIMESTAMP ${sourceInsertWritetimeMicros}"
+    )
+    sourceCassandra().execute(
       s"INSERT INTO ${keyspace}.${tableName} (id, foo, bar) VALUES ('12345', 'bar', 42) " +
         s"USING TTL ${sourceInsertTtlSeconds} AND TIMESTAMP ${sourceInsertWritetimeMicros}"
     )
@@ -68,34 +71,34 @@ abstract class CopyMissingRowsTest(version: CassandraVersion) extends MigratorSu
     successfullyPerformMigration(basicConfigFile)
     assertEquals(performValidation(basicConfigFile), 0, "Initial validation failed")
 
-    // Delete the row from the target to simulate a missing row
-    val deleteStatement =
-      QueryBuilder
-        .deleteFrom(keyspace, tableName)
-        .whereColumn("id")
-        .isEqualTo(literal("12345"))
-        .build()
-    targetScylla().execute(deleteStatement)
+    // Recreate the target and restore only one row so the other is genuinely missing
+    // without creating a newer tombstone that would block an older repaired writetime.
+    dropAndRecreateTable(targetScylla(), keyspace, tableName, identity)
+    targetScylla().execute(
+      s"INSERT INTO ${keyspace}.${tableName} (id, foo, bar) VALUES ('11111', 'keep', 7) " +
+        s"USING TTL ${sourceInsertTtlSeconds} AND TIMESTAMP ${sourceInsertWritetimeMicros}"
+    )
 
-    // Validate with copyMissingRows enabled — detects the missing row and copies it
     assertEquals(performValidation(copyMissingConfigFile), 1, "Should detect missing row")
-
-    // Validate again with timestamp comparison — the repaired row should now converge fully
-    assertEquals(performValidation(basicConfigFile), 0, "Row should have been copied to target")
 
     assertTargetRowMetadata(
       tableName,
-      rowId = "12345",
-      expectedFoo = "bar",
-      expectedBar = 42,
-      expectedTtlSeconds = sourceInsertTtlSeconds,
+      rowId                   = "12345",
+      expectedFoo             = "bar",
+      expectedBar             = 42,
+      expectedTtlSeconds      = sourceInsertTtlSeconds,
       expectedWritetimeMicros = sourceInsertWritetimeMicros
     )
+
+    assertEquals(performValidation(basicConfigFile), 0, "Row should have been copied to target")
   }
 
   withTable("BasicTest").test(
     s"Cassandra ${version.label}: copyMissingRows honors fixed target write settings"
   ) { tableName =>
+    sourceCassandra().execute(
+      s"INSERT INTO ${keyspace}.${tableName} (id, foo, bar) VALUES ('11111', 'keep', 7)"
+    )
     sourceCassandra().execute(
       s"INSERT INTO ${keyspace}.${tableName} (id, foo, bar) VALUES ('67890', 'baz', 99)"
     )
@@ -103,28 +106,52 @@ abstract class CopyMissingRowsTest(version: CassandraVersion) extends MigratorSu
     successfullyPerformMigration(fixedTargetWriteConfigFile)
     assertEquals(performValidation(fixedTargetWriteConfigFile), 0, "Initial validation failed")
 
-    val deleteStatement =
-      QueryBuilder
-        .deleteFrom(keyspace, tableName)
-        .whereColumn("id")
-        .isEqualTo(literal("67890"))
-        .build()
-    targetScylla().execute(deleteStatement)
+    dropAndRecreateTable(targetScylla(), keyspace, tableName, identity)
+    targetScylla().execute(
+      s"INSERT INTO ${keyspace}.${tableName} (id, foo, bar) VALUES ('11111', 'keep', 7) " +
+        s"USING TTL ${fixedTargetWriteTtlSeconds} AND TIMESTAMP ${fixedTargetWriteWritetimeMicros}"
+    )
 
     assertEquals(performValidation(fixedTargetWriteConfigFile), 1, "Should detect missing row")
+
+    assertTargetRowMetadata(
+      tableName,
+      rowId                   = "67890",
+      expectedFoo             = "baz",
+      expectedBar             = 99,
+      expectedTtlSeconds      = fixedTargetWriteTtlSeconds,
+      expectedWritetimeMicros = fixedTargetWriteWritetimeMicros
+    )
+
     assertEquals(
       performValidation(fixedTargetWriteConfigFile),
       0,
       "Row should have been copied using fixed target write settings"
     )
+  }
 
-    assertTargetRowMetadata(
-      tableName,
-      rowId = "67890",
-      expectedFoo = "baz",
-      expectedBar = 99,
-      expectedTtlSeconds = fixedTargetWriteTtlSeconds,
-      expectedWritetimeMicros = fixedTargetWriteWritetimeMicros
+  withTable("BasicTest").test(
+    s"Cassandra ${version.label}: copyMissingRows rejects timestamp preservation for collection columns"
+  ) { tableName =>
+    val alterTable =
+      s"ALTER TABLE ${keyspace}.${tableName} ADD tags set<text>"
+    sourceCassandra().execute(alterTable)
+    targetScylla().execute(alterTable)
+
+    sourceCassandra().execute(
+      s"INSERT INTO ${keyspace}.${tableName} (id, foo, bar, tags) " +
+        s"VALUES ('24680', 'bar', 42, {'x', 'y'})"
+    )
+
+    val err = intercept[Exception] {
+      performValidation(copyMissingConfigFile)
+    }
+
+    assert(
+      err.getMessage.contains(
+        "TTL/Writetime preservation is unsupported for tables with collection types"
+      ),
+      s"Unexpected error: ${err.getMessage}"
     )
   }
 
