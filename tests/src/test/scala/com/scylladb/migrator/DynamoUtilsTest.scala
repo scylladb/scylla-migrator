@@ -42,6 +42,15 @@ class DynamoUtilsTest extends munit.FunSuite {
     assertEquals(modified.returnConsumedCapacity(), null)
   }
 
+  test("Strips INDEXES returnConsumedCapacity from BatchWriteItemRequest") {
+    val request = BatchWriteItemRequest
+      .builder()
+      .returnConsumedCapacity(ReturnConsumedCapacity.INDEXES)
+      .build()
+    val modified = modifyRequest(request).asInstanceOf[BatchWriteItemRequest]
+    assertEquals(modified.returnConsumedCapacity(), null)
+  }
+
   test("Strips returnConsumedCapacity from PutItemRequest") {
     val request = PutItemRequest
       .builder()
@@ -258,6 +267,12 @@ class DynamoUtilsTest extends munit.FunSuite {
     val jobConf = new JobConf()
     DynamoUtils.setDynamoDBJobConf(jobConf, None, None, None, None, None)
     assertEquals(jobConf.get(DynamoDBConstants.MAX_ITEMS_PER_BATCH), null)
+  }
+
+  test("removeConsumedCapacity defaults to false in setDynamoDBJobConf") {
+    val jobConf = new JobConf()
+    DynamoUtils.setDynamoDBJobConf(jobConf, None, None, None, None, None)
+    assertEquals(jobConf.get("scylla.migrator.remove_consumed_capacity"), "false")
   }
 
 }

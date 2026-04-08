@@ -57,7 +57,9 @@ object DynamoStreamReplication {
             target.endpoint,
             target.finalCredentials.map(_.toProvider),
             target.region,
-            Seq.empty,
+            if (target.removeConsumedCapacity.getOrElse(true))
+              Seq(new DynamoUtils.RemoveConsumedCapacityInterceptor)
+            else Nil,
             target.alternator
           )
         try

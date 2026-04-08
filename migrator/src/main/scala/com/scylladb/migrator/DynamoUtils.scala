@@ -112,7 +112,7 @@ object DynamoUtils {
         target.endpoint,
         target.finalCredentials.map(_.toProvider),
         target.region,
-        if (target.removeConsumedCapacity.getOrElse(false))
+        if (target.removeConsumedCapacity.getOrElse(true))
           Seq(new RemoveConsumedCapacityInterceptor)
         else Nil,
         target.alternator
