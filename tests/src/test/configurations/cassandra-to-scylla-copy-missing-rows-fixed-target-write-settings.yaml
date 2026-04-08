@@ -9,7 +9,7 @@ source:
   keyspace: test
   table: basictest
   consistencyLevel: LOCAL_QUORUM
-  preserveTimestamps: true
+  preserveTimestamps: false
   splitCount: 8
   connections: 8
   fetchSize: 1000
@@ -27,13 +27,15 @@ target:
   consistencyLevel: LOCAL_QUORUM
   connections: 16
   stripTrailingZerosForDecimals: false
+  writeTTLInS: 43200
+  writeWritetimestampInuS: 2000000000000
 
 savepoints:
   path: /app/savepoints
   intervalSeconds: 300
 
 validation:
-  compareTimestamps: true
+  compareTimestamps: false
   ttlToleranceMillis: 60000
   writetimeToleranceMillis: 1000
   failuresToFetch: 100

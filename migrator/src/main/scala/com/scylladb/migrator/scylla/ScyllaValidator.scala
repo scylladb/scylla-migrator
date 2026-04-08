@@ -8,21 +8,48 @@ import com.datastax.spark.connector.{
   TTL,
   WriteTime
 }
-import com.datastax.spark.connector.cql.{ CassandraConnector, Schema }
-import com.datastax.spark.connector.writer.{ CassandraRowWriter, WriteConf }
-import com.scylladb.migrator.Connectors
+import com.datastax.spark.connector.cql.{ CassandraConnector, Schema, TableDef }
+import com.datastax.spark.connector.rdd.ReadConf
+import com.scylladb.migrator.{ Connectors, ConsistencyLevelUtils, readers, writers }
 import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
 import com.scylladb.migrator.validation.RowComparisonFailure
 import org.apache.logging.log4j.LogManager
-import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.{ Row, SparkSession }
+import org.apache.spark.sql.cassandra.DataTypeConverter
+import org.apache.spark.sql.types.{ IntegerType, LongType, StructField, StructType }
 import org.apache.spark.storage.StorageLevel
-import com.scylladb.migrator.ConsistencyLevelUtils
-import com.datastax.spark.connector.rdd.ReadConf
 
 /** The C* to Scylla migration validator */
 object ScyllaValidator {
 
   private val log = LogManager.getLogger("com.scylladb.migrator.scylla")
+
+  private def buildRepairSchema(
+    sourceTableDef: TableDef,
+    renameColumn: String => String,
+    includePerColumnMetadata: Boolean
+  ): StructType = {
+    val primaryKeyFields =
+      (sourceTableDef.partitionKey ++ sourceTableDef.clusteringColumns).map { colDef =>
+        DataTypeConverter.toStructField(colDef).copy(name = renameColumn(colDef.columnName))
+      }
+
+    val regularFields =
+      sourceTableDef.regularColumns.flatMap { colDef =>
+        val renamedColumn = renameColumn(colDef.columnName)
+        val field = DataTypeConverter.toStructField(colDef).copy(name = renamedColumn)
+
+        if (includePerColumnMetadata)
+          Seq(
+            field,
+            StructField(s"${renamedColumn}_ttl", IntegerType, true),
+            StructField(s"${renamedColumn}_writetime", LongType, true)
+          )
+        else Seq(field)
+      }
+
+    StructType(primaryKeyFields ++ regularFields)
+  }
 
   /** Validates that the target Scylla database contains the same data as the source Cassandra
     * database.
@@ -64,8 +91,8 @@ object ScyllaValidator {
           if (sourceSettings.preserveTimestamps)
             List(
               ColumnName(colDef.columnName, Some(alias)),
-              WriteTime(colDef.columnName, Some(alias + "_writetime")),
-              TTL(colDef.columnName, Some(alias + "_ttl"))
+              TTL(colDef.columnName, Some(alias + "_ttl")),
+              WriteTime(colDef.columnName, Some(alias + "_writetime"))
             )
           else List(ColumnName(colDef.columnName, Some(alias)))
         }
@@ -108,8 +135,8 @@ object ScyllaValidator {
           if (sourceSettings.preserveTimestamps)
             List(
               ColumnName(renamedColName),
-              WriteTime(renamedColName, Some(renamedColName + "_writetime")),
-              TTL(renamedColName, Some(renamedColName + "_ttl"))
+              TTL(renamedColName, Some(renamedColName + "_ttl")),
+              WriteTime(renamedColName, Some(renamedColName + "_writetime"))
             )
           else List(ColumnName(renamedColName))
         }
@@ -154,32 +181,51 @@ object ScyllaValidator {
       if (validationConfig.copyMissingRows) {
         log.info("Copying missing rows from source to target")
 
-        val writeColumnSelector = {
-          val regularColumns = sourceTableDef.regularColumns.map { colDef =>
-            ColumnName(config.renamesMap(colDef.columnName))
+        val hasCollections = sourceTableDef.columnTypes.exists(_.isCollection)
+        val hasRegularColumns = sourceTableDef.regularColumns.nonEmpty
+
+        if (sourceSettings.preserveTimestamps && hasCollections)
+          throw new Exception(
+            "TTL/Writetime preservation is unsupported for tables with collection types. " +
+              "Please check in your config the option 'preserveTimestamps' and set it to false to continue."
+          )
+        if (sourceSettings.preserveTimestamps && !hasRegularColumns)
+          log.warn(
+            "No regular columns in the table - " +
+              "copying missing rows without timestamp preservation"
+          )
+
+        val includePerColumnMetadata =
+          sourceSettings.preserveTimestamps && hasRegularColumns
+
+        val repairSchema =
+          buildRepairSchema(sourceTableDef, config.renamesMap, includePerColumnMetadata)
+
+        val rawRepairDf = spark.createDataFrame(
+          cachedJoined
+            .filter { case (_, r) => r.isEmpty }
+            .map { case (sourceRow, _) =>
+              Row.fromSeq(sourceRow.toSeq.map(readers.Cassandra.convertValue))
+            },
+          repairSchema
+        )
+
+        val (repairDf, timestampColumns) =
+          if (includePerColumnMetadata) {
+            val (df, cols) = readers.Cassandra.explodeDataframeFromPerColumnMeta(spark, rawRepairDf)
+            (df, Some(cols))
+          } else {
+            (rawRepairDf, None)
           }
-          val primaryKeyColumns =
-            (sourceTableDef.partitionKey ++ sourceTableDef.clusteringColumns)
-              .map(colDef => ColumnName(config.renamesMap(colDef.columnName)))
-          SomeColumns(primaryKeyColumns ++ regularColumns: _*)
-        }
 
-        val targetConsistencyLevel =
-          ConsistencyLevelUtils.parseConsistencyLevel(targetSettings.consistencyLevel)
-
-        val writeConf = WriteConf
-          .fromSparkConf(spark.sparkContext.getConf)
-          .copy(consistencyLevel = targetConsistencyLevel)
-
-        cachedJoined
-          .filter { case (_, r) => r.isEmpty }
-          .map { case (sourceRow, _) => sourceRow }
-          .saveToCassandra(
-            targetSettings.keyspace,
-            targetSettings.table,
-            writeColumnSelector,
-            writeConf
-          )(targetConnector, CassandraRowWriter.Factory)
+        writers.Scylla.writeDataframe(
+          targetSettings,
+          Nil,
+          repairDf,
+          timestampColumns,
+          None,
+          sourceSettings
+        )
 
         log.info("Finished copying missing rows to target")
       }
