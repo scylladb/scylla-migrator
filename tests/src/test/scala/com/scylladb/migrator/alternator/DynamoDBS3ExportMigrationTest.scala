@@ -1,5 +1,6 @@
 package com.scylladb.migrator.alternator
 
+import com.scylladb.migrator.TestFileUtils
 import com.scylladb.migrator.SparkUtils.successfullyPerformMigration
 import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.services.dynamodb.model.{
@@ -17,7 +18,6 @@ import software.amazon.awssdk.services.s3.model.{ CreateBucketRequest, PutObject
 import java.nio.file.{ Files, Path, Paths }
 import java.util.function.Consumer
 import scala.jdk.CollectionConverters._
-import scala.util.Using
 
 class DynamoDBS3ExportMigrationTest extends MigratorSuiteWithDynamoDBLocal {
 
@@ -68,28 +68,8 @@ class DynamoDBS3ExportMigrationTest extends MigratorSuiteWithDynamoDBLocal {
           }
       })
 
-    // Perform the migration and verify no savepoint files are created (issue #247:
-    // S3 export sources use ParallelCollectionPartitions, not HadoopPartitions,
-    // so DynamoDbSavepointsManager must not be instantiated for this path).
-    val beforeMigration = System.currentTimeMillis()
+    // Perform the migration
     successfullyPerformMigration(configFile)
-
-    val savepointsDir = Paths.get("docker/spark-master")
-    if (Files.exists(savepointsDir)) {
-      Using.resource(Files.list(savepointsDir)) { stream =>
-        val newSavepoints = stream
-          .iterator()
-          .asScala
-          .filter(p => Files.isRegularFile(p))
-          .filter(_.getFileName.toString.startsWith("savepoint_"))
-          .filter(p => Files.getLastModifiedTime(p).toMillis >= beforeMigration)
-          .toList
-        assert(
-          newSavepoints.isEmpty,
-          s"S3 export import should not create savepoint files, but found: $newSavepoints"
-        )
-      }
-    }
 
     // Check that the schema has been correctly defined on the target table
     checkSchemaWasMigrated(
@@ -141,6 +121,31 @@ class DynamoDBS3ExportMigrationTest extends MigratorSuiteWithDynamoDBLocal {
       )
     )
     checkItemWasMigrated(tableName, item3Key, item3Data)
+  }
+
+  // Verify that the S3 export import path does not instantiate DynamoDbSavepointsManager
+  // (issue #247). The SavepointsManager base class unconditionally creates the savepoints
+  // directory in its constructor, so its absence proves the manager was never instantiated.
+  private val savepointsDir =
+    Paths.get("docker/spark-master/s3-export-no-savepoints")
+
+  withResources("test-bucket", "BasicTest").test(
+    "S3 export import does not instantiate DynamoDbSavepointsManager (issue #247)"
+  ) { case (bucketName, tableName) =>
+    if (savepointsDir.toFile.exists())
+      TestFileUtils.deleteRecursive(savepointsDir.toFile)
+
+    runS3ExportMigration(
+      bucketName,
+      tableName,
+      "dynamodb-s3-export-to-alternator-no-savepoints.yaml"
+    )
+
+    assert(
+      !Files.exists(savepointsDir),
+      s"DynamoDbSavepointsManager should not be instantiated for S3 export imports, " +
+        s"but its directory was created at $savepointsDir"
+    )
   }
 
   // Make sure to properly set up and clean up the target database and the S3 instance
