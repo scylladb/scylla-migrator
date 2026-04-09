@@ -188,16 +188,18 @@ object ScyllaValidator {
           buildRepairSchema(sourceTableDef, config.renamesMap, includePerColumnMetadata)
         val repairFieldNames = repairSchema.fieldNames.toIndexedSeq
 
+        val missingRowsRdd =
+          cachedJoined.filter { case (_, r) => r.isEmpty }
+        val missingSourceRowCount = missingRowsRdd.count()
+
         val rawRepairDf = spark.createDataFrame(
-          cachedJoined
-            .filter { case (_, r) => r.isEmpty }
-            .map { case (sourceRow, _) =>
-              Row.fromSeq(
-                repairFieldNames.map { fieldName =>
-                  readers.Cassandra.convertValue(sourceRow.getRaw(fieldName))
-                }
-              )
-            },
+          missingRowsRdd.map { case (sourceRow, _) =>
+            Row.fromSeq(
+              repairFieldNames.map { fieldName =>
+                readers.Cassandra.convertValue(sourceRow.getRaw(fieldName))
+              }
+            )
+          },
           repairSchema
         )
 
@@ -218,7 +220,9 @@ object ScyllaValidator {
           sourceSettings
         )
 
-        log.info("Finished copying missing rows to target")
+        log.info(
+          s"Finished copying missing rows to target: $missingSourceRowCount missing row(s) copied"
+        )
       }
 
       failures

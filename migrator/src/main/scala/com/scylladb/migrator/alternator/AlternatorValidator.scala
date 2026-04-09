@@ -101,15 +101,17 @@ object AlternatorValidator {
       if (configValidation.copyMissingRows) {
         log.info("Copying missing rows from source to target")
 
-        val missingAsHadoop = cachedJoined
-          .filter { case (_, (_, r)) => r.isEmpty }
-          .map { case (_, (sourceItem, _)) =>
-            val item = new java.util.HashMap[String, AttributeValue]()
-            sourceItem.foreach { case (k, v) =>
-              item.put(k, DdbValue.toAttributeValue(v))
-            }
-            (new Text(), new DynamoDBItemWritable(item))
+        val missingRowsRdd =
+          cachedJoined.filter { case (_, (_, r)) => r.isEmpty }
+        val missingRowCount = missingRowsRdd.count()
+
+        val missingAsHadoop = missingRowsRdd.map { case (_, (sourceItem, _)) =>
+          val item = new java.util.HashMap[String, AttributeValue]()
+          sourceItem.foreach { case (k, v) =>
+            item.put(k, DdbValue.toAttributeValue(v))
           }
+          (new Text(), new DynamoDBItemWritable(item))
+        }
 
         val targetTableDesc = {
           val client = DynamoUtils.buildDynamoClient(
@@ -136,7 +138,9 @@ object AlternatorValidator {
           targetTableDesc
         )
 
-        log.info("Finished copying missing rows to target")
+        log.info(
+          s"Finished copying missing rows to target: $missingRowCount missing row(s) copied"
+        )
       }
 
       failures
