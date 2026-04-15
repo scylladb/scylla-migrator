@@ -29,7 +29,7 @@ object Migrator {
     val migratorConfig =
       MigratorConfig.loadFrom(spark.conf.get("spark.scylla.config"))
 
-    log.info(s"Loaded config: ${migratorConfig}")
+    log.info(s"Loaded config:\n${migratorConfig.renderRedacted}")
 
     try migrate(migratorConfig)
     finally spark.stop()
@@ -49,6 +49,15 @@ object Migrator {
           cqlSource.preserveTimestamps,
           config.getSkipTokenRangesOrEmptySet
         )
+        ScyllaMigrator.migrate(config, scyllaTarget, sourceDF)
+      case (mysqlSource: SourceSettings.MySQL, scyllaTarget: TargetSettings.Scylla) =>
+        log.info("Starting MySQL to ScyllaDB migration")
+        log.warn(
+          "MySQL source does not support savepoints. Any configured savepoints settings are ignored. " +
+            "If this migration is interrupted, it must be restarted from scratch. " +
+            "Ensure the target table supports idempotent writes."
+        )
+        val sourceDF = readers.MySQL.readDataframe(spark, mysqlSource)
         ScyllaMigrator.migrate(config, scyllaTarget, sourceDF)
       case (parquetSource: SourceSettings.Parquet, scyllaTarget: TargetSettings.Scylla) =>
         readers.Parquet.migrateToScylla(config, parquetSource, scyllaTarget)
