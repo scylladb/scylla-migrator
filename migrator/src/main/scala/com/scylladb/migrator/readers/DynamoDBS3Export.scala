@@ -24,6 +24,7 @@ import software.amazon.awssdk.services.dynamodb.model.{
 import software.amazon.awssdk.services.s3.S3Client
 import software.amazon.awssdk.services.s3.model.GetObjectRequest
 
+import java.time.Instant
 import java.util.Base64
 import java.util.zip.GZIPInputStream
 import scala.io.Source
@@ -50,10 +51,23 @@ object DynamoDBS3Export {
 
   /** Read the DynamoDB S3 Export data as described here:
     * [[https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/S3DataExport.Output.html]]
+    *
+    * @return
+    *   A triple of:
+    *   - the decoded items as an `RDD` of attribute maps,
+    *   - a synthesized `TableDescription` (the export has no live table),
+    *   - the export's point-in-time snapshot timestamp if the manifest provides one. Prefers the
+    *     manifest's `exportTime` (the exact PITR instant the snapshot represents) and falls back to
+    *     `startTime` (when the export operation was initiated — within a few ms of `exportTime` in
+    *     practice). Consumers use this as the default Kinesis `AT_TIMESTAMP` when chaining
+    *     S3-export with `streamChanges` so that writes which happened after the export are replayed
+    *     into the target. Returns `None` for older exports whose manifests pre-date these fields.
     */
   def readRDD(
     source: SourceSettings.DynamoDBS3Export
-  )(implicit spark: SparkContext): (RDD[Map[String, AttributeValue]], TableDescription) = {
+  )(implicit
+    spark: SparkContext
+  ): (RDD[Map[String, AttributeValue]], TableDescription, Option[Instant]) = {
 
     // Resolve S3 keys relative to the manifest summary's parent directory.
     // The writer produces relative paths (e.g., "manifest-files.json", "data/00000.json.gz"),
@@ -217,14 +231,21 @@ object DynamoDBS3Export {
         )
         .build()
 
-    (rdd, tableDescription)
+    // Prefer `exportTime` (exact PITR snapshot instant); fall back to `startTime` (when the
+    // export operation was initiated, typically within milliseconds of exportTime). Either is
+    // "close enough" for Kinesis AT_TIMESTAMP since a few seconds of overlap replays at-least-once
+    // which is the guarantee the pipeline already provides.
+    val exportStartTime: Option[Instant] = summary.exportTime.orElse(summary.startTime)
+    (rdd, tableDescription, exportStartTime)
   }
 
   case class ManifestSummary(
     manifestFilesS3Key: String,
     itemCount: Long,
     exportType: Option[String],
-    outputFormat: String
+    outputFormat: String,
+    exportTime: Option[Instant] = None,
+    startTime: Option[Instant] = None
   )
   object ManifestSummary {
     implicit val jsonDecoder: Decoder[ManifestSummary] = deriveDecoder[ManifestSummary]
