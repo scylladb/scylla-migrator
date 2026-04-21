@@ -20,7 +20,8 @@ import scala.jdk.CollectionConverters._
   * capturing real KDS records because:
   *   1. The wire format is stable (DynamoDB published it in 2020 and it has not changed).
   *   2. Capturing real records requires LocalStack Pro or a live AWS account and a table with the
-  *      streaming destination already enabled — both are out of scope for a unit suite.
+  *      streaming destination already enabled — both are out of scope for a fast unit suite (``make
+  *      test-unit``).
   */
 class KinesisJsonDeserializerTest extends munit.FunSuite {
 

@@ -6,8 +6,9 @@ package com.scylladb.migrator.config
   * This guards against a silent skew between the example YAML in
   * `tests/src/test/configurations/dynamodb-to-alternator-streaming-kinesis.yaml` (also embedded in
   * docs/source/stream-changes.rst) and the actual decoder. A mismatch — e.g. renaming `streamArn`
-  * without updating the example — would mean the docs advertise a syntax that does not compile,
-  * which the gated integration test cannot catch because it is OFF in CI.
+  * without updating the example — would mean the docs advertise a syntax that does not compile.
+  * Runs under ``make test-unit`` (parser-only; no Docker or AWS). The AWS-gated live Kinesis E2E
+  * test remains opt-in via ``KINESIS_LIVE_TEST=1`` and ``make test-integration-aws``.
   */
 class KinesisStreamingYamlExampleTest extends munit.FunSuite {
 
