@@ -48,6 +48,16 @@ object SourceSettings {
     lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
       AwsUtils.computeFinalCredentials(credentials, endpoint, region)
   }
+
+  /** Standalone codec for the `DynamoDB` source shape used when it is embedded *inside* another
+    * source (e.g. [[DynamoDBS3Export.streamSource]]). The outer `SourceSettings.decoder` still
+    * dispatches on the `type` tag; this one is field-based and ignores `type`, which is what the
+    * nested case wants.
+    */
+  object DynamoDB {
+    implicit val decoder: Decoder[DynamoDB] = deriveDecoder[DynamoDB]
+    implicit val encoder: Encoder[DynamoDB] = deriveEncoder[DynamoDB]
+  }
   case class Parquet(
     path: String,
     credentials: Option[AWSCredentials],
@@ -58,6 +68,24 @@ object SourceSettings {
       AwsUtils.computeFinalCredentials(credentials, endpoint, region)
   }
 
+  /** @param streamSource
+    *   When the target specifies `streamChanges` with a streaming destination (DDB Streams or
+    *   Kinesis), the S3 snapshot must be paired with a still-live source DynamoDB table from which
+    *   change events are consumed. This block captures the credentials / region / table name for
+    *   that live table. The migrator enables the configured streaming destination on this table and
+    *   uses the S3 export's `exportTime` (or `startTime` as a fallback) as the Kinesis
+    *   `AT_TIMESTAMP` default, so changes that happened after the export was taken are replayed
+    *   into the target.
+    *
+    * When the target does not stream changes, `streamSource` is ignored; supply it only when you
+    * have a live table you want to keep in sync.
+    *
+    * GitHub issue #250 acceptance criterion #4: "If the source is s3 export, we can use describe
+    * stream 'start time' as timestamp to start the stream from the time the s3 export was created."
+    * This field makes that possible (you cannot derive the live-table coordinates from the manifest
+    * alone — the manifest has a `tableArn` but not credentials or a user-supplied endpoint
+    * override).
+    */
   case class DynamoDBS3Export(
     bucket: String,
     manifestKey: String,
@@ -65,7 +93,8 @@ object SourceSettings {
     endpoint: Option[DynamoDBEndpoint],
     region: Option[String],
     credentials: Option[AWSCredentials],
-    usePathStyleAccess: Option[Boolean]
+    usePathStyleAccess: Option[Boolean],
+    streamSource: Option[DynamoDB] = None
   ) extends SourceSettings {
     lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
       AwsUtils.computeFinalCredentials(credentials, endpoint, region)

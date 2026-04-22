@@ -33,7 +33,7 @@ object TargetSettings {
     table: String,
     writeThroughput: Option[Int],
     throughputWritePercent: Option[Float],
-    streamChanges: Boolean,
+    streamChanges: StreamChangesSetting,
     skipInitialSnapshotTransfer: Option[Boolean],
     removeConsumedCapacity: Option[Boolean] = Some(true),
     billingMode: Option[BillingMode] = None,
