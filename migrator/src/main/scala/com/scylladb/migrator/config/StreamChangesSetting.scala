@@ -75,6 +75,16 @@ object StreamChangesSetting {
       * [[validateArn]] refuses ARNs that don't contain a region.
       */
     lazy val arnRegion: String = KinesisArn.regionOf(streamArn)
+
+    /** The bare stream-name segment embedded in [[streamArn]] (the portion after `stream/`). Used
+      * by `DynamoStreamReplication` to feed Spark's `KinesisInputDStream.Builder.streamName`, which
+      * ultimately binds to KCL 1.x `DescribeStream` — AWS rejects a full ARN there because the
+      * service-side `StreamName` parameter is validated against `[a-zA-Z0-9_.-]{1,128}`. The full
+      * [[streamArn]] is still used for `EnableKinesisStreamingDestination` (DynamoDB SDK v2) which
+      * requires an ARN. Non-empty by construction because [[validateArn]] enforces a non-empty tail
+      * after `stream/`.
+      */
+    lazy val arnName: String = KinesisArn.nameOf(streamArn)
   }
 
   /** Decode the raw `streamChanges` YAML/JSON value into a [[StreamChangesSetting]].
@@ -248,6 +258,29 @@ private[config] object KinesisArn {
         throw new IllegalArgumentException(
           s"Cannot extract region from malformed Kinesis ARN: '$arn'. " +
             "This is a programming error — regionOf must only be called on ARNs that have " +
+            "already passed StreamChangesSetting.validateArn."
+        )
+    }
+
+  /** Extract the stream-name segment (the part after `stream/`) from a Kinesis ARN. Symmetric with
+    * [[regionOf]]. The caller must have already confirmed the ARN is well-formed (via
+    * [[StreamChangesSetting.KinesisArnPattern]]); calling this on an ARN that does not match the
+    * pattern throws [[IllegalArgumentException]].
+    *
+    * Used by `DynamoStreamReplication` to feed Spark's `KinesisInputDStream.Builder.streamName`.
+    * Spark forwards this string to KCL 1.x `DescribeStream`, whose `StreamName` parameter is
+    * validated by the Kinesis service against `[a-zA-Z0-9_.-]{1,128}` — a full ARN (which contains
+    * `:` and `/`) would be rejected at runtime with an `InvalidArgumentException`. The full ARN is
+    * still required elsewhere for `EnableKinesisStreamingDestination` (DynamoDB SDK v2), so we keep
+    * the ARN in config and strip to the bare name only at this one call site.
+    */
+  def nameOf(arn: String): String =
+    StreamChangesSetting.KinesisArnPattern.findFirstMatchIn(arn.trim) match {
+      case Some(m) => m.group(4)
+      case None =>
+        throw new IllegalArgumentException(
+          s"Cannot extract stream name from malformed Kinesis ARN: '$arn'. " +
+            "This is a programming error — nameOf must only be called on ARNs that have " +
             "already passed StreamChangesSetting.validateArn."
         )
     }

@@ -299,9 +299,14 @@ object DynamoStreamReplication {
         // streaming context's batch duration, which is the correct and most common choice.
         // `StreamingContext.graph.batchDuration` is `private[streaming]`, so we can't read it
         // from user code to pass it back in explicitly anyway.
+        // `streamName` must be the bare stream-name segment, not the full ARN: Spark forwards
+        // this string verbatim to KCL 1.x `DescribeStream`, whose service-side `StreamName`
+        // parameter is validated against `[a-zA-Z0-9_.-]{1,128}` and rejects anything containing
+        // `:` or `/` (i.e. an ARN). The full ARN is still used for
+        // `EnableKinesisStreamingDestination` in `DynamoUtils`, which requires an ARN.
         KinesisInputDStream.builder
           .streamingContext(streamingContext)
-          .streamName(kinesis.streamArn)
+          .streamName(kinesis.arnName)
           .regionName(src.region.orNull)
           .initialPosition(initialPosition)
           .checkpointAppName(appName)

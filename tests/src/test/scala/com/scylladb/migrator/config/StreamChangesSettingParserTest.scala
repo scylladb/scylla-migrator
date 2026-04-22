@@ -306,4 +306,39 @@ class StreamChangesSettingParserTest extends munit.FunSuite {
     )
     assertEquals(kds.arnRegion, "cn-north-1")
   }
+
+  // -------- arnName helper (fix for passing ARN where stream name is expected) ------------
+
+  test("KinesisDataStreams.arnName extracts the bare stream-name segment") {
+    // Spark's KinesisInputDStream.Builder.streamName expects a bare name, not an ARN — KCL 1.x
+    // DescribeStream rejects strings containing ':' or '/' because AWS validates the service-side
+    // StreamName parameter against [a-zA-Z0-9_.-]{1,128}. arnName strips the ARN down to just
+    // the segment after `stream/` so the builder receives what AWS will accept.
+    val kds = StreamChangesSetting.KinesisDataStreams(
+      streamArn = "arn:aws:kinesis:us-east-1:123456789012:stream/my-stream"
+    )
+    assertEquals(kds.arnName, "my-stream")
+  }
+
+  test("KinesisDataStreams.arnName preserves dots, dashes, and underscores in the name") {
+    // All three are permitted by the AWS-side StreamName charset and by our ARN regex tail;
+    // the extractor must NOT mangle them (e.g. stripping before the first `.` would corrupt
+    // names like `svc.events.v2`).
+    val kds = StreamChangesSetting.KinesisDataStreams(
+      streamArn = "arn:aws:kinesis:us-east-1:123456789012:stream/svc.events-v2_prod"
+    )
+    assertEquals(kds.arnName, "svc.events-v2_prod")
+  }
+
+  test("KinesisDataStreams.arnName works for aws-cn and aws-us-gov ARNs") {
+    val cn = StreamChangesSetting.KinesisDataStreams(
+      streamArn = "arn:aws-cn:kinesis:cn-north-1:123456789012:stream/cn-stream"
+    )
+    assertEquals(cn.arnName, "cn-stream")
+
+    val gov = StreamChangesSetting.KinesisDataStreams(
+      streamArn = "arn:aws-us-gov:kinesis:us-gov-east-1:123456789012:stream/gov-stream"
+    )
+    assertEquals(gov.arnName, "gov-stream")
+  }
 }
