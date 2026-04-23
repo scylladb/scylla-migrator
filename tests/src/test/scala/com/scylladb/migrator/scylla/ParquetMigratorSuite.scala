@@ -109,20 +109,70 @@ abstract class ParquetMigratorSuite extends MigratorSuite(sourcePort = 0) {
         .toSet
     }
 
+  // Matches:
+  //   new format: savepoint_<epochMillis>_<counter>.yaml
+  //   legacy:     savepoint_<epochSeconds>.yaml
+  private val savepointNamePattern =
+    """^savepoint_(\d+)(?:_(\d+))?\.yaml$""".r
+
+  /** Sort key for a savepoint file. Uses the filename timestamp + counter for files produced by
+    * the current `SavepointsManager`, and falls back to the last-modified time for legacy files
+    * written by older versions. The filename-based key is preferred because it is independent of
+    * filesystem mtime granularity and immune to wall-clock adjustments.
+    *
+    * Defensive: an attacker who can write into the savepoints directory could drop a file whose
+    * numeric component overflows `Long`. `parseLong` on such a string throws
+    * `NumberFormatException`, which would crash the whole sort (denial-of-service on resume) if
+    * left uncaught. Treat overflow as an unknown filename and fall through to mtime so a hostile
+    * name cannot hijack or break the selection.
+    */
+  private def savepointSortKey(path: Path): (Long, Long) = {
+    val name = path.getFileName.toString
+    name match {
+      case savepointNamePattern(head, tailOrNull) =>
+        try
+          if (tailOrNull == null) {
+            // Legacy: `savepoint_<epochSeconds>.yaml`. Scale up to millis and treat counter as -1
+            // so a legacy file always sorts before a new-format file with the same wall-clock
+            // time.
+            (java.lang.Math.multiplyExact(java.lang.Long.parseLong(head), 1000L), -1L)
+          } else {
+            (java.lang.Long.parseLong(head), java.lang.Long.parseLong(tailOrNull))
+          }
+        catch {
+          case _: NumberFormatException | _: ArithmeticException =>
+            (Files.getLastModifiedTime(path).toMillis, -1L)
+        }
+      case _ =>
+        // Unknown format: fall back to mtime with a neutral counter.
+        (Files.getLastModifiedTime(path).toMillis, -1L)
+    }
+  }
+
   def findLatestSavepoint(directory: Path): Option[Path] =
     if (!Files.exists(directory)) None
-    else
-      Using
-        .resource(Files.list(directory)) { stream =>
+    else {
+      val candidates =
+        Using.resource(Files.list(directory)) { stream =>
           stream
             .iterator()
             .asScala
             .filter(path => Files.isRegularFile(path))
-            .filter(_.getFileName.toString.startsWith("savepoint_"))
+            .filter { path =>
+              val name = path.getFileName.toString
+              // Exclude temp files produced by the atomic-rename write path.
+              name.startsWith("savepoint_") && name.endsWith(".yaml")
+            }
             .toSeq
         }
-        .sortBy(path => Files.getLastModifiedTime(path).toMillis)
+      // Materialize the sort key once per file so the legacy-fallback branch does not issue an
+      // `Files.getLastModifiedTime` syscall per comparison.
+      candidates
+        .map(p => savepointSortKey(p) -> p)
+        .sortBy(_._1)
         .lastOption
+        .map(_._2)
+    }
 
   private def ensureEmptyDirectory(directory: Path): Unit = {
     if (Files.exists(directory)) {

@@ -104,20 +104,59 @@ class DynamoDBToS3ExportSavepointsTest extends MigratorSuiteWithDynamoDBLocal {
     )
   }
 
+  // Matches:
+  //   new format: savepoint_<epochMillis>_<counter>.yaml
+  //   legacy:     savepoint_<epochSeconds>.yaml
+  private val savepointNamePattern =
+    """^savepoint_(\d+)(?:_(\d+))?\.yaml$""".r
+
+  /** Sort key for a savepoint file. Uses the filename timestamp + counter for files produced by
+    * the current `SavepointsManager`, and falls back to the last-modified time for unknown
+    * files. This selection is independent of filesystem mtime granularity (which was the root
+    * cause of issue #347).
+    *
+    * Defensive: overflow-long or otherwise hostile filenames must not crash the sort; treat them
+    * as unknown and fall through to mtime.
+    */
+  private def savepointSortKey(path: Path): (Long, Long) =
+    path.getFileName.toString match {
+      case savepointNamePattern(head, tailOrNull) =>
+        try
+          if (tailOrNull == null)
+            (java.lang.Math.multiplyExact(java.lang.Long.parseLong(head), 1000L), -1L)
+          else
+            (java.lang.Long.parseLong(head), java.lang.Long.parseLong(tailOrNull))
+        catch {
+          case _: NumberFormatException | _: ArithmeticException =>
+            (Files.getLastModifiedTime(path).toMillis, -1L)
+        }
+      case _ =>
+        (Files.getLastModifiedTime(path).toMillis, -1L)
+    }
+
   private def findLatestSavepoint(directory: Path): Option[Path] =
     if (!Files.exists(directory)) None
-    else
-      Using
-        .resource(Files.list(directory)) { stream =>
+    else {
+      val candidates =
+        Using.resource(Files.list(directory)) { stream =>
           stream
             .iterator()
             .asScala
             .filter(path => Files.isRegularFile(path))
-            .filter(_.getFileName.toString.startsWith("savepoint_"))
+            .filter { path =>
+              val name = path.getFileName.toString
+              // Exclude temp files produced by the atomic-rename write path.
+              name.startsWith("savepoint_") && name.endsWith(".yaml")
+            }
             .toSeq
         }
-        .sortBy(path => Files.getLastModifiedTime(path).toMillis)
+      // Compute the sort key exactly once per file.
+      candidates
+        .map(p => savepointSortKey(p) -> p)
+        .sortBy(_._1)
         .lastOption
+        .map(_._2)
+    }
 
   private def ensureEmptyDirectory(directory: Path): Unit = {
     if (Files.exists(directory)) {
