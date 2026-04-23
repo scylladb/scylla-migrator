@@ -115,10 +115,10 @@ abstract class ParquetMigratorSuite extends MigratorSuite(sourcePort = 0) {
   private val savepointNamePattern =
     """^savepoint_(\d+)(?:_(\d+))?\.yaml$""".r
 
-  /** Sort key for a savepoint file. Uses the filename timestamp + counter for files produced by
-    * the current `SavepointsManager`, and falls back to the last-modified time for legacy files
-    * written by older versions. The filename-based key is preferred because it is independent of
-    * filesystem mtime granularity and immune to wall-clock adjustments.
+  /** Sort key for a savepoint file. Uses the filename timestamp + counter for files produced by the
+    * current `SavepointsManager`, and falls back to the last-modified time for legacy files written
+    * by older versions. The filename-based key is preferred because it is independent of filesystem
+    * mtime granularity and immune to wall-clock adjustments.
     *
     * Defensive: an attacker who can write into the savepoints directory could drop a file whose
     * numeric component overflows `Long`. `parseLong` on such a string throws

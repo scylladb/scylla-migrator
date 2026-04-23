@@ -110,13 +110,13 @@ class DynamoDBToS3ExportSavepointsTest extends MigratorSuiteWithDynamoDBLocal {
   private val savepointNamePattern =
     """^savepoint_(\d+)(?:_(\d+))?\.yaml$""".r
 
-  /** Sort key for a savepoint file. Uses the filename timestamp + counter for files produced by
-    * the current `SavepointsManager`, and falls back to the last-modified time for unknown
-    * files. This selection is independent of filesystem mtime granularity (which was the root
-    * cause of issue #347).
+  /** Sort key for a savepoint file. Uses the filename timestamp + counter for files produced by the
+    * current `SavepointsManager`, and falls back to the last-modified time for unknown files. This
+    * selection is independent of filesystem mtime granularity (which was the root cause of issue
+    * #347).
     *
-    * Defensive: overflow-long or otherwise hostile filenames must not crash the sort; treat them
-    * as unknown and fall through to mtime.
+    * Defensive: overflow-long or otherwise hostile filenames must not crash the sort; treat them as
+    * unknown and fall through to mtime.
     */
   private def savepointSortKey(path: Path): (Long, Long) =
     path.getFileName.toString match {

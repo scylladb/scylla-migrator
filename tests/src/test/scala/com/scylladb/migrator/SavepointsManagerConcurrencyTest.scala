@@ -1,11 +1,6 @@
 package com.scylladb.migrator
 
-import com.scylladb.migrator.config.{
-  MigratorConfig,
-  Savepoints,
-  SourceSettings,
-  TargetSettings
-}
+import com.scylladb.migrator.config.{ MigratorConfig, Savepoints, SourceSettings, TargetSettings }
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{ Files, Path }
@@ -45,8 +40,8 @@ class SavepointsManagerConcurrencyTest extends munit.FunSuite {
         writeWritetimestampInuS       = None,
         consistencyLevel              = "LOCAL_QUORUM"
       ),
-      renames          = None,
-      savepoints       = Savepoints(intervalSeconds = intervalSeconds, path = savepointsDir.toString),
+      renames    = None,
+      savepoints = Savepoints(intervalSeconds = intervalSeconds, path = savepointsDir.toString),
       skipTokenRanges  = None,
       skipSegments     = None,
       skipParquetFiles = None,
@@ -123,7 +118,7 @@ class SavepointsManagerConcurrencyTest extends munit.FunSuite {
   test("filenames are monotonically unique even when written in the same millisecond") {
     val dir = Files.createTempDirectory("savepoints-unique-names")
     try {
-      val cfg     = newConfig(dir, intervalSeconds = 3600)
+      val cfg = newConfig(dir, intervalSeconds = 3600)
       val manager = new TestManager(cfg, processed = Set("a"))
       try {
         (1 to 50).foreach(_ => manager.dumpMigrationState("rapid"))
@@ -158,9 +153,9 @@ class SavepointsManagerConcurrencyTest extends munit.FunSuite {
     // wall-clock instant so the `ReentrantLock` actually gets contended; this replaces the prior
     // reliance on a short `Thread.sleep` as a race amplifier, which could be defeated by a slow
     // CI host where the scheduler serialized submissions before any contention could occur.
-    val dir   = Files.createTempDirectory("savepoints-race")
+    val dir = Files.createTempDirectory("savepoints-race")
     val state = new AtomicInteger(0)
-    val cfg   = newConfig(dir, intervalSeconds = 3600)
+    val cfg = newConfig(dir, intervalSeconds = 3600)
     val rounds = 30
 
     try {
@@ -172,9 +167,9 @@ class SavepointsManagerConcurrencyTest extends munit.FunSuite {
         // Pool sized to the round count so every submission gets its own thread and all
         // `rounds` runnables can simultaneously wait on the barrier; a smaller pool would
         // deadlock at `barrier.await` because only the first N threads would ever arrive.
-        val pool    = Executors.newFixedThreadPool(rounds)
+        val pool = Executors.newFixedThreadPool(rounds)
         val barrier = new CyclicBarrier(rounds)
-        val latch   = new CountDownLatch(rounds)
+        val latch = new CountDownLatch(rounds)
         try {
           (1 to rounds).foreach { i =>
             pool.submit(new Runnable {
@@ -214,7 +209,7 @@ class SavepointsManagerConcurrencyTest extends munit.FunSuite {
 
       // The final file (by filename order) must be the terminal dump with the full set.
       val winner = latest(dir)
-      val cfg2   = MigratorConfig.loadFrom(winner.toString)
+      val cfg2 = MigratorConfig.loadFrom(winner.toString)
       assertEquals(
         cfg2.skipParquetFiles.getOrElse(Set.empty),
         (1 to 30).map(i => s"file-$i").toSet,
@@ -226,41 +221,40 @@ class SavepointsManagerConcurrencyTest extends munit.FunSuite {
   test("atomic write prevents torn reads of the savepoint") {
     // A reader thread continuously parses the latest savepoint while the writer dumps repeatedly.
     // With the temp-file + ATOMIC_MOVE strategy the reader must never observe a truncated YAML.
-    val dir     = Files.createTempDirectory("savepoints-atomic")
+    val dir = Files.createTempDirectory("savepoints-atomic")
     val counter = new AtomicInteger(0)
-    val cfg     = newConfig(dir, intervalSeconds = 3600)
+    val cfg = newConfig(dir, intervalSeconds = 3600)
 
     try {
       val manager = new TestManager(
         cfg,
         processed = (1 to counter.get()).map(i => s"f-$i").toSet
       )
-      val stop    = new java.util.concurrent.atomic.AtomicBoolean(false)
-      val torn    = new java.util.concurrent.atomic.AtomicInteger(0)
-      val reader  = new Thread(() => {
-        while (!stop.get()) {
-          try {
+      val stop = new java.util.concurrent.atomic.AtomicBoolean(false)
+      val torn = new java.util.concurrent.atomic.AtomicInteger(0)
+      val reader = new Thread(() =>
+        while (!stop.get())
+          try
             listSavepoints(dir).sortBy(sortKey).lastOption.foreach { p =>
               try {
                 val _ = MigratorConfig.loadFrom(p.toString)
               } catch {
                 // File content was partial/unparseable: that is a torn read.
-                case _: io.circe.ParsingFailure            => torn.incrementAndGet()
-                case _: io.circe.DecodingFailure           => torn.incrementAndGet()
-                case _: java.io.EOFException               => torn.incrementAndGet()
+                case _: io.circe.ParsingFailure  => torn.incrementAndGet()
+                case _: io.circe.DecodingFailure => torn.incrementAndGet()
+                case _: java.io.EOFException     => torn.incrementAndGet()
                 // The file may disappear between listing and reading (atomic rename or
                 // filesystem cleanup). That is not a torn read, just a benign race.
-                case _: java.nio.file.NoSuchFileException  => ()
-                case _: java.io.FileNotFoundException      => ()
+                case _: java.nio.file.NoSuchFileException => ()
+                case _: java.io.FileNotFoundException     => ()
               }
             }
-          } catch {
+          catch {
             // Directory listing / sort key can race with rename; ignore and re-list.
             case _: java.nio.file.NoSuchFileException => ()
-            case _: java.io.FileNotFoundException    => ()
+            case _: java.io.FileNotFoundException     => ()
           }
-        }
-      })
+      )
       reader.setDaemon(true)
       reader.start()
 
@@ -296,7 +290,7 @@ class SavepointsManagerConcurrencyTest extends munit.FunSuite {
       val planted = dir.resolve(f"savepoint_${farFuture}%013d_${9999L}%010d.yaml")
       Files.write(planted, Array.emptyByteArray)
 
-      val cfg     = newConfig(dir, intervalSeconds = 3600)
+      val cfg = newConfig(dir, intervalSeconds = 3600)
       val manager = new TestManager(cfg, processed = Set("seed"))
       try manager.dumpMigrationState("after-seed")
       finally manager.close()
@@ -323,7 +317,7 @@ class SavepointsManagerConcurrencyTest extends munit.FunSuite {
       val hostile = dir.resolve("savepoint_9999999999999999999999999_1.yaml")
       Files.write(hostile, "irrelevant".getBytes(StandardCharsets.UTF_8))
 
-      val cfg     = newConfig(dir, intervalSeconds = 3600)
+      val cfg = newConfig(dir, intervalSeconds = 3600)
       val manager = new TestManager(cfg, processed = Set("real"))
       try manager.dumpMigrationState("real")
       finally manager.close()
@@ -346,9 +340,9 @@ class SavepointsManagerConcurrencyTest extends munit.FunSuite {
     // a scheduled dump may already be in flight, then the driver writes "final" / "completed",
     // then `close()` drains the scheduler. The latest savepoint on disk must still contain the
     // terminal snapshot.
-    val dir   = Files.createTempDirectory("savepoints-await")
+    val dir = Files.createTempDirectory("savepoints-await")
     val state = new AtomicInteger(0)
-    val cfg   = newConfig(dir, intervalSeconds = 1)
+    val cfg = newConfig(dir, intervalSeconds = 1)
     val scheduledTickStarted = new CountDownLatch(1)
 
     try {
