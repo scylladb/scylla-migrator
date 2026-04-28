@@ -114,6 +114,46 @@ A source of type ``cassandra`` can be used together with a target of type ``cass
     # Optional - Condition to filter data that will be migrated
     where: race_start_date = '2015-05-27' AND race_end_date = '2015-05-27'
 
+.. _config-cassandra-cloud-source:
+
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+DataStax Astra (Cloud Secure Connect bundle)
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+Set the ``cloud`` block to migrate from a managed cluster (DataStax Astra DB) that is reached
+through an SNI proxy. The bundle carries the contact points, the local datacenter and all the TLS
+material; therefore the ``host``, ``port``, ``localDC`` and ``sslOptions`` fields **must not** be
+set in the same source — the migrator rejects the configuration if they are. Authentication
+credentials are not embedded in the bundle and must still be supplied via ``credentials``.
+
+.. code-block:: yaml
+
+  source:
+    type: cassandra
+    cloud:
+      # Path or URL to the Astra secure-connect bundle (zip).
+      # The path must be readable from the Spark driver and from every Spark executor that
+      # opens a CQL session. Use one of:
+      #   - an absolute filesystem path that exists identically on every node
+      #     (e.g. baked into the worker image, or on a shared mount), or
+      #   - an https://, s3://, or s3a:// URL reachable from every node.
+      # Plain HTTP URLs, relative paths, URL user-info credentials, and query strings are rejected.
+      # Relative paths are NOT auto-resolved via SparkFiles.get because the resolved path is
+      # computed on the driver and would be incorrect on executors.
+      secureBundlePath: /opt/migrator/secure-connect-mycluster.zip
+    credentials:
+      username: <client-id>
+      password: <client-secret>
+    keyspace: <keyspace>
+    table: <table>
+    consistencyLevel: LOCAL_QUORUM
+    preserveTimestamps: true
+    splitCount: 256
+    connections: 8
+    fetchSize: 1000
+
+This setting is also accepted on a Cassandra target. See :ref:`config-cassandra-cloud-target`.
+
 ^^^^^^^^^^^^^^
 Parquet Source
 ^^^^^^^^^^^^^^
@@ -285,6 +325,30 @@ Apache Cassandra Target
        - TLS_RSA_WITH_AES_128_CBC_SHA
        - TLS_RSA_WITH_AES_256_CBC_SHA
       protocol: TLS
+
+.. _config-cassandra-cloud-target:
+
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+DataStax Astra (Cloud Secure Connect bundle)
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+Same semantics as :ref:`config-cassandra-cloud-source` but on the target side. ``host``, ``port``,
+``localDC`` and ``sslOptions`` must not be set when ``cloud`` is provided.
+
+.. code-block:: yaml
+
+  target:
+    type: cassandra
+    cloud:
+      secureBundlePath: /opt/migrator/secure-connect-mycluster.zip
+    credentials:
+      username: <client-id>
+      password: <client-secret>
+    keyspace: <keyspace>
+    table: <table>
+    consistencyLevel: LOCAL_QUORUM
+    connections: 16
+    stripTrailingZerosForDecimals: false
 
 
 ^^^^^^^^^^^^^^^

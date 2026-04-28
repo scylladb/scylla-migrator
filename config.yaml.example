@@ -44,6 +44,35 @@ source:
   # Optional condition to filter source table data that will be migrated
   # where: race_start_date = '2015-05-27' AND race_end_date = '2015-05-27'
 
+  # Optional - Connect via a DataStax Astra Cloud Secure Connect bundle.
+  # When this block is present the 'host', 'port', 'localDC' and 'sslOptions' fields above must
+  # NOT be set: they are carried by the bundle and would conflict with it. Authentication
+  # credentials must still be supplied via the 'credentials' block.
+  # The 'secureBundlePath' must be readable on the driver and on every Spark executor that opens
+  # a CQL session — typically an absolute path that exists identically on every node, or an
+  # https/s3/s3a URL reachable from every node. Relative paths and plain HTTP URLs are rejected.
+  # Do not include credentials or signed-token query strings in the URL because configs may be
+  # logged or saved. Relative paths are NOT auto-resolved via SparkFiles.get because the resolved
+  # path differs between driver and executors.
+  #cloud:
+  #  secureBundlePath: /opt/migrator/secure-connect-mycluster.zip
+
+# Example for connecting to a DataStax Astra source via a Cloud Secure Connect bundle:
+# source:
+#   type: cassandra
+#   cloud:
+#     secureBundlePath: /opt/migrator/secure-connect-mycluster.zip
+#   credentials:
+#     username: <client-id>
+#     password: <client-secret>
+#   keyspace: <keyspace>
+#   table: <table>
+#   consistencyLevel: LOCAL_QUORUM
+#   preserveTimestamps: true
+#   splitCount: 256
+#   connections: 8
+#   fetchSize: 1000
+
 # Example for loading from Parquet:
 # source:
 #   type: parquet
@@ -194,6 +223,33 @@ target:
   #writeTTLInS: 7776000
   # writetime in microseconds (sample 1640998861000 is Saturday, January 1, 2022 2:01:01 AM GMT+01:00 )
   #writeWritetimestampInuS: 1640998861000
+
+  # Optional - Connect via a DataStax Astra Cloud Secure Connect bundle.
+  # When this block is present the 'host', 'port', 'localDC' and 'sslOptions' fields above must
+  # NOT be set: they are carried by the bundle and would conflict with it. Authentication
+  # credentials must still be supplied via the 'credentials' block.
+  # The 'secureBundlePath' must be readable on the driver and on every Spark executor that opens
+  # a CQL session — typically an absolute path that exists identically on every node, or an
+  # https/s3/s3a URL reachable from every node. Relative paths and plain HTTP URLs are rejected.
+  # Do not include credentials or signed-token query strings in the URL because configs may be
+  # logged or saved. Relative paths are NOT auto-resolved via SparkFiles.get because the resolved
+  # path differs between driver and executors.
+  #cloud:
+  #  secureBundlePath: /opt/migrator/secure-connect-mycluster.zip
+
+# Example for loading into a DataStax Astra target via a Cloud Secure Connect bundle:
+# target:
+#   type: scylla
+#   cloud:
+#     secureBundlePath: /opt/migrator/secure-connect-mycluster.zip
+#   credentials:
+#     username: <client-id>
+#     password: <client-secret>
+#   keyspace: <keyspace>
+#   table: <table>
+#   consistencyLevel: LOCAL_QUORUM
+#   connections: 16
+#   stripTrailingZerosForDecimals: false
 
 # Example for loading into a DynamoDB target (for example, Scylla's Alternator):
 # target:
