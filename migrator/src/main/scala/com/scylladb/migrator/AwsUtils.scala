@@ -25,12 +25,15 @@ object AwsUtils {
   ): builder.type = {
 
     for (endpoint <- maybeEndpoint)
-      builder.endpointOverride(new URI(endpoint.renderEndpoint))
+      builder.endpointOverride(endpointUri(endpoint))
     maybeCredentialsProvider.foreach(builder.credentialsProvider)
     maybeRegion.map(Region.of).foreach(builder.region)
 
     builder
   }
+
+  private[migrator] def endpointUri(endpoint: DynamoDBEndpoint): URI =
+    new URI(endpoint.renderEndpoint)
 
   /** Compute the final AWS credentials to use to call any AWS API.
     *

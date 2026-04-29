@@ -92,7 +92,7 @@ object Scylla {
   ): Boolean =
     target.dropNullPrimaryKeys.getOrElse {
       source match {
-        case _: SourceSettings.Cassandra | _: SourceSettings.DynamoDB |
+        case _: SourceSettings.Cassandra | _: SourceSettings.DynamoDBLike |
             _: SourceSettings.DynamoDBS3Export =>
           false
         case _ => true
