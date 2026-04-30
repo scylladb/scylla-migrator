@@ -97,42 +97,81 @@ source:
 #     port: <port>
 
 # Example for loading from DynamoDB:
+# (Fields prefixed with ## are optional)
 # source:
 #   type: dynamodb
 #   table: <table name>
-#   # Optional - load from a custom endpoint:
-#   endpoint:
-#     # Specify the hostname without a protocol
-#     host: <host>
-#     port: <port>
+#   ## endpoint:
+#   ##   # Specify the hostname without a protocol (the AWS SDK resolves it automatically)
+#   ##   host: <host>
+#   ##   port: <port>
 #
-#   # Optional - specify the region:
-#   # region: <region>
+#   ## region: <region>
 #
-#   # Optional - static credentials:
-#   credentials:
-#     accessKey: <user>
-#     secretKey: <pass>
-#     # Optional - assume role, see https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html
-#     assumeRole:
-#       arn: <roleArn>
-#       # Optional - the session name to use. If not set, we use 'scylla-migrator'
-#       sessionName: <sessionName>
+#   ## credentials:
+#   ##   accessKey: <user>
+#   ##   secretKey: <pass>
+#   ##   # assume role, see https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html
+#   ##   assumeRole:
+#   ##     arn: <roleArn>
+#   ##     sessionName: <sessionName>
 #
 #   # below controls split factor
-#   scanSegments: 1
+#   ## scanSegments: 1
 #
 #   # throttling settings, set based on your capacity (or wanted capacity)
-#   readThroughput: 1
+#   ## readThroughput: 1
 #
 #   # The value of dynamodb.throughput.read.percent can be between 0.1 and 1.5, inclusively.
 #   # 0.5 represents the default read rate, meaning that the job will attempt to consume half of the read capacity of the table.
 #   # If you increase the value above 0.5, spark will increase the request rate; decreasing the value below 0.5 decreases the read request rate.
 #   # (The actual read rate will vary, depending on factors such as whether there is a uniform key distribution in the DynamoDB table.)
-#   throughputReadPercent: 1.0
+#   ## throughputReadPercent: 1.0
 #
 #   # how many tasks per executor?
-#   maxMapTasks: 1
+#   ## maxMapTasks: 1
+
+# Example for loading from a Scylla Alternator source:
+# (Fields prefixed with ## are optional)
+# source:
+#   type: alternator
+#   table: <table name>
+#   # Endpoint of the Alternator instance.
+#   # Unlike AWS DynamoDB, the protocol prefix ('http://' or 'https://') must be
+#   # included because the endpoint is a custom URL (not resolved by the AWS SDK).
+#   endpoint:
+#     host: http://<alternator-host>
+#     port: 8000
+#
+#   ## region: <region>
+#
+#   ## credentials:
+#   ##   accessKey: <user>
+#   ##   secretKey: <pass>
+#
+#   # below controls split factor
+#   ## scanSegments: 1
+#   ## readThroughput: 1
+#   ## throughputReadPercent: 1.0
+#   ## maxMapTasks: 1
+#
+#   # Remove consumed capacity headers from DynamoDB requests (defaults to true for Alternator).
+#   # Needed for Scylla version > 2024.2 to avoid unnecessary capacity accounting overhead.
+#   ## removeConsumedCapacity: true
+#
+#   # Alternator-specific settings (all optional):
+#   ## datacenter: dc1
+#   ## rack: rack1  (requires datacenter)
+#   ## activeRefreshIntervalMs: 1000
+#   ## idleRefreshIntervalMs: 60000
+#   ## compression: false
+#   ## optimizeHeaders: false
+#   ## maxConnections: 400
+#   ## connectionMaxIdleTimeMs: 600000
+#   ## connectionTimeToLiveMs: 0
+#   ## connectionAcquisitionTimeoutMs: 10000
+#   ## connectionTimeoutMs: 15000
+#   ## maxItemsPerBatch: 100
 
 # Example for loading from a DynamoDB S3 export (see https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/S3DataExport.Output.html)
 # source:
@@ -251,41 +290,38 @@ target:
 #   connections: 16
 #   stripTrailingZerosForDecimals: false
 
-# Example for loading into a DynamoDB target (for example, Scylla's Alternator):
+# Example for writing into a DynamoDB target:
+# (Fields prefixed with ## are optional)
 # target:
 #   type: dynamodb
 #   table: <table name>
-#   # Optional - write to a custom endpoint:
-#   endpoint:
-#     # If writing to Scylla Alternator, prefix the hostname with 'http://'.
-#     host: <host>
-#     port: <port>
+#   ## endpoint:
+#   ##   # Specify the hostname without a protocol (the AWS SDK resolves it automatically)
+#   ##   host: <host>
+#   ##   port: <port>
 #
-#   # Optional - specify the region:
-#   # region: <region>
+#   ## region: <region>
 #
-#   # Optional - static credentials:
-#   credentials:
-#     accessKey: <user>
-#     secretKey: <pass>
-#     # Optional - assume role, see https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html
-#     assumeRole:
-#       arn: <roleArn>
-#       # Optional - the session name to use. If not set, we use 'scylla-migrator'
-#       sessionName: <roleSessionName>
+#   ## credentials:
+#   ##   accessKey: <user>
+#   ##   secretKey: <pass>
+#   ##   # assume role, see https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html
+#   ##   assumeRole:
+#   ##     arn: <roleArn>
+#   ##     sessionName: <roleSessionName>
 #
 #   # throttling settings, set based on your write capacity units (or wanted capacity)
-#   writeThroughput: 1
+#   ## writeThroughput: 1
 #
 #   # The value of dynamodb.throughput.write.percent can be between 0.1 and 1.5, inclusively.
 #   # 0.5 represents the default write rate, meaning that the job will attempt to consume half of the write capacity of the table.
 #   # If you increase the value above 0.5, spark will increase the request rate; decreasing the value below 0.5 decreases the write request rate.
 #   # (The actual write rate will vary, depending on factors such as whether there is a uniform key distribution in the DynamoDB table.)
-#   throughputWritePercent: 1.0
+#   ## throughputWritePercent: 1.0
 #
-#   # When transferring DynamoDB sources to DynamoDB targets (such as other DynamoDB tables or Alternator tables),
-#   # the migrator supports transferring live changes occuring on the source table after transferring an initial
-#   # snapshot. This is done using DynamoDB streams and incurs additional charges due to the Kinesis streams created.
+#   # When transferring DynamoDB sources to DynamoDB targets, the migrator supports transferring live changes
+#   # occuring on the source table after transferring an initial snapshot. This is done using DynamoDB streams
+#   # and incurs additional charges due to the Kinesis streams created.
 #   # Enable this flag to transfer live changes after transferring an initial snapshot. The migrator will continue
 #   # replicating changes endlessly; it must be stopped manually.
 #   #
@@ -296,48 +332,56 @@ target:
 #   # migrator run.
 #   streamChanges: false
 #
-#   # Optional - explicitly set the billing mode when creating the target table.
-#   # Set to PROVISIONED or PAY_PER_REQUEST. If omitted, the mode is derived
-#   # from the source table or defaults to PAY_PER_REQUEST.
-#   billingMode: PAY_PER_REQUEST
+#   ## billingMode: PAY_PER_REQUEST
 #
-#   # When billingMode is set to PROVISIONED or unset this should be true
-#   # Table created with provisioned mode in Alternator should have the `--provisioned-throughput ReadCapacityUnits=1,WriteCapacityUnits=1` set
-#   # It configures the capacity accounting and removes the need for it (needed for Scylla version > 2024.2)
-#   # removeConsumedCapacity: true
+#   ## skipInitialSnapshotTransfer: false
+
+# Example for writing into a Scylla Alternator target:
+# (Fields prefixed with ## are optional)
+# target:
+#   type: alternator
+#   table: <table name>
+#   # Endpoint of the Alternator instance.
+#   # Unlike AWS DynamoDB, the protocol prefix ('http://' or 'https://') must be
+#   # included because the endpoint is a custom URL (not resolved by the AWS SDK).
+#   endpoint:
+#     host: http://<alternator-host>
+#     port: 8000
 #
-#   # Optional - when streamChanges is true, skip the initial snapshot transfer and only stream changes.
-#   # This setting is ignored if streamChanges is false.
-#   #skipInitialSnapshotTransfer: false
+#   ## region: <region>
 #
-#   # Optional - Alternator-specific settings (only used when endpoint is set):
-#   #alternator:
-#   #  # Preferred datacenter for DC-aware routing (falls back to all nodes if unavailable)
-#   #  datacenter: dc1
-#   #  # Preferred rack for rack-aware routing (requires datacenter, falls back to DC then all nodes)
-#   #  rack: rack1
-#   #  # Interval (ms) for refreshing the node list while the client is active (default: 1000)
-#   #  activeRefreshIntervalMs: 1000
-#   #  # Interval (ms) for refreshing the node list while the client is idle (default: 60000)
-#   #  idleRefreshIntervalMs: 60000
-#   #  # Enable GZIP compression of request bodies (default: false)
-#   #  compression: false
-#   #  # Optimize HTTP headers to reduce traffic overhead (default: false)
-#   #  optimizeHeaders: false
-#   #  # Maximum connections in the HTTP connection pool (default: 400)
-#   #  maxConnections: 400
-#   #  # Maximum idle time for pooled connections in ms (default: 600000)
-#   #  connectionMaxIdleTimeMs: 600000
-#   #  # Maximum lifetime for pooled connections in ms, 0 = unlimited (default: 0)
-#   #  connectionTimeToLiveMs: 0
-#   #  # Maximum time to wait when the pool is exhausted in ms (default: 10000)
-#   #  connectionAcquisitionTimeoutMs: 10000
-#   #  # Maximum time to wait for TCP handshake in ms (default: 15000)
-#   #  connectionTimeoutMs: 15000
-#   #  # Maximum items per BatchWriteItem request. DynamoDB limits this to 25,
-#   #  # but Alternator defaults the limit to 100
-#   #  # See https://docs.scylladb.com/manual/stable/alternator/compatibility.html#configurable-or-different-limits
-#   #  maxItemsPerBatch: 100
+#   ## credentials:
+#   ##   accessKey: <user>
+#   ##   secretKey: <pass>
+#
+#   # throttling settings, set based on your write capacity units (or wanted capacity)
+#   ## writeThroughput: 1
+#   ## throughputWritePercent: 1.0
+#
+#   # Stream changes from the source table after the initial snapshot transfer.
+#   streamChanges: false
+#
+#   ## billingMode: PAY_PER_REQUEST
+#
+#   # Remove consumed capacity headers from DynamoDB requests (defaults to true for Alternator).
+#   # Needed for Scylla version > 2024.2 to avoid unnecessary capacity accounting overhead.
+#   ## removeConsumedCapacity: true
+#
+#   ## skipInitialSnapshotTransfer: false
+#
+#   # Alternator-specific settings (all optional):
+#   ## datacenter: dc1
+#   ## rack: rack1  (requires datacenter)
+#   ## activeRefreshIntervalMs: 1000
+#   ## idleRefreshIntervalMs: 60000
+#   ## compression: false
+#   ## optimizeHeaders: false
+#   ## maxConnections: 400
+#   ## connectionMaxIdleTimeMs: 600000
+#   ## connectionTimeToLiveMs: 0
+#   ## connectionAcquisitionTimeoutMs: 10000
+#   ## connectionTimeoutMs: 15000
+#   ## maxItemsPerBatch: 100
 
 # Savepoints are configuration files (like this one), saved by the migrator as it
 # runs. Their purpose is to skip token ranges that have already been copied. This

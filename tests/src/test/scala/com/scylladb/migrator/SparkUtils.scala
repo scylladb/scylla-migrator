@@ -13,6 +13,7 @@ import org.apache.spark.sql.SparkSession
 
 import java.nio.file.Paths
 import java.util.concurrent.atomic.AtomicInteger
+import scala.util.control.NonFatal
 
 object SparkUtils {
 
@@ -31,7 +32,10 @@ object SparkUtils {
     def stop(): Unit = {
       spark.streams.active.foreach(_.stop())
       thread.join(30000)
-      if (thread.isAlive) thread.interrupt()
+      if (thread.isAlive) {
+        thread.interrupt()
+        thread.join(5000)
+      }
     }
   }
 
@@ -94,7 +98,7 @@ object SparkUtils {
         Migrator.migrate(config)(spark)
       catch {
         case _: InterruptedException => exitCode.set(143)
-        case e: Exception =>
+        case NonFatal(e) =>
           exitCode.set(1)
           e.printStackTrace()
       }
@@ -143,6 +147,8 @@ object SparkUtils {
       case c: SourceSettings.Cassandra => c
       case d: SourceSettings.DynamoDB =>
         d.copy(endpoint = d.endpoint.map(remapEndpoint))
+      case a: SourceSettings.Alternator =>
+        a.copy(alternatorEndpoint = remapEndpoint(a.alternatorEndpoint))
       case p: SourceSettings.Parquet =>
         p.copy(
           path     = remapContainerPath(p.path),
@@ -157,6 +163,8 @@ object SparkUtils {
       case s: TargetSettings.Scylla => s
       case d: TargetSettings.DynamoDB =>
         d.copy(endpoint = d.endpoint.map(remapEndpoint))
+      case a: TargetSettings.Alternator =>
+        a.copy(alternatorEndpoint = remapEndpoint(a.alternatorEndpoint))
       case p: TargetSettings.Parquet =>
         p.copy(path = remapContainerPath(p.path))
       case s: TargetSettings.DynamoDBS3Export =>

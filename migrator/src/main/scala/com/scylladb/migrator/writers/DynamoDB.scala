@@ -17,13 +17,14 @@ import software.amazon.awssdk.services.dynamodb.model.{
 
 import java.util
 import java.util.stream.Collectors
+import scala.util.Using
 
 object DynamoDB {
 
   val log = LogManager.getLogger("com.scylladb.migrator.writers.DynamoDB")
 
   def deleteRDD(
-    target: TargetSettings.DynamoDB,
+    target: TargetSettings.DynamoDBLike,
     targetTableDesc: TableDescription,
     rdd: RDD[util.Map[String, AttributeValue]]
   )(implicit spark: SparkSession): Unit = {
@@ -32,17 +33,15 @@ object DynamoDB {
 
     rdd.foreachPartition { partition =>
       if (partition.nonEmpty) {
-        val dynamoDB = DynamoUtils.buildDynamoClient(
-          target.endpoint,
-          target.finalCredentials.map(_.toProvider),
-          target.region,
-          if (target.removeConsumedCapacity.getOrElse(true))
-            Seq(new DynamoUtils.RemoveConsumedCapacityInterceptor)
-          else Nil,
-          target.alternator
-        )
-
-        try
+        Using.resource(
+          DynamoUtils.buildDynamoClient(
+            target.endpoint,
+            target.finalCredentials.map(_.toProvider),
+            target.region,
+            DynamoUtils.removeConsumedCapacityInterceptors(target.removeConsumedCapacity),
+            target.alternatorSettings
+          )
+        ) { dynamoDB =>
           partition.foreach { item =>
             val keyToDelete =
               new util.HashMap[String, AttributeValue]()
@@ -72,14 +71,13 @@ object DynamoDB {
               }
             }
           }
-        finally
-          dynamoDB.close()
+        }
       }
     }
   }
 
   def writeRDD(
-    target: TargetSettings.DynamoDB,
+    target: TargetSettings.DynamoDBLike,
     renamesMap: Map[String, String],
     rdd: RDD[(Text, DynamoDBItemWritable)],
     targetTableDesc: TableDescription
@@ -94,8 +92,8 @@ object DynamoDB {
       maybeScanSegments = None,
       maybeMaxMapTasks  = None,
       target.finalCredentials,
-      target.removeConsumedCapacity.getOrElse(true),
-      target.alternator
+      target.removeConsumedCapacity,
+      target.alternatorSettings
     )
     jobConf.set(DynamoDBConstants.OUTPUT_TABLE_NAME, target.table)
     val writeThroughput =
