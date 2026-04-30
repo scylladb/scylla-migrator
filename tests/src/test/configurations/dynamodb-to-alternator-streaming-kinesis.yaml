@@ -28,7 +28,6 @@ target:
     type: kinesis
     streamArn: arn:aws:kinesis:us-east-1:111122223333:stream/KinesisStreamedItemsTest-example
     appName: migrator_KinesisStreamedItemsTest
-  removeConsumedCapacity: true
   billingMode: PAY_PER_REQUEST
 
 savepoints:

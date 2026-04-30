@@ -159,8 +159,6 @@ object DynamoStreamReplication {
             }
           }
         }
-        finally
-          client.close()
       }
     }
 

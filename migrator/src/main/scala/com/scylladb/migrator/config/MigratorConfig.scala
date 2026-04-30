@@ -52,21 +52,34 @@ object MigratorConfig {
   implicit val migratorConfigDecoder: Decoder[MigratorConfig] =
     deriveDecoder[MigratorConfig].emap { config =>
       (config.source, config.target) match {
-        case (_: SourceSettings.Alternator, t: TargetSettings.DynamoDBLike) if t.streamChanges =>
+        case (_: SourceSettings.Alternator, t: TargetSettings.DynamoDBLike)
+            if t.streamChanges.isEnabled =>
           Left(
-            "'streamChanges: true' is not supported when the source is an Alternator table. " +
-              "Scylla Alternator does not support DynamoDB Streams."
+            "'streamChanges' streaming replication is not supported when the source is an Alternator table. " +
+              "Scylla Alternator does not support DynamoDB Streams or AWS-side Kinesis publishing from the source."
           )
         case (_: SourceSettings.Alternator, _: TargetSettings.DynamoDBS3Export) =>
           Left(
             "A source of type 'alternator' is not supported with target type 'dynamodb-s3-export'. " +
               "DynamoDB S3 export output is only supported when the source is AWS DynamoDB."
           )
-        case (_: SourceSettings.DynamoDBS3Export, t: TargetSettings.DynamoDBLike)
-            if t.streamChanges =>
-          Left(
-            "'streamChanges: true' is not supported when the source is a DynamoDB S3 export."
-          )
+        case (s: SourceSettings.DynamoDBS3Export, t: TargetSettings.DynamoDBLike) =>
+          t.streamChanges match {
+            case StreamChangesSetting.DynamoDBStreams =>
+              Left(
+                "'streamChanges' with DynamoDB Streams is not supported when the source is a DynamoDB S3 export. " +
+                  "Use Kinesis Data Streams (`type: kinesis` and `streamArn`) together with `source.streamSource` " +
+                  "for the live DynamoDB table instead. See docs/source/stream-changes.rst."
+              )
+            case _: StreamChangesSetting.KinesisDataStreams if s.streamSource.isEmpty =>
+              Left(
+                "When the source is dynamodb-s3-export and target streamChanges uses Kinesis, " +
+                  "`source.streamSource` must be set to the live DynamoDB table whose changes should be replayed. " +
+                  "See docs/source/stream-changes.rst."
+              )
+            case _ =>
+              Right(config)
+          }
         case _ => Right(config)
       }
     }

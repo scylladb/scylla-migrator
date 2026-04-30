@@ -32,12 +32,12 @@ object AlternatorMigrator {
     val (sourceRDD, sourceTableDesc) =
       readers.DynamoDB.readRDD(spark, source, migratorConfig.skipSegments)
     val maybeStreamedSource = source match {
-      case d: SourceSettings.DynamoDB if target.streamChanges => Some(d)
-      case _                                                  => None
+      case d: SourceSettings.DynamoDB if target.streamChanges.isEnabled => Some(d)
+      case _                                                            => None
     }
-    if (target.streamChanges && maybeStreamedSource.isEmpty) {
+    if (target.streamChanges.isEnabled && maybeStreamedSource.isEmpty) {
       throw new IllegalArgumentException(
-        "streamChanges is true on the target, but the source does not support DynamoDB Streams. " +
+        "streamChanges streaming replication is enabled on the target, but the source does not expose a live AWS DynamoDB table for streaming. " +
           "This combination should have been rejected at config-parse time. " +
           "Stream replication cannot proceed."
       )

@@ -437,10 +437,10 @@ object DynamoUtils {
         source.endpoint,
         source.finalCredentials.map(_.toProvider),
         source.region,
-        if (source.removeConsumedCapacity.getOrElse(false))
+        if (source.removeConsumedCapacity)
           Seq(new RemoveConsumedCapacityInterceptor)
         else Nil,
-        source.alternator
+        source.alternatorSettings
       )
 
     val currentStatus: Option[DestinationStatus] =
@@ -570,10 +570,10 @@ object DynamoUtils {
         source.endpoint,
         source.finalCredentials.map(_.toProvider),
         source.region,
-        if (source.removeConsumedCapacity.getOrElse(false))
+        if (source.removeConsumedCapacity)
           Seq(new RemoveConsumedCapacityInterceptor)
         else Nil,
-        source.alternator
+        source.alternatorSettings
       )
 
     val deadline = Instant.now().plus(maxWait)
