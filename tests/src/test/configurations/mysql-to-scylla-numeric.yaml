@@ -1,0 +1,44 @@
+# Integration-test configuration for MySQL-to-ScyllaDB migration using numeric partitioning.
+# The hosts below (mysql, scylla) are Docker Compose service names and are remapped to
+# localhost by SparkUtils when the test suite runs in-process.
+
+source:
+  type: mysql
+  host: mysql
+  port: 3306
+  database: testdb
+  table: users_numeric
+  credentials:
+    username: migrator
+    password: migrator
+  primaryKey:
+    - id
+  partitionColumn: id
+  numPartitions: 4
+  lowerBound: 0
+  upperBound: 1000
+  fetchSize: 200
+
+target:
+  type: scylla
+  host: scylla
+  port: 9042
+  localDC: datacenter1
+  credentials:
+    username: dummy
+    password: dummy
+  keyspace: test
+  table: users_numeric
+  consistencyLevel: LOCAL_QUORUM
+  connections: 16
+  stripTrailingZerosForDecimals: false
+
+validation:
+  compareTimestamps: false
+  ttlToleranceMillis: 0
+  writetimeToleranceMillis: 0
+  failuresToFetch: 100
+  floatingPointTolerance: 0.001
+  timestampMsTolerance: 1000
+  hashColumns:
+    - payload

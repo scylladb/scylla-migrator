@@ -56,6 +56,15 @@ object SparkUtils {
       .getOrCreate()
   }
 
+  /** Run a block with a SparkSession sharing the suite SparkContext but isolated SQL state. */
+  def withSparkSession[A](
+    extraConfigs: Map[String, String] = Map.empty
+  )(f: SparkSession => A): A = {
+    val session = spark.newSession()
+    extraConfigs.foreach { case (key, value) => session.conf.set(key, value) }
+    f(session)
+  }
+
   /** Run a migration by loading the config, remapping for local execution, and running in-process.
     *
     * @param migratorConfigFile
@@ -133,6 +142,11 @@ object SparkUtils {
     "scylla-source" -> 9044
   )
 
+  /** Map from Docker Compose MySQL hostnames to the exposed localhost port. */
+  private val mysqlHostPortMap: Map[String, Int] = Map(
+    "mysql" -> 3308
+  )
+
   /** Map from Docker Compose DynamoDB-protocol endpoint to (host, port) on localhost. */
   private val dynamoEndpointMap: Map[(String, Int), (String, Int)] = Map(
     ("http://dynamodb", 8000) -> ("http://localhost", 8001),
@@ -156,6 +170,11 @@ object SparkUtils {
         )
       case s: SourceSettings.DynamoDBS3Export =>
         s.copy(endpoint = s.endpoint.map(remapEndpoint))
+      case m: SourceSettings.MySQL =>
+        m.copy(
+          host = "localhost",
+          port = mysqlHostPortMap.getOrElse(m.host, m.port)
+        )
     }
     val newTarget = config.target match {
       case s: TargetSettings.Scylla if s.cloud.isEmpty =>

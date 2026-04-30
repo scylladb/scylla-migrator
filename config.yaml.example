@@ -73,6 +73,57 @@ source:
 #   connections: 8
 #   fetchSize: 1000
 
+# Example for loading from MySQL:
+# source:
+#   type: mysql
+#   host: mysql-server
+#   port: 3306
+#   database: mydb
+#   table: mytable
+#   credentials:
+#     username: <user>
+#     password: <pass>
+#   # Number of rows to fetch per JDBC round-trip. Defaults to 1000 if omitted.
+#   # Use lower values (e.g. 100) for tables with large blobs, higher values
+#   # (e.g. 1000+) for small rows.
+#   fetchSize: 1000
+#   # Optional - columns forming the primary key, required for validation
+#   # primaryKey:
+#   #   - id
+#   # Optional - partition the read across multiple Spark tasks
+#   # partitionColumn: id
+#   # numPartitions: 8
+#   # lowerBound and upperBound must match the partition column's JDBC type.
+#   # For numeric columns use integer literals:
+#   # lowerBound: 0
+#   # upperBound: 1000000
+#   # For DATE columns use ISO date literals:
+#   # lowerBound: "2024-01-01"
+#   # upperBound: "2024-02-01"
+#   # For TIMESTAMP/DATETIME columns use timestamp literals:
+#   # lowerBound: "2024-01-01 00:00:00"
+#   # upperBound: "2024-01-02 00:00:00"
+#   # NOTE: Partitioned MySQL reads use multiple independent JDBC statements/connections.
+#   # They do not provide one global point-in-time snapshot across all Spark partitions.
+#   # If exact consistency matters, quiesce or otherwise freeze the source table first.
+#   # Optional - filter rows (treated as trusted SQL input, not sanitized)
+#   # where: "status = 'active'"
+#   # Optional - explicit zero-date handling. Defaults to EXCEPTION (fail fast).
+#   # Setting CONVERT_TO_NULL or ROUND changes source-data semantics and should only
+#   # be used when that behavior is intentional.
+#   # zeroDateTimeBehavior: CONVERT_TO_NULL
+#   # Optional - extra JDBC connection properties (e.g. SSL, timeouts)
+#   # connectionProperties:
+#   #   connectTimeout: "5000"
+#   #   socketTimeout: "30000"
+#   #
+#   # NOTE: Resume/savepoint support is not available for MySQL migrations.
+#   # Spark JDBC reads do not expose durable per-range progress for MySQL, and
+#   # partitioned reads use multiple independent JDBC statements instead of one
+#   # resumable snapshot. If a migration is interrupted, it must be restarted
+#   # from the beginning. For large tables, ensure your target schema uses upsert
+#   # semantics (e.g. ScyllaDB INSERT) so that re-running the migration is safe.
+
 # Example for loading from Parquet:
 # source:
 #   type: parquet
@@ -383,9 +434,15 @@ target:
 #   ## connectionTimeoutMs: 15000
 #   ## maxItemsPerBatch: 100
 
-# Savepoints are configuration files (like this one), saved by the migrator as it
-# runs. Their purpose is to skip token ranges that have already been copied. This
-# configuration only applies when copying from Cassandra/Scylla.
+# Optional savepoint configuration for resumable migrations. Savepoints are configuration
+# files (like this one), saved by the migrator as it runs. Their purpose is to skip data
+# that has already been copied on a restart. This configuration is used for
+# Cassandra/Scylla, DynamoDB, and Parquet sources.
+#
+# Omit this section for MySQL migrations. MySQL savepoints are not supported:
+# Spark JDBC reads do not expose durable per-range progress, and partitioned reads
+# use multiple independent JDBC statements instead of one resumable snapshot. If a
+# MySQL migration is interrupted, it must be restarted from the beginning.
 savepoints:
   # Where should savepoint configurations be stored? This is a path on the host running
   # the Spark driver - usually the Spark master.
@@ -427,3 +484,9 @@ savepoints:
 #   floatingPointTolerance: 0.001
 #   # What difference in ms should we allow between timestamps?
 #   timestampMsTolerance: 0
+#   # Optional - columns to hash for MySQL-to-ScyllaDB validation (use source-side names;
+#   # renames are applied automatically). This reduces Spark-side join/shuffle volume,
+#   # but the validator still reads the original payload columns before hashing.
+#   # hashColumns:
+#   #   - large_text_column
+#   #   - blob_column

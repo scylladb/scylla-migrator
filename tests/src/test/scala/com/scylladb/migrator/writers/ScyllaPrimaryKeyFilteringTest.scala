@@ -88,4 +88,41 @@ class ScyllaPrimaryKeyFilteringTest extends munit.FunSuite {
     assertEquals(keptRows, Set(("a", "1", "ok-1"), ("d", "4", "ok-2")))
     assert(droppedRows.value == 2L)
   }
+
+  test("requireNoCaseInsensitiveColumnNameCollisions accepts unique names") {
+    Scylla.requireNoCaseInsensitiveColumnNameCollisions(
+      Seq("id", "Value", "payload"),
+      "while testing"
+    )
+  }
+
+  test("requireNoCaseInsensitiveColumnNameCollisions rejects duplicate names after renames") {
+    import spark.implicits._
+
+    val df = Seq((1, 2)).toDF("a", "b")
+    val renamedSchema = df.withColumnRenamed("a", "b").schema
+
+    val error = intercept[IllegalArgumentException] {
+      Scylla.requireNoCaseInsensitiveColumnNameCollisions(
+        renamedSchema.fieldNames.toSeq,
+        "after applying renames before writing to ScyllaDB"
+      )
+    }
+
+    assert(
+      error.getMessage.contains("Column name collision detected")
+    )
+    assert(error.getMessage.contains("[b]"))
+  }
+
+  test("requireNoCaseInsensitiveColumnNameCollisions rejects case-only duplicates") {
+    val error = intercept[IllegalArgumentException] {
+      Scylla.requireNoCaseInsensitiveColumnNameCollisions(
+        Seq("UserId", "userid", "value"),
+        "while testing"
+      )
+    }
+
+    assert(error.getMessage.contains("[UserId, userid]"))
+  }
 }

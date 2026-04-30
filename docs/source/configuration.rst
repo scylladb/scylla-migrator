@@ -29,7 +29,8 @@ The configuration file requires the following top-level properties (ie, with no 
   # Optional - Columns to rename
   renames:
     # ...
-  # Savepoints configuration
+  # Savepoints configuration. Required for resumable migrations.
+  # Omit it for MySQL migrations; MySQL savepoints are not supported.
   savepoints:
     # ...
   # Validator configuration. Required only if the app is executed in validation mode.
@@ -482,7 +483,15 @@ The optional ``renames`` property lists the item columns to rename along the mig
 Savepoints
 ----------
 
-When migrating data from Apache Cassandra or DynamoDB, the migrator is able to :doc:`resume an interrupted migration </resume-interrupted-migration>`. To achieve this, it stores so-called “savepoints” along the process to remember which data items have already been migrated and should be skipped when the migration is restarted.
+For resumable sources, the migrator is able to :doc:`resume an interrupted migration </resume-interrupted-migration>`.
+To achieve this, it stores so-called “savepoints” along the process to remember which data items
+have already been migrated and should be skipped when the migration is restarted.
+
+This section must be omitted for MySQL migrations. MySQL savepoints are not supported: Spark JDBC
+reads do not expose durable per-range progress for MySQL, and partitioned reads use multiple
+independent JDBC statements instead of one resumable snapshot. If a MySQL migration is interrupted,
+it must be restarted from the beginning. For large tables, ensure the target schema uses idempotent
+writes so that re-running the migration is safe.
 
 .. code-block:: yaml
 
@@ -499,6 +508,11 @@ Validation
 
 The ``validation`` field and its properties are mandatory only when the application is executed in :doc:`validation mode </validate>`.
 
+When validating MySQL-to-ScyllaDB migrations, ensure that writes have stopped on both sides before
+starting the validator. The current implementation may issue multiple reads over time and therefore
+does not provide a single global point-in-time snapshot while the source or target table is still
+changing.
+
 .. code-block:: yaml
 
   validation:
@@ -514,6 +528,13 @@ The ``validation`` field and its properties are mandatory only when the applicat
     floatingPointTolerance: 0.001
     # What difference in ms should we allow between timestamps?
     timestampMsTolerance: 0
+    # Optional - columns to compare via a content hash for MySQL-to-ScyllaDB validation.
+    # Use source-side column names; renames are applied automatically.
+    # This reduces Spark-side join/shuffle volume, but the validator still reads the
+    # original payload columns from MySQL and ScyllaDB before hashing.
+    hashColumns:
+      - large_text_column
+      - blob_column
 
 .. _aws-authentication:
 

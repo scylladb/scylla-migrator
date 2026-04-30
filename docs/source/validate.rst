@@ -6,6 +6,11 @@ In addition to the monitoring user interface provided by Spark, you can run anot
 
 Running this program consists of submitting the same Spark job as the migration, but with a different entry point.
 
+For MySQL-to-ScyllaDB validations, run the validator only after writes have stopped on both the
+MySQL source table and the ScyllaDB target table. The validator may scan both sides using multiple
+statements over time, so it does not provide a single global point-in-time snapshot while live
+writes are still happening.
+
 Before running the validator, adjust the corresponding configuration in the top-level ``validation`` property of the file ``config.yml``:
 
 .. code-block:: yaml
