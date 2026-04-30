@@ -126,7 +126,7 @@ object AlternatorValidator {
             targetSettings.finalCredentials.map(_.toProvider),
             targetSettings.region,
             Seq.empty,
-            targetSettings.alternator
+            targetSettings.alternatorSettings
           )
           try
             client
