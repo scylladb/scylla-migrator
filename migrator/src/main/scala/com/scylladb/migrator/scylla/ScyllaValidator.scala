@@ -1,7 +1,6 @@
 package com.scylladb.migrator.scylla
 
 import com.datastax.spark.connector.{
-  toRDDFunctions,
   toSparkContextFunctions,
   ColumnName,
   SomeColumns,
