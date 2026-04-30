@@ -10,7 +10,7 @@ source:
   table: Example
 
 target:
-  type: dynamodb
+  type: alternator
   endpoint:
     host: http://scylla
     port: 8001

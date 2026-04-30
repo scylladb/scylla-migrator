@@ -23,6 +23,7 @@ import io.circe.generic.extras.semiauto._
 case class Savepoints(intervalSeconds: Int, path: String, enableParquetFileTracking: Boolean = true)
 
 object Savepoints {
+  val Default: Savepoints = Savepoints(intervalSeconds = 300, path = "/app/savepoints")
   implicit val config: Configuration = Configuration.default.withDefaults
   implicit val codec: Codec[Savepoints] = deriveConfiguredCodec[Savepoints]
 }

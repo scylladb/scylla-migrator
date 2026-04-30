@@ -32,6 +32,7 @@ E2E_DDB_ROWS ?= 500000
 
 # ScyllaDB version and storage mode for DynamoDB/Alternator tests
 SCYLLA_VERSION ?= latest
+MYSQL_VERSION ?= 8.0.46
 TABLETS_MODE ?= vnodes
 
 ifeq ($(TABLETS_MODE),vnodes)
@@ -43,6 +44,7 @@ COMPOSE_SCYLLA_FILES := -f $(COMPOSE_SCYLLA)
 endif
 
 export SCYLLA_VERSION
+export MYSQL_VERSION
 
 ifeq ($(COVERAGE),true)
 SBT_COVERAGE_PREFIX := coverage
@@ -86,9 +88,22 @@ define wait-for-port
 	$(call attempt,curl -s "http://127.0.0.1:$(1)" > /dev/null)
 endef
 
+define wait-for-cql-compose
+	echo "Waiting for CQL to be ready in service $(2)"
+	$(call attempt,docker compose $(1) exec $(2) bash -c "cqlsh -e 'describe cluster'" > /dev/null)
+endef
+
 define wait-for-cql
-	echo "Waiting for CQL to be ready in service $(1)"
-	$(call attempt,docker compose -f $(COMPOSE_FILE) exec $(1) bash -c "cqlsh -e 'describe cluster'" > /dev/null)
+	$(call wait-for-cql-compose,-f $(COMPOSE_FILE),$(1))
+endef
+
+define wait-for-mysql-compose
+	echo "Waiting for MySQL to be ready in service $(2)"
+	$(call attempt,docker compose $(1) exec $(2) sh -lc "mysqladmin ping -h 127.0.0.1 -uroot -proot --silent" > /dev/null)
+endef
+
+define wait-for-mysql
+	$(call wait-for-mysql-compose,-f $(COMPOSE_FILE),$(1))
 endef
 
 lint: ## Check code formatting
@@ -134,12 +149,12 @@ spark-image: ## Pull or build the Spark Docker image
 start-services: ## Start all Docker Compose test services
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
 	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
-	docker compose -f $(COMPOSE_FILE) up -d dynamodb cassandra cassandra2 cassandra3 cassandra5 scylla-source scylla s3
+	docker compose -f $(COMPOSE_FILE) up -d mysql dynamodb cassandra cassandra2 cassandra3 cassandra5 scylla-source scylla s3
 
 start-services-scylla: ## Start services needed for Scylla integration tests
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla ./tests/docker/scylla-source
 	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla ./tests/docker/scylla-source
-	docker compose $(COMPOSE_SCYLLA_FILES) up -d cassandra scylla-source scylla
+	docker compose $(COMPOSE_SCYLLA_FILES) up -d mysql cassandra scylla-source scylla
 
 start-services-dynamodb: ## Start services for DynamoDB integration tests (SCYLLA_VERSION=..., TABLETS_MODE=...)
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
@@ -160,26 +175,28 @@ wait-for-services: ## Wait for all test services to become ready
 	($(call wait-for-cql,scylla)) & p4=$$!
 	($(call wait-for-cql,cassandra)) & p5=$$!
 	($(call wait-for-cql,scylla-source)) & p6=$$!
-	wait $$p1; wait $$p2; wait $$p3; wait $$p4; wait $$p5; wait $$p6
+	($(call wait-for-mysql,mysql)) & p7=$$!
+	wait $$p1; wait $$p2; wait $$p3; wait $$p4; wait $$p5; wait $$p6; wait $$p7
 
 wait-for-services-scylla: ## Wait for Scylla test services to become ready
-	$(Q)($(call wait-for-cql,cassandra)) & p1=$$!
-	($(call wait-for-cql,scylla-source)) & p2=$$!
-	($(call wait-for-cql,scylla)) & p3=$$!
-	wait $$p1; wait $$p2; wait $$p3
+	$(Q)($(call wait-for-cql-compose,$(COMPOSE_SCYLLA_FILES),cassandra)) & p1=$$!
+	($(call wait-for-cql-compose,$(COMPOSE_SCYLLA_FILES),scylla-source)) & p2=$$!
+	($(call wait-for-cql-compose,$(COMPOSE_SCYLLA_FILES),scylla)) & p3=$$!
+	($(call wait-for-mysql-compose,$(COMPOSE_SCYLLA_FILES),mysql)) & p4=$$!
+	wait $$p1; wait $$p2; wait $$p3; wait $$p4
 
 wait-for-services-dynamodb: ## Wait for DynamoDB test services to become ready
 	$(Q)($(call wait-for-port,8000)) & p1=$$!
 	($(call wait-for-port,8001)) & p2=$$!
 	($(call wait-for-port,4566)) & p3=$$!
-	($(call wait-for-cql,scylla)) & p4=$$!
+	($(call wait-for-cql-compose,$(COMPOSE_DYNAMODB_FILES),scylla)) & p4=$$!
 	wait $$p1; wait $$p2; wait $$p3; wait $$p4
 
 wait-for-services-alternator: wait-for-services-dynamodb ## Alias for wait-for-services-dynamodb
 
 wait-for-services-aws: ## Wait for AWS test services to become ready
 	$(Q)($(call wait-for-port,8000)) & p1=$$!
-	($(call wait-for-cql,scylla)) & p2=$$!
+	($(call wait-for-cql-compose,$(COMPOSE_DYNAMODB_FILES),scylla)) & p2=$$!
 	wait $$p1; wait $$p2
 
 stop-services: ## Stop all Docker Compose test services
@@ -226,8 +243,8 @@ start-services-cassandra: ## Start services for a single Cassandra version (CASS
 	docker compose $(COMPOSE_SCYLLA_FILES) up -d $(_CASSANDRA_SERVICE) scylla
 
 wait-for-services-cassandra: ## Wait for a single Cassandra version to become ready (CASSANDRA_VERSION=...)
-	$(Q)($(call wait-for-cql,$(_CASSANDRA_SERVICE))) & p1=$$!
-	($(call wait-for-cql,scylla)) & p2=$$!
+	$(Q)($(call wait-for-cql-compose,$(COMPOSE_SCYLLA_FILES),$(_CASSANDRA_SERVICE))) & p1=$$!
+	($(call wait-for-cql-compose,$(COMPOSE_SCYLLA_FILES),scylla)) & p2=$$!
 	wait $$p1; wait $$p2
 
 test-integration-cassandra: ## Run integration tests for a single Cassandra version (CASSANDRA_VERSION=...)
@@ -239,8 +256,8 @@ test-unit: ## Run unit tests (no services required)
 test-integration: ## Run integration tests (requires services, excludes AWS, benchmarks, and E2E)
 	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.AWS,com.scylladb.migrator.E2E" $(SBT_COVERAGE_SUFFIX)
 
-test-integration-scylla: ## Run Scylla integration tests (Cassandra compat tests run in their own matrix job)
-	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.scylla.* -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.E2E,com.scylladb.migrator.CassandraCompat" $(SBT_COVERAGE_SUFFIX)
+test-integration-scylla: ## Run Scylla and reader integration tests (Cassandra compat tests run in their own matrix job)
+	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.scylla.* com.scylladb.migrator.readers.* -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.E2E,com.scylladb.migrator.CassandraCompat" $(SBT_COVERAGE_SUFFIX)
 
 test-integration-dynamodb: ## Run DynamoDB/Alternator integration tests (excludes AWS and E2E)
 	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.alternator.* com.scylladb.migrator.writers.* -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.AWS,com.scylladb.migrator.E2E" $(SBT_COVERAGE_SUFFIX)

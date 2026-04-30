@@ -3,12 +3,15 @@ package com.scylladb.migrator.alternator
 import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
 import com.scylladb.migrator.validation.RowComparisonFailure
 import com.scylladb.migrator.readers
+import org.apache.logging.log4j.LogManager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 
 import scala.jdk.CollectionConverters._
 
 object AlternatorValidator {
+
+  private val log = LogManager.getLogger("com.scylladb.migrator.alternator.AlternatorValidator")
 
   /** Checks that the target Alternator database contains the same data as the source DynamoDB
     * database.
@@ -17,8 +20,8 @@ object AlternatorValidator {
     *   A list of comparison failures (which is empty if the data are the same in both databases).
     */
   def runValidation(
-    sourceSettings: SourceSettings.DynamoDB,
-    targetSettings: TargetSettings.DynamoDB,
+    sourceSettings: SourceSettings.DynamoDBLike,
+    targetSettings: TargetSettings.DynamoDBLike,
     config: MigratorConfig
   )(implicit spark: SparkSession): List[RowComparisonFailure] = {
 
@@ -46,7 +49,8 @@ object AlternatorValidator {
       sourceSettings.readThroughput,
       sourceSettings.throughputReadPercent,
       skipSegments           = None,
-      removeConsumedCapacity = targetSettings.removeConsumedCapacity.getOrElse(true)
+      removeConsumedCapacity = targetSettings.removeConsumedCapacity,
+      alternatorSettings     = targetSettings.alternatorSettings
     )
 
     // Define some aliases to prevent the Spark engine to try to serialize the whole object graph
@@ -54,6 +58,12 @@ object AlternatorValidator {
     val configValidation = config.validation.getOrElse(
       sys.error("Missing required property 'validation' in the configuration file.")
     )
+
+    configValidation.hashColumns.foreach { _ =>
+      log.warn(
+        "hashColumns is only supported for MySQL-to-ScyllaDB validation and will be ignored."
+      )
+    }
 
     val targetByKey: RDD[(List[DdbValue], collection.Map[String, DdbValue])] =
       target
