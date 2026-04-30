@@ -20,7 +20,7 @@ source:
     billingMode: PAY_PER_REQUEST
 
 target:
-  type: dynamodb
+  type: alternator
   table: BasicTest
   region: dummy
   endpoint:
@@ -33,6 +33,8 @@ target:
   removeConsumedCapacity: true
   billingMode: PAY_PER_REQUEST
 
+# Savepoint settings are required by the config schema but unused for
+# DynamoDB S3 export imports, since savepoints are not supported on this path.
 savepoints:
   path: /app/savepoints/s3-export-no-savepoints
   intervalSeconds: 300

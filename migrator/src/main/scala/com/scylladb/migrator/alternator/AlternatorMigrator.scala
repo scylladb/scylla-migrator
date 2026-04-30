@@ -145,6 +145,10 @@ object AlternatorMigrator {
               .writeRDD(target, migratorConfig.renamesMap, sourceRDD, targetTableDesc)
           }
         } else {
+          log.warn(
+            "Savepoints are not supported when the source is a DynamoDB S3 export. " +
+              "If the migration is interrupted, it will reprocess all data on restart."
+          )
           log.info("Starting write...")
           writers.DynamoDB.writeRDD(target, migratorConfig.renamesMap, sourceRDD, targetTableDesc)
         }
