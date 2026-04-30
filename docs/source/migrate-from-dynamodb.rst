@@ -13,13 +13,13 @@ In file ``config.yaml``, make sure to keep only one ``source`` property and one 
 Configuring the Source
 ----------------------
 
-The data ``source`` can be a DynamoDB or Alternator table, or a DynamoDB S3 export.
+The data ``source`` can be a DynamoDB table, an Alternator table, or a DynamoDB S3 export.
 
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-Reading from DynamoDB or Alternator
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^
+Reading from DynamoDB
+^^^^^^^^^^^^^^^^^^^^^
 
-In both cases, when reading from DynamoDB or Alternator, the type of source should be ``dynamodb`` in the configuration file. Here is a minimal ``source`` configuration to read a DynamoDB table:
+To read from DynamoDB, use the source type ``dynamodb``. Here is a minimal ``source`` configuration:
 
 .. code-block:: yaml
 
@@ -30,7 +30,7 @@ In both cases, when reading from DynamoDB or Alternator, the type of source shou
 
 Where ``<table>`` is the name of the table to read, and ``<region>`` is the AWS region where the DynamoDB instance is located.
 
-To read from the Alternator, you need to provide an ``endpoint`` instead of a ``region``:
+For custom AWS-compatible endpoints such as DynamoDB Local or LocalStack, you can also provide an ``endpoint``:
 
 .. code-block:: yaml
 
@@ -41,9 +41,30 @@ To read from the Alternator, you need to provide an ``endpoint`` instead of a ``
       host: http://<host>
       port: <port>
 
+Where ``<host>`` and ``<port>`` should be replaced with the host name and TCP port of your custom DynamoDB-compatible endpoint.
+
+^^^^^^^^^^^^^^^^^^^^^^^
+Reading from Alternator
+^^^^^^^^^^^^^^^^^^^^^^^
+
+To read from ScyllaDB Alternator, use the source type ``alternator`` and provide an ``endpoint``:
+
+.. code-block:: yaml
+
+  source:
+    type: alternator
+    table: <table>
+    endpoint:
+      host: http://<host>
+      port: <port>
+
 Where ``<host>`` and ``<port>`` should be replaced with the host name and TCP port of your Alternator instance.
 
-In practice, your source database (DynamoDB or Alternator) may require authentication. You can provide the AWS credentials with the ``credentials`` property:
+The ``endpoint.host`` value must include the protocol prefix (``http://`` or ``https://``) for Alternator.
+
+In practice, your source database may require authentication.
+
+For DynamoDB:
 
 .. code-block:: yaml
 
@@ -56,6 +77,20 @@ In practice, your source database (DynamoDB or Alternator) may require authentic
       secretKey: <secret-key>
 
 Where ``<access-key>`` and ``<secret-key>`` should be replaced with your actual AWS access key and secret key.
+
+For Alternator:
+
+.. code-block:: yaml
+
+  source:
+    type: alternator
+    table: <table>
+    endpoint:
+      host: http://<host>
+      port: <port>
+    credentials:
+      accessKey: <access-key>
+      secretKey: <secret-key>
 
 The Migrator also supports advanced AWS authentication options such as using `AssumeRole <https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html>`_. Please read the :ref:`configuration reference <aws-authentication>` for more details.
 
@@ -156,7 +191,13 @@ The Migrator also supports advanced AWS authentication options such as using `As
 Configuring the Destination
 ---------------------------
 
-The migration ``target`` can be DynamoDB or Alternator. In both cases, we use the configuration type ``dynamodb`` in the configuration. Here is a minimal ``target`` configuration to write to DynamoDB or Alternator:
+The migration ``target`` can be DynamoDB or Alternator.
+
+^^^^^^^^^^^^^^^^^^^
+Writing to DynamoDB
+^^^^^^^^^^^^^^^^^^^
+
+To write to DynamoDB, use the target type ``dynamodb``:
 
 .. code-block:: yaml
 
@@ -164,7 +205,7 @@ The migration ``target`` can be DynamoDB or Alternator. In both cases, we use th
     type: dynamodb
     # Name of the table to write. If it does not exist, it will be created on the fly.
     table: <table>
-    # When transferring DynamoDB sources to DynamoDB targets (such as other DynamoDB tables or Alternator tables),
+    # When transferring DynamoDB sources to DynamoDB-like targets (DynamoDB or Alternator),
     # the migrator supports transferring live changes occurring on the source table after transferring an initial
     # snapshot.
     # Please see the documentation page “Stream Changes” for more details about this option.
@@ -179,9 +220,8 @@ Additionally, you can also set the following optional properties:
   target:
     # ... same as above
 
-    # Connect to a custom endpoint. Mandatory if writing to ScyllaDB Alternator.
+    # Connect to a custom endpoint.
     endpoint:
-      # If writing to ScyllaDB Alternator, prefix the hostname with 'http://'.
       host: <host>
       port: <port>
 
@@ -208,5 +248,47 @@ Additionally, you can also set the following optional properties:
     skipInitialSnapshotTransfer: false
 
 Where ``<host>``, ``<port>``, ``<region>``, ``<access-key>``, and ``<secret-key>`` are replaced with your specific values.
+
+^^^^^^^^^^^^^^^^^^^^^
+Writing to Alternator
+^^^^^^^^^^^^^^^^^^^^^
+
+To write to ScyllaDB Alternator, use the target type ``alternator``:
+
+.. code-block:: yaml
+
+  target:
+    type: alternator
+    table: <table>
+    endpoint:
+      host: http://<host>
+      port: <port>
+    streamChanges: false
+
+The ``endpoint.host`` value must include the protocol prefix (``http://`` or ``https://``) for Alternator.
+
+In addition to the common DynamoDB-style properties shown above, Alternator targets also support:
+
+.. code-block:: yaml
+
+  target:
+    type: alternator
+    # ... same as above
+
+    # Remove consumed capacity headers from requests. Defaults to true for Alternator.
+    removeConsumedCapacity: true
+
+    # Optional Alternator-specific routing / client tuning:
+    datacenter: dc1
+    rack: rack1
+    activeRefreshIntervalMs: 1000
+    idleRefreshIntervalMs: 60000
+    compression: false
+    optimizeHeaders: false
+    maxConnections: 400
+    connectionMaxIdleTimeMs: 600000
+    connectionTimeToLiveMs: 0
+    connectionAcquisitionTimeoutMs: 10000
+    connectionTimeoutMs: 15000
 
 The Migrator also supports advanced AWS authentication options such as using `AssumeRole <https://docs.aws.amazon.com/IAM/latest/UserGuide/tutorial_cross-account-with-roles.html>`_. Please read the :ref:`configuration reference <aws-authentication>` for more details.

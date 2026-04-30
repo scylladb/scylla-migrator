@@ -33,6 +33,7 @@ import java.time.Instant
 import java.util
 import java.util.Date
 import scala.jdk.CollectionConverters._
+import scala.util.Using
 
 object DynamoStreamReplication {
   val log = LogManager.getLogger("com.scylladb.migrator.writers.DynamoStreamReplication")
@@ -101,7 +102,7 @@ object DynamoStreamReplication {
     */
   private[writers] def run(
     msgs: RDD[Option[StreamChange]],
-    target: TargetSettings.DynamoDB,
+    target: TargetSettings.DynamoDBLike,
     renamesMap: Map[String, String],
     targetTableDesc: TableDescription,
     metrics: Metrics
@@ -113,17 +114,15 @@ object DynamoStreamReplication {
 
     rdd.foreachPartition { partition =>
       if (partition.nonEmpty) {
-        val client =
+        Using.resource(
           DynamoUtils.buildDynamoClient(
             target.endpoint,
             target.finalCredentials.map(_.toProvider),
             target.region,
-            if (target.removeConsumedCapacity.getOrElse(true))
-              Seq(new DynamoUtils.RemoveConsumedCapacityInterceptor)
-            else Nil,
-            target.alternator
+            DynamoUtils.removeConsumedCapacityInterceptors(target.removeConsumedCapacity),
+            target.alternatorSettings
           )
-        try
+        ) { client =>
           partition.foreach { case StreamChange(item, op) =>
             val itemConverted = item.asScala.map { case (k, v) =>
               k -> AttributeValueUtils.fromV1(v)
@@ -159,6 +158,7 @@ object DynamoStreamReplication {
                 }
             }
           }
+        }
         finally
           client.close()
       }
@@ -205,7 +205,7 @@ object DynamoStreamReplication {
     spark: SparkSession,
     streamingContext: StreamingContext,
     src: SourceSettings.DynamoDB,
-    target: TargetSettings.DynamoDB,
+    target: TargetSettings.DynamoDBLike,
     targetTableDesc: TableDescription,
     renamesMap: Map[String, String],
     snapshotStartTime: Instant
