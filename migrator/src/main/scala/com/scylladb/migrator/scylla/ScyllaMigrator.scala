@@ -79,6 +79,7 @@ trait ScyllaMigratorBase {
 
     log.info("Starting write...")
 
+    var caughtError: Option[Throwable] = None
     try {
       val tokenRangeAccumulator = maybeSavepointsManager.flatMap {
         case cqlManager: CqlSavepointsManager => Some(cqlManager.accumulator)
@@ -98,19 +99,33 @@ trait ScyllaMigratorBase {
           "Caught error while writing the DataFrame. Will create a savepoint before exiting",
           e
         )
+        caughtError = Some(e)
     } finally
       for (savePointsManger <- maybeSavepointsManager) {
-        savePointsManger.dumpMigrationState("final")
+        try
+          savePointsManger.dumpMigrationState("final")
+        catch {
+          case NonFatal(finallyEx) =>
+            caughtError.foreach(_.addSuppressed(finallyEx))
+            if (caughtError.isEmpty) caughtError = Some(finallyEx)
+        }
         if (shouldCloseManager(savePointsManger)) {
-          savePointsManger.close()
+          try
+            savePointsManger.close()
+          catch {
+            case NonFatal(closeEx) =>
+              caughtError.foreach(_.addSuppressed(closeEx))
+              if (caughtError.isEmpty) caughtError = Some(closeEx)
+          }
         }
       }
+    caughtError.foreach(throw _)
   }
 }
 
 object ScyllaMigrator extends ScyllaMigratorBase {
 
-  protected override def createSavepointsManager(
+  private[migrator] def savepointsManagerForSource(
     migratorConfig: MigratorConfig,
     sourceDF: SourceDataFrame
   )(implicit spark: SparkSession): Option[SavepointsManager] =
@@ -120,6 +135,12 @@ object ScyllaMigrator extends ScyllaMigratorBase {
       spark.sparkContext.register(tokenRangeAccumulator, "Token ranges copied")
       Some(CqlSavepointsManager(migratorConfig, tokenRangeAccumulator))
     }
+
+  protected override def createSavepointsManager(
+    migratorConfig: MigratorConfig,
+    sourceDF: SourceDataFrame
+  )(implicit spark: SparkSession): Option[SavepointsManager] =
+    savepointsManagerForSource(migratorConfig, sourceDF)
 
   protected override def shouldCloseManager(manager: SavepointsManager): Boolean = true
 

@@ -320,4 +320,15 @@ class DynamoDBRowComparisonTest extends munit.FunSuite {
     assertEquals(result, expected)
   }
 
+  test("BigDecimal and integral wrappers remain different for shared row comparison") {
+    assert(
+      RowComparisonFailure.areDifferent(
+        Some(new java.math.BigDecimal("42.0")),
+        Some(42L),
+        timestampMsTolerance   = 0L,
+        floatingPointTolerance = floatingPointTolerance
+      )
+    )
+  }
+
 }
