@@ -10,6 +10,7 @@ import org.apache.hadoop.mapred.JobConf
 import org.apache.logging.log4j.LogManager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
+import scala.util.Using
 import software.amazon.awssdk.services.dynamodb.model.{
   DescribeTableRequest,
   DescribeTimeToLiveRequest,
@@ -24,7 +25,7 @@ object DynamoDB {
 
   def readRDD(
     spark: SparkSession,
-    source: SourceSettings.DynamoDB,
+    source: SourceSettings.DynamoDBLike,
     skipSegments: Option[Set[Int]]
   ): (RDD[(Text, DynamoDBItemWritable)], TableDescription) =
     readRDD(
@@ -38,11 +39,11 @@ object DynamoDB {
       source.readThroughput,
       source.throughputReadPercent,
       skipSegments,
-      source.removeConsumedCapacity.getOrElse(true),
-      source.alternator
+      source.removeConsumedCapacity,
+      source.alternatorSettings
     )
 
-  /** Overload of `readRDD` that does not depend on `SourceSettings.DynamoDB`
+  /** Overload of `readRDD` that does not depend on `SourceSettings.DynamoDBLike`
     */
   def readRDD(
     spark: SparkSession,
@@ -59,28 +60,28 @@ object DynamoDB {
     alternatorSettings: Option[AlternatorSettings] = None
   ): (RDD[(Text, DynamoDBItemWritable)], TableDescription) = {
 
-    val dynamoDbClient =
-      DynamoUtils.buildDynamoClient(
-        endpoint,
-        credentials.map(_.toProvider),
-        region,
-        if (removeConsumedCapacity)
-          Seq(new DynamoUtils.RemoveConsumedCapacityInterceptor)
-        else Nil,
-        alternatorSettings
-      )
-
-    val tableDescription =
-      dynamoDbClient
-        .describeTable(DescribeTableRequest.builder().tableName(table).build())
-        .table
-
-    val maybeTtlDescription =
-      Option(
-        dynamoDbClient
-          .describeTimeToLive(DescribeTimeToLiveRequest.builder().tableName(table).build())
-          .timeToLiveDescription
-      )
+    val (tableDescription, maybeTtlDescription) =
+      Using.resource(
+        DynamoUtils.buildDynamoClient(
+          endpoint,
+          credentials.map(_.toProvider),
+          region,
+          DynamoUtils.removeConsumedCapacityInterceptors(removeConsumedCapacity),
+          alternatorSettings
+        )
+      ) { dynamoDbClient =>
+        val td =
+          dynamoDbClient
+            .describeTable(DescribeTableRequest.builder().tableName(table).build())
+            .table
+        val ttl =
+          Option(
+            dynamoDbClient
+              .describeTimeToLive(DescribeTimeToLiveRequest.builder().tableName(table).build())
+              .timeToLiveDescription
+          )
+        (td, ttl)
+      }
 
     val jobConf =
       makeJobConf(

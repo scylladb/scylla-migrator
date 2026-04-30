@@ -23,7 +23,7 @@ source:
       writeCapacityUnits: 25
 
 target:
-  type: dynamodb
+  type: alternator
   table: BasicTest
   region: dummy
   endpoint:

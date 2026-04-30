@@ -13,6 +13,7 @@ import org.apache.spark.sql.SparkSession
 
 import java.nio.file.Paths
 import java.util.concurrent.atomic.AtomicInteger
+import scala.util.control.NonFatal
 
 object SparkUtils {
 
@@ -31,7 +32,10 @@ object SparkUtils {
     def stop(): Unit = {
       spark.streams.active.foreach(_.stop())
       thread.join(30000)
-      if (thread.isAlive) thread.interrupt()
+      if (thread.isAlive) {
+        thread.interrupt()
+        thread.join(5000)
+      }
     }
   }
 
@@ -50,6 +54,15 @@ object SparkUtils {
       .config("spark.task.maxFailures", "1024")
       .config("spark.stage.maxConsecutiveAttempts", "60")
       .getOrCreate()
+  }
+
+  /** Run a block with a SparkSession sharing the suite SparkContext but isolated SQL state. */
+  def withSparkSession[A](
+    extraConfigs: Map[String, String] = Map.empty
+  )(f: SparkSession => A): A = {
+    val session = spark.newSession()
+    extraConfigs.foreach { case (key, value) => session.conf.set(key, value) }
+    f(session)
   }
 
   /** Run a migration by loading the config, remapping for local execution, and running in-process.
@@ -94,7 +107,7 @@ object SparkUtils {
         Migrator.migrate(config)(spark)
       catch {
         case _: InterruptedException => exitCode.set(143)
-        case e: Exception =>
+        case NonFatal(e) =>
           exitCode.set(1)
           e.printStackTrace()
       }
@@ -129,6 +142,11 @@ object SparkUtils {
     "scylla-source" -> 9044
   )
 
+  /** Map from Docker Compose MySQL hostnames to the exposed localhost port. */
+  private val mysqlHostPortMap: Map[String, Int] = Map(
+    "mysql" -> 3308
+  )
+
   /** Map from Docker Compose DynamoDB-protocol endpoint to (host, port) on localhost. */
   private val dynamoEndpointMap: Map[(String, Int), (String, Int)] = Map(
     ("http://dynamodb", 8000) -> ("http://localhost", 8001),
@@ -142,6 +160,8 @@ object SparkUtils {
         c.copy(host = "localhost", port = cqlHostPortMap.getOrElse(c.host, c.port))
       case d: SourceSettings.DynamoDB =>
         d.copy(endpoint = d.endpoint.map(remapEndpoint))
+      case a: SourceSettings.Alternator =>
+        a.copy(alternatorEndpoint = remapEndpoint(a.alternatorEndpoint))
       case p: SourceSettings.Parquet =>
         p.copy(
           path     = remapContainerPath(p.path),
@@ -149,12 +169,19 @@ object SparkUtils {
         )
       case s: SourceSettings.DynamoDBS3Export =>
         s.copy(endpoint = s.endpoint.map(remapEndpoint))
+      case m: SourceSettings.MySQL =>
+        m.copy(
+          host = "localhost",
+          port = mysqlHostPortMap.getOrElse(m.host, m.port)
+        )
     }
     val newTarget = config.target match {
       case s: TargetSettings.Scylla =>
         s.copy(host = "localhost", port = cqlHostPortMap.getOrElse(s.host, s.port))
       case d: TargetSettings.DynamoDB =>
         d.copy(endpoint = d.endpoint.map(remapEndpoint))
+      case a: TargetSettings.Alternator =>
+        a.copy(alternatorEndpoint = remapEndpoint(a.alternatorEndpoint))
       case p: TargetSettings.Parquet =>
         p.copy(path = remapContainerPath(p.path))
       case s: TargetSettings.DynamoDBS3Export =>

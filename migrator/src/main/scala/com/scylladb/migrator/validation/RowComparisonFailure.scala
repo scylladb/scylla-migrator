@@ -6,26 +6,46 @@ import com.scylladb.migrator.alternator.DdbValue
 
 import java.time.temporal.ChronoUnit
 
+/** Represents a single row comparison failure found during validation.
+  *
+  * @param rowRepr
+  *   For most failure types this is the source row's PK representation. For [[Item.ExtraTargetRow]]
+  *   failures, it holds the target row's PK (since no source row exists); the `toString` method
+  *   adjusts the labels accordingly.
+  * @param otherRepr
+  *   The target row's PK representation, or `None` when the target row is missing (or when the
+  *   failure is [[Item.ExtraTargetRow]]).
+  * @param items
+  *   The list of comparison failure details.
+  */
 case class RowComparisonFailure(
   rowRepr: String,
   otherRepr: Option[String],
   items: List[RowComparisonFailure.Item]
 ) {
 
-  override def toString: String =
+  override def toString: String = {
+    val isExtraTarget = items.contains(RowComparisonFailure.Item.ExtraTargetRow)
+    val (srcLabel, tgtLabel) =
+      if (isExtraTarget)
+        ("<N/A - row only exists in target>", rowRepr)
+      else
+        (rowRepr, otherRepr.getOrElse("<MISSING>"))
     s"""
        |Row failure:
-       |* Source row: ${rowRepr}
-       |* Target row: ${otherRepr.getOrElse("<MISSING>")}
+       |* Source row: ${srcLabel}
+       |* Target row: ${tgtLabel}
        |* Failures:
        |${items.map(item => s"  - ${item.description}").mkString("\n")}
      """.stripMargin
+  }
 }
 
 object RowComparisonFailure {
   sealed abstract class Item(val description: String) extends Serializable
   object Item {
     case object MissingTargetRow extends Item("Missing target row")
+    case object ExtraTargetRow extends Item("Extra target row (not present in source)")
     case object MismatchedColumnCount extends Item("Mismatched column count")
     case object MismatchedColumnNames extends Item("Mismatched column names")
     case class DifferingFieldValues(fields: List[String])
@@ -202,16 +222,22 @@ object RowComparisonFailure {
     * @return
     *   `true` if the `leftValue` is different from the `rightValue`
     */
-  private def areDifferent(
+  private[migrator] def areDifferent(
     leftValue: Option[Any],
     rightValue: Option[Any],
     timestampMsTolerance: Long,
     floatingPointTolerance: Double
   ): Boolean =
-    (rightValue, leftValue) match {
+    (leftValue, rightValue) match {
       // All timestamp types need to be compared with a configured tolerance
+      case (Some(l: java.sql.Timestamp), Some(r: java.sql.Timestamp)) if timestampMsTolerance > 0 =>
+        Math.abs(l.getTime - r.getTime) > timestampMsTolerance
+      case (Some(l: java.sql.Timestamp), Some(r: java.sql.Timestamp)) =>
+        l.getTime != r.getTime || l.getNanos != r.getNanos
       case (Some(l: java.time.Instant), Some(r: java.time.Instant)) if timestampMsTolerance > 0 =>
         Math.abs(r.until(l, ChronoUnit.MILLIS)) > timestampMsTolerance
+      case (Some(l: java.time.Instant), Some(r: java.time.Instant)) =>
+        l != r
       // All floating-point-like types need to be compared with a configured tolerance
       case (Some(l: Float), Some(r: Float)) =>
         !DoubleMath.fuzzyEquals(l, r, floatingPointTolerance)
@@ -224,6 +250,8 @@ object RowComparisonFailure {
       // byte buffers are converted to byte arrays by the Spark connector.
       // Arrays can't be compared with standard equality and must be compared
       // with `sameElements`.
+      case (Some(l: Array[Byte]), Some(r: Array[Byte])) =>
+        !java.util.Arrays.equals(l, r)
       case (Some(l: Array[_]), Some(r: Array[_])) =>
         !l.sameElements(r)
 
@@ -259,5 +287,4 @@ object RowComparisonFailure {
     tolerance: BigDecimal
   ): Boolean =
     (x - y).abs > tolerance
-
 }

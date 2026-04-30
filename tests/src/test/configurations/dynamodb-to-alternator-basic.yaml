@@ -10,7 +10,7 @@ source:
     secretKey: dummy
 
 target:
-  type: dynamodb
+  type: alternator
   table: BasicTest
   region: dummy
   endpoint:

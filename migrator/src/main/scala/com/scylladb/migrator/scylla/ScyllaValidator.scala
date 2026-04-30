@@ -73,6 +73,12 @@ object ScyllaValidator {
         sys.error("Missing required property 'validation' in the configuration file.")
       )
 
+    validationConfig.hashColumns.foreach { _ =>
+      log.warn(
+        "hashColumns is only supported for MySQL-to-ScyllaDB validation and will be ignored."
+      )
+    }
+
     val sourceConnector: CassandraConnector =
       Connectors.sourceConnector(spark.sparkContext.getConf, sourceSettings)
     val targetConnector: CassandraConnector =
@@ -151,12 +157,21 @@ object ScyllaValidator {
       val joinKey = (sourceTableDef.partitionKey ++ sourceTableDef.clusteringColumns)
         .map(colDef => ColumnName(config.renamesMap(colDef.columnName)))
 
+      val targetConsistencyLevel =
+        ConsistencyLevelUtils.parseConsistencyLevel(targetSettings.consistencyLevel)
+      log.info(
+        s"Using consistencyLevel [${targetConsistencyLevel}] for VALIDATOR TARGET based on target config [${targetSettings.consistencyLevel}]"
+      )
+
       source
         .leftJoinWithCassandraTable(
           targetSettings.keyspace,
           targetSettings.table,
           SomeColumns(primaryKeyProjection ++ regularColumnsProjection: _*),
-          SomeColumns(joinKey: _*)
+          SomeColumns(joinKey: _*),
+          readConf = ReadConf
+            .fromSparkConf(spark.sparkContext.getConf)
+            .copy(consistencyLevel = targetConsistencyLevel)
         )
         .withConnector(targetConnector)
     }

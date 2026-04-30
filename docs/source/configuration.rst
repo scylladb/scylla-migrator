@@ -29,7 +29,8 @@ The configuration file requires the following top-level properties (ie, with no 
   # Optional - Columns to rename
   renames:
     # ...
-  # Savepoints configuration
+  # Savepoints configuration. Required for resumable migrations.
+  # Omit it for MySQL migrations; MySQL savepoints are not supported.
   savepoints:
     # ...
   # Validator configuration. Required only if the app is executed in validation mode.
@@ -52,7 +53,8 @@ Valid values for the source ``type`` are:
 
 - ``cassandra`` for a CQL-compatible source (Apache Cassandra or ScyllaDB).
 - ``parquet`` for a dataset stored using the Parquet format.
-- ``dynamodb`` for a DynamoDB-compatible source (AWS DynamoDB or ScyllaDB Alternator).
+- ``dynamodb`` for a DynamoDB source.
+- ``alternator`` for a ScyllaDB Alternator source.
 - ``dynamodb-s3-export`` for a DynamoDB table exported to S3.
 
 The following subsections detail the schema of each source type.
@@ -136,17 +138,16 @@ A source of type ``parquet`` can be used together with a target of type ``cassan
 DynamoDB Source
 ^^^^^^^^^^^^^^^
 
-A source of type ``dynamodb`` can be used together with a target of type ``dynamodb`` only.
+A source of type ``dynamodb`` can be used together with a target of type ``dynamodb``, ``alternator``, or ``dynamodb-s3-export``.
 
 .. code-block:: yaml
 
   source:
     type: dynamodb
-    # Name of the table to write. If it does not exist, it will be created on the fly.
+    # Name of the source table to read. The table must already exist.
     table: <table>
-    # Connect to a custom endpoint. Mandatory if writing to ScyllaDB Alternator.
+    # Optional - Connect to a custom endpoint such as DynamoDB Local or LocalStack.
     endpoint:
-      # If writing to ScyllaDB Alternator, prefix the hostname with 'http://'.
       host: <host>
       port: <port>
     # Optional - AWS availability region.
@@ -172,11 +173,57 @@ The properties ``scanSegments`` and ``maxMapTasks`` can have significant impact 
 
 Use ``maxMapTasks`` to cap the parallelism level used by the Spark executor when processing each segment.
 
+^^^^^^^^^^^^^^^^^
+Alternator Source
+^^^^^^^^^^^^^^^^^
+
+A source of type ``alternator`` can be used together with a target of type ``dynamodb`` or ``alternator``.
+
+.. code-block:: yaml
+
+  source:
+    type: alternator
+    table: <table>
+    endpoint:
+      # Alternator endpoints must include the protocol prefix.
+      host: http://<host>
+      port: <port>
+    # Optional - AWS availability region.
+    region: <region>
+    # Optional - Authentication credentials. See the section “AWS Authentication” for more details.
+    credentials:
+      accessKey: <access-key>
+      secretKey: <secret-key>
+    # Optional - Split factor for reading. The default is to split the source data into chunks
+    # of 128 MB that can be processed in parallel by the Spark executors.
+    scanSegments: 1
+    # Optional - Throttling settings, set based on your database read capacity units (or wanted capacity)
+    readThroughput: 1
+    # Optional - Can be between 0.1 and 1.5, inclusively.
+    throughputReadPercent: 1.0
+    # Optional - At most how many tasks per Spark executor? The default is to use the same as 'scanSegments'.
+    maxMapTasks: 1
+    # Optional - Remove consumed capacity headers from requests. Defaults to true for Alternator.
+    removeConsumedCapacity: true
+    # Optional - Alternator-specific routing / client tuning.
+    datacenter: dc1
+    rack: rack1
+    activeRefreshIntervalMs: 1000
+    idleRefreshIntervalMs: 60000
+    compression: false
+    optimizeHeaders: false
+    maxConnections: 400
+    connectionMaxIdleTimeMs: 600000
+    connectionTimeToLiveMs: 0
+    connectionAcquisitionTimeoutMs: 10000
+    connectionTimeoutMs: 15000
+    maxItemsPerBatch: 100
+
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 DynamoDB S3 Export Source
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-A source of type ``dynamodb-s3-export`` can be used together with a target of type ``dynamodb`` only.
+A source of type ``dynamodb-s3-export`` can be used together with a target of type ``dynamodb`` or ``alternator``.
 
 .. code-block:: yaml
 
@@ -221,7 +268,8 @@ The ``target`` property describes the type of data to write. It must be an objec
 Valid values for the target ``type`` are:
 
 - ``cassandra`` for a CQL-compatible target (Apache Cassandra or ScyllaDB).
-- ``dynamodb`` for a DynamoDB-compatible target (DynamoDB or ScyllaDB Alternator).
+- ``dynamodb`` for a DynamoDB target.
+- ``alternator`` for a ScyllaDB Alternator target.
 
 The following subsections detail the schema of each target type.
 
@@ -305,7 +353,7 @@ DynamoDB Target
     # If you increase the value above 0.5, spark will increase the request rate; decreasing the value below 0.5 decreases the write request rate.
     # (The actual write rate will vary, depending on factors such as whether there is a uniform key distribution in the DynamoDB table.)
     throughputWritePercent: 1.0
-    # When transferring DynamoDB sources to DynamoDB targets (such as other DynamoDB tables or Alternator tables),
+    # When transferring DynamoDB sources to DynamoDB-like targets (DynamoDB or Alternator),
     # the migrator supports transferring live changes occurring on the source table after transferring an initial
     # snapshot.
     # Please see the documentation page “Stream Changes” for more details about this option.
@@ -313,6 +361,44 @@ DynamoDB Target
     # Optional - When streamChanges is true, skip the initial snapshot transfer and only stream changes.
     # This setting is ignored if streamChanges is false.
     skipInitialSnapshotTransfer: false
+
+^^^^^^^^^^^^^^^^^
+Alternator Target
+^^^^^^^^^^^^^^^^^
+
+.. code-block:: yaml
+
+  target:
+    type: alternator
+    # Name of the table to write. If it does not exist, it will be created on the fly.
+    table: <table>
+    # Alternator endpoints must include the protocol prefix.
+    endpoint:
+      host: http://<host>
+      port: <port>
+    # Optional - Throttling settings, set based on your database write capacity units (or wanted capacity).
+    writeThroughput: 1
+    # Optional - Can be between 0.1 and 1.5, inclusively.
+    throughputWritePercent: 1.0
+    # Please see the documentation page “Stream Changes” for more details about this option.
+    streamChanges: false
+    # Optional - When streamChanges is true, skip the initial snapshot transfer and only stream changes.
+    skipInitialSnapshotTransfer: false
+    # Optional - Remove consumed capacity headers from requests. Defaults to true for Alternator.
+    removeConsumedCapacity: true
+    # Optional - Alternator-specific routing / client tuning.
+    datacenter: dc1
+    rack: rack1
+    activeRefreshIntervalMs: 1000
+    idleRefreshIntervalMs: 60000
+    compression: false
+    optimizeHeaders: false
+    maxConnections: 400
+    connectionMaxIdleTimeMs: 600000
+    connectionTimeToLiveMs: 0
+    connectionAcquisitionTimeoutMs: 10000
+    connectionTimeoutMs: 15000
+    maxItemsPerBatch: 100
 
 -------
 Renames
@@ -333,7 +419,15 @@ The optional ``renames`` property lists the item columns to rename along the mig
 Savepoints
 ----------
 
-When migrating data from Apache Cassandra or DynamoDB, the migrator is able to :doc:`resume an interrupted migration </resume-interrupted-migration>`. To achieve this, it stores so-called “savepoints” along the process to remember which data items have already been migrated and should be skipped when the migration is restarted.
+For resumable sources, the migrator is able to :doc:`resume an interrupted migration </resume-interrupted-migration>`.
+To achieve this, it stores so-called “savepoints” along the process to remember which data items
+have already been migrated and should be skipped when the migration is restarted.
+
+This section must be omitted for MySQL migrations. MySQL savepoints are not supported: Spark JDBC
+reads do not expose durable per-range progress for MySQL, and partitioned reads use multiple
+independent JDBC statements instead of one resumable snapshot. If a MySQL migration is interrupted,
+it must be restarted from the beginning. For large tables, ensure the target schema uses idempotent
+writes so that re-running the migration is safe.
 
 .. code-block:: yaml
 
@@ -350,6 +444,11 @@ Validation
 
 The ``validation`` field and its properties are mandatory only when the application is executed in :doc:`validation mode </validate>`.
 
+When validating MySQL-to-ScyllaDB migrations, ensure that writes have stopped on both sides before
+starting the validator. The current implementation may issue multiple reads over time and therefore
+does not provide a single global point-in-time snapshot while the source or target table is still
+changing.
+
 .. code-block:: yaml
 
   validation:
@@ -365,6 +464,13 @@ The ``validation`` field and its properties are mandatory only when the applicat
     floatingPointTolerance: 0.001
     # What difference in ms should we allow between timestamps?
     timestampMsTolerance: 0
+    # Optional - columns to compare via a content hash for MySQL-to-ScyllaDB validation.
+    # Use source-side column names; renames are applied automatically.
+    # This reduces Spark-side join/shuffle volume, but the validator still reads the
+    # original payload columns from MySQL and ScyllaDB before hashing.
+    hashColumns:
+      - large_text_column
+      - blob_column
 
 .. _aws-authentication:
 

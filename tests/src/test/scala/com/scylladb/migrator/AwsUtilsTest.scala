@@ -10,6 +10,21 @@ import software.amazon.awssdk.services.dynamodb.DynamoDbClient
 
 class AwsUtilsTest extends munit.FunSuite {
 
+  test("protocol-less endpoint host is normalized to an absolute URI") {
+    val normalized = AwsUtils.endpointUri(DynamoDBEndpoint("my-dynamodb-host", 8000))
+    assertEquals(normalized.toString, "http://my-dynamodb-host:8000")
+  }
+
+  test("endpoint URI keeps protocol when already present") {
+    val normalized = AwsUtils.endpointUri(DynamoDBEndpoint("http://dynamodb", 8000))
+    assertEquals(normalized.toString, "http://dynamodb:8000")
+  }
+
+  test("endpoint URI keeps uppercase protocol when already present") {
+    val normalized = AwsUtils.endpointUri(DynamoDBEndpoint("HTTPS://dynamodb", 8000))
+    assertEquals(normalized.toString, "HTTPS://dynamodb:8000")
+  }
+
   // --- Section 1: configureClientBuilder ---
 
   test("Endpoint override is applied when provided") {

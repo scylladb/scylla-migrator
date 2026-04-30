@@ -11,7 +11,7 @@ source:
   scanSegments: 3
 
 target:
-  type: dynamodb
+  type: alternator
   table: SkippedSegments
   region: dummy
   endpoint:
