@@ -7,6 +7,7 @@ import io.circe.syntax._
 import io.circe.yaml.parser
 import io.circe.yaml.syntax._
 import io.circe.{ Decoder, DecodingFailure, Encoder, Error, Json }
+import scala.util.Using
 
 case class MigratorConfig(
   source: SourceSettings,
@@ -48,11 +49,31 @@ object MigratorConfig {
     } yield result
   }
 
-  implicit val migratorConfigDecoder: Decoder[MigratorConfig] = deriveDecoder[MigratorConfig]
+  implicit val migratorConfigDecoder: Decoder[MigratorConfig] =
+    deriveDecoder[MigratorConfig].emap { config =>
+      (config.source, config.target) match {
+        case (_: SourceSettings.Alternator, t: TargetSettings.DynamoDBLike) if t.streamChanges =>
+          Left(
+            "'streamChanges: true' is not supported when the source is an Alternator table. " +
+              "Scylla Alternator does not support DynamoDB Streams."
+          )
+        case (_: SourceSettings.Alternator, _: TargetSettings.DynamoDBS3Export) =>
+          Left(
+            "A source of type 'alternator' is not supported with target type 'dynamodb-s3-export'. " +
+              "DynamoDB S3 export output is only supported when the source is AWS DynamoDB."
+          )
+        case (_: SourceSettings.DynamoDBS3Export, t: TargetSettings.DynamoDBLike)
+            if t.streamChanges =>
+          Left(
+            "'streamChanges: true' is not supported when the source is a DynamoDB S3 export."
+          )
+        case _ => Right(config)
+      }
+    }
   implicit val migratorConfigEncoder: Encoder[MigratorConfig] = deriveEncoder[MigratorConfig]
 
   def loadFrom(path: String): MigratorConfig = {
-    val configData = scala.io.Source.fromFile(path).mkString
+    val configData = Using.resource(scala.io.Source.fromFile(path))(_.mkString)
 
     parser
       .parse(configData)
