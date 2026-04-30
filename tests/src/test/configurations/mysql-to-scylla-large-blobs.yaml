@@ -1,0 +1,63 @@
+# Example configuration for migrating MySQL tables with large BLOB columns (up to 100MB+).
+# This is NOT used by automated tests. It serves as a reference template for operators.
+# The hosts below (mysql-host, scylla-host) are placeholders that must be replaced with
+# actual hostnames or Docker Compose service names.
+#
+# Required ScyllaDB cluster settings (scylla.yaml):
+#   commitlog_segment_size_in_mb: 256
+#   compaction_large_row_warning_threshold_mb: 128
+#   compaction_large_cell_warning_threshold_mb: 128
+#
+# Recommended spark-submit settings:
+#   --conf spark.executor.memory=8g
+#   --conf spark.driver.memory=4g
+#   --conf spark.kryoserializer.buffer.max=128m
+#   --conf spark.cassandra.output.batch.size.bytes=1
+#   --conf spark.cassandra.output.batch.grouping.key=none
+#   --conf spark.cassandra.output.concurrent.writes=2
+
+source:
+  type: mysql
+  host: mysql-host
+  port: 3306
+  database: mydb
+  table: documents
+  credentials:
+    username: migrator
+    password: secret
+  primaryKey:
+    - id
+  partitionColumn: id
+  numPartitions: 200
+  lowerBound: 0
+  upperBound: 100000000
+  # Keep fetchSize low for BLOB-heavy tables to limit memory per batch.
+  fetchSize: 100
+  # Override maxAllowedPacket if your BLOBs exceed 256MB (default).
+  # connectionProperties:
+  #   maxAllowedPacket: "536870912"
+
+target:
+  type: scylla
+  host: scylla-host
+  port: 9042
+  localDC: datacenter1
+  credentials:
+    username: scylla_user
+    password: scylla_pass
+  keyspace: myks
+  table: documents
+  consistencyLevel: LOCAL_QUORUM
+  connections: 16
+  stripTrailingZerosForDecimals: false
+
+validation:
+  compareTimestamps: false
+  ttlToleranceMillis: 0
+  writetimeToleranceMillis: 0
+  failuresToFetch: 100
+  floatingPointTolerance: 0.001
+  timestampMsTolerance: 1000
+  hashColumns:
+    - content
+    - content_html

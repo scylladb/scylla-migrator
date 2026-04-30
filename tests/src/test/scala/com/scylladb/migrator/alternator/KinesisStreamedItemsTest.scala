@@ -29,10 +29,10 @@ import scala.util.chaining.scalaUtilChainingOps
   *   - `AWS_REGION=<region>` — required by `MigratorSuiteWithAWS`
   *   - AWS credentials (environment or `~/.aws/credentials`; handled by `MigratorSuiteWithAWS`)
   *
-  * In CI (where the env var is not set), the test body short-circuits on the first line so the rest
-  * of the test matrix keeps running without flakiness. `MigratorSuiteWithAWS.beforeAll` still runs
-  * and attempts to read `AWS_REGION`; skipping only the test body avoids a build-stalling failure
-  * when `AWS_REGION` is unset in CI.
+  * In CI the `@Category(Integration, AWS)` annotation on `MigratorSuiteWithAWS` excludes this suite
+  * entirely from unit-test runs (`--exclude-categories=...Integration`), so `beforeAll` (which
+  * reads `AWS_REGION`) never executes. The `KINESIS_LIVE_TEST` gate in the test body is a secondary
+  * safeguard for manual or integration runs where the env var may be absent.
   */
 class KinesisStreamedItemsTest extends MigratorSuiteWithAWS {
 

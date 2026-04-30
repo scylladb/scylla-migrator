@@ -109,10 +109,10 @@ object AlternatorMigrator {
       if (exportStartTime.isEmpty) {
         log.warn(
           "S3 export manifest does not contain 'exportTime' or 'startTime'; the Kinesis " +
-            "AT_TIMESTAMP will fall back to 'Instant.now()' at the moment streaming begins. " +
-            "This means any writes between when the export was produced and now will be LOST. " +
-            "If you need to replay those writes, set `streamChanges.initialTimestamp` " +
-            "explicitly to the export's creation time."
+            "AT_TIMESTAMP will fall back to 'Instant.now()' when the migrator starts (before " +
+            "the snapshot write phase). This means any writes between when the export was " +
+            "produced and that captured timestamp may be LOST. If you need to replay those " +
+            "writes, set `streamChanges.initialTimestamp` explicitly to the export's creation time."
         )
       } else {
         log.info(
