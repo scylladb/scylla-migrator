@@ -34,7 +34,7 @@ object TargetSettings {
     def table: String
     def writeThroughput: Option[Int]
     def throughputWritePercent: Option[Float]
-    def streamChanges: Boolean
+    def streamChanges: StreamChangesSetting
     def skipInitialSnapshotTransfer: Option[Boolean]
 
     /** Whether to strip `ConsumedCapacity` from DynamoDB responses.
@@ -58,7 +58,7 @@ object TargetSettings {
     table: String,
     writeThroughput: Option[Int],
     throughputWritePercent: Option[Float],
-    streamChanges: Boolean,
+    streamChanges: StreamChangesSetting,
     skipInitialSnapshotTransfer: Option[Boolean],
     billingMode: Option[BillingMode] = None
   ) extends DynamoDBLike {
@@ -73,7 +73,7 @@ object TargetSettings {
     table: String,
     writeThroughput: Option[Int],
     throughputWritePercent: Option[Float],
-    streamChanges: Boolean,
+    streamChanges: StreamChangesSetting,
     skipInitialSnapshotTransfer: Option[Boolean],
     removeConsumedCapacity: Boolean = true,
     billingMode: Option[BillingMode] = None,
@@ -161,7 +161,7 @@ object TargetSettings {
             table                  <- cursor.get[String]("table")
             writeThroughput        <- cursor.get[Option[Int]]("writeThroughput")
             throughputWritePercent <- cursor.get[Option[Float]]("throughputWritePercent")
-            streamChanges          <- cursor.get[Boolean]("streamChanges")
+            streamChanges          <- cursor.get[StreamChangesSetting]("streamChanges")
             skipInitialSnapshotTransfer <-
               cursor.get[Option[Boolean]]("skipInitialSnapshotTransfer")
             // Default to true for Alternator (Scylla doesn't support ConsumedCapacity).

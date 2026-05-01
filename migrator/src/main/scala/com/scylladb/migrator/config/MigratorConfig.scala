@@ -74,11 +74,11 @@ object MigratorConfig {
         else {
           (decoded.source, decoded.target) match {
             case (_: SourceSettings.Alternator, t: TargetSettings.DynamoDBLike)
-                if t.streamChanges =>
+                if t.streamChanges.isEnabled =>
               Left(
                 DecodingFailure(
-                  "'streamChanges: true' is not supported when the source is an Alternator table. " +
-                    "Scylla Alternator does not support DynamoDB Streams.",
+                  "'streamChanges' streaming replication is not supported when the source is an Alternator table. " +
+                    "Scylla Alternator does not support DynamoDB Streams or AWS-side Kinesis publishing from the source.",
                   cursor.history
                 )
               )
@@ -90,14 +90,29 @@ object MigratorConfig {
                   cursor.history
                 )
               )
-            case (_: SourceSettings.DynamoDBS3Export, t: TargetSettings.DynamoDBLike)
-                if t.streamChanges =>
-              Left(
-                DecodingFailure(
-                  "'streamChanges: true' is not supported when the source is a DynamoDB S3 export.",
-                  cursor.history
-                )
-              )
+            case (s: SourceSettings.DynamoDBS3Export, t: TargetSettings.DynamoDBLike) =>
+              t.streamChanges match {
+                case StreamChangesSetting.DynamoDBStreams =>
+                  Left(
+                    DecodingFailure(
+                      "'streamChanges' with DynamoDB Streams is not supported when the source is a DynamoDB S3 export. " +
+                        "Use Kinesis Data Streams (`type: kinesis` and `streamArn`) together with `source.streamSource` " +
+                        "for the live DynamoDB table instead. See docs/source/stream-changes.rst.",
+                      cursor.history
+                    )
+                  )
+                case _: StreamChangesSetting.KinesisDataStreams if s.streamSource.isEmpty =>
+                  Left(
+                    DecodingFailure(
+                      "When the source is dynamodb-s3-export and target streamChanges uses Kinesis, " +
+                        "`source.streamSource` must be set to the live DynamoDB table whose changes should be replayed. " +
+                        "See docs/source/stream-changes.rst.",
+                      cursor.history
+                    )
+                  )
+                case _ =>
+                  Right(decoded)
+              }
             case _ => Right(decoded)
           }
         }
