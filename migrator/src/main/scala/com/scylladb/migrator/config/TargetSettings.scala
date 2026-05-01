@@ -221,11 +221,28 @@ object TargetSettings {
     errors.result()
   }
 
+  private def validateScyllaTarget(t: Scylla): List[String] =
+    HostValidation.validateHostOrIp("Scylla target", t.host) ++
+      HostValidation.validatePort("Scylla target", t.port)
+
   implicit val decoder: Decoder[TargetSettings] =
     Decoder.instance { cursor =>
       cursor.get[String]("type").flatMap {
         case "scylla" | "cassandra" =>
-          Scylla.decoder.apply(cursor)
+          Scylla.decoder.apply(cursor).flatMap { s =>
+            if (s.cloud.isDefined) Right(s)
+            else {
+              val allErrors = validateScyllaTarget(s)
+              if (allErrors.nonEmpty)
+                Left(
+                  DecodingFailure(
+                    s"Target type 'scylla': ${allErrors.mkString("; ")}",
+                    cursor.history
+                  )
+                )
+              else Right(s)
+            }
+          }
         case "dynamodb" | "dynamo" =>
           AlternatorSettings.guardDynamoDBType(cursor, "Target").flatMap { _ =>
             deriveDecoder[DynamoDB].apply(cursor).flatMap { d =>

@@ -5,14 +5,19 @@ import com.scylladb.migrator.config._
 import com.scylladb.migrator.scylla.ScyllaMigrator
 import org.apache.logging.log4j.{ Level, LogManager }
 import org.apache.logging.log4j.core.config.Configurator
+import org.apache.spark.SparkConf
 import org.apache.spark.sql._
 
 object Migrator {
   val log = LogManager.getLogger("com.scylladb.migrator")
 
   def main(args: Array[String]): Unit = {
+    val sparkConf = new SparkConf()
+    SparkSecretRedaction.ensureMigratorRedactionRegex(sparkConf)
+
     implicit val spark: SparkSession = SparkSession
       .builder()
+      .config(sparkConf)
       .appName("scylla-migrator")
       .config("spark.task.maxFailures", "1024")
       .config("spark.stage.maxConsecutiveAttempts", "60")

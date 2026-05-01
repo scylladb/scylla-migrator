@@ -30,20 +30,20 @@ import scala.util.Try
   */
 case class DynamoDBEndpoint(host: String, port: Int) {
   def renderEndpoint: String = {
-    val trimmedHost = host.stripSuffix("/")
-    val lowerHost = trimmedHost.toLowerCase(java.util.Locale.ROOT)
-    val endpointHost =
-      if (lowerHost.startsWith("http://") || lowerHost.startsWith("https://"))
-        trimmedHost
-      else
-        s"http://${trimmedHost}"
+    val errors = HostValidation.validateEndpoint("DynamoDB", host, port)
+    require(errors.isEmpty, errors.mkString("; "))
+    val endpointHost = HostValidation.renderEndpointHost(host)
     s"${endpointHost}:${port}"
   }
 }
 
 object DynamoDBEndpoint {
   implicit val encoder: Encoder[DynamoDBEndpoint] = deriveEncoder[DynamoDBEndpoint]
-  implicit val decoder: Decoder[DynamoDBEndpoint] = deriveDecoder[DynamoDBEndpoint]
+  implicit val decoder: Decoder[DynamoDBEndpoint] =
+    deriveDecoder[DynamoDBEndpoint].emap { endpoint =>
+      val errors = HostValidation.validateEndpoint("DynamoDB", endpoint.host, endpoint.port)
+      Either.cond(errors.isEmpty, endpoint, errors.mkString("; "))
+    }
 }
 
 sealed trait SourceSettings
@@ -559,10 +559,27 @@ object SourceSettings {
     errors.result()
   }
 
+  private def validateCassandraSource(s: Cassandra): List[String] =
+    HostValidation.validateHostOrIp("Cassandra source", s.host) ++
+      HostValidation.validatePort("Cassandra source", s.port)
+
   implicit val decoder: Decoder[SourceSettings] = Decoder.instance { cursor =>
     cursor.get[String]("type").flatMap {
       case "cassandra" | "scylla" =>
-        Cassandra.decoder.apply(cursor)
+        Cassandra.decoder.apply(cursor).flatMap { c =>
+          if (c.cloud.isDefined) Right(c)
+          else {
+            val allErrors = validateCassandraSource(c)
+            if (allErrors.nonEmpty)
+              Left(
+                DecodingFailure(
+                  s"Source type 'cassandra': ${allErrors.mkString("; ")}",
+                  cursor.history
+                )
+              )
+            else Right(c)
+          }
+        }
       case "parquet" =>
         deriveDecoder[Parquet].apply(cursor)
       case "dynamo" | "dynamodb" =>

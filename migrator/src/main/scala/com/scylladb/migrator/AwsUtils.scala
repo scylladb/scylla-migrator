@@ -84,6 +84,8 @@ object AwsUtils {
 
 /** Bare AWS credentials */
 case class AWSCredentials(accessKey: String, secretKey: String, maybeSessionToken: Option[String]) {
+  override def toString: String =
+    s"AWSCredentials(<redacted>, <redacted>, ${maybeSessionToken.map(_ => "<redacted>")})"
 
   /** Convenient method to use our credentials with the AWS SDK */
   def toProvider: AwsCredentialsProvider = {

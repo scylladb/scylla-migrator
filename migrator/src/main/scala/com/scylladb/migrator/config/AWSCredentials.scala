@@ -4,7 +4,8 @@ import io.circe.{ Decoder, Encoder }
 import io.circe.generic.semiauto.{ deriveDecoder, deriveEncoder }
 
 case class AWSCredentials(accessKey: String, secretKey: String, assumeRole: Option[AWSAssumeRole]) {
-  override def toString: String = s"AWSCredentials(${accessKey.take(3)}..., <redacted>)"
+  override def toString: String =
+    s"AWSCredentials(<redacted>, <redacted>, ${assumeRole.map(_ => "<configured>")})"
 }
 object AWSCredentials {
   implicit val decoder: Decoder[AWSCredentials] = deriveDecoder
