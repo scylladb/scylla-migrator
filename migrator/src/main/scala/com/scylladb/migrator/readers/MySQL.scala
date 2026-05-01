@@ -1,6 +1,11 @@
 package com.scylladb.migrator.readers
 
-import com.scylladb.migrator.config.{ HostValidation, SensitiveKeys, SourceSettings }
+import com.scylladb.migrator.config.{
+  HostValidation,
+  SensitiveKeys,
+  SourceSettings,
+  SparkSecretRedaction
+}
 import com.scylladb.migrator.scylla.SourceDataFrame
 import org.apache.logging.log4j.LogManager
 import org.apache.spark.sql.catalyst.util.DateTimeUtils.{
@@ -68,29 +73,15 @@ object MySQL {
   private[readers] def redactionRegexCoversKeys(
     regex: String,
     keys: Seq[String]
-  ): Boolean = {
-    val pattern = regex.r.pattern
-    keys.forall(key => pattern.matcher(key).find())
-  }
+  ): Boolean =
+    SparkSecretRedaction.redactionRegexCoversKeys(regex, keys)
 
   private[readers] def ensureSensitiveReaderOptionsAreRedacted(
     spark: SparkSession,
     optionKeys: Seq[String],
     context: String
-  ): Unit = {
-    val sensitiveKeys = optionKeys.distinct.filter(isSensitiveOptionKey)
-    if (sensitiveKeys.nonEmpty) {
-      val redactionRegex = spark.conf
-        .getOption("spark.redaction.regex")
-        .filter(_.trim.nonEmpty)
-        .getOrElse(DefaultSensitiveRedactionRegex)
-
-      require(
-        redactionRegexCoversKeys(redactionRegex, sensitiveKeys),
-        s"Refusing to create $context because spark.redaction.regex does not redact all sensitive option keys: ${sensitiveKeys.mkString(", ")}"
-      )
-    }
-  }
+  ): Unit =
+    SparkSecretRedaction.ensureKeysRedacted(spark, optionKeys, context)
 
   private def normalizedPartitionColumnName(column: String): String =
     if (column.startsWith("`") && column.endsWith("`"))

@@ -7,6 +7,7 @@ import com.scylladb.migrator.config.{
   AlternatorSettings,
   DynamoDBEndpoint,
   SourceSettings,
+  SparkSecretRedaction,
   TargetSettings
 }
 import org.apache.hadoop.conf.{ Configurable, Configuration }
@@ -500,7 +501,8 @@ object DynamoUtils {
     maybeMaxMapTasks: Option[Int],
     maybeAwsCredentials: Option[AWSCredentials],
     removeConsumedCapacity: Boolean = false,
-    alternatorSettings: Option[AlternatorSettings] = None
+    alternatorSettings: Option[AlternatorSettings] = None,
+    redactionRegex: Option[String] = None
   ): Unit = {
     for (region <- maybeRegion) {
       log.info(s"Using AWS region: ${region}")
@@ -513,6 +515,18 @@ object DynamoUtils {
     setOptionalConf(jobConf, DynamoDBConstants.SCAN_SEGMENTS, maybeScanSegments.map(_.toString))
     setOptionalConf(jobConf, DynamoDBConstants.MAX_MAP_TASKS, maybeMaxMapTasks.map(_.toString))
     for (credentials <- maybeAwsCredentials) {
+      val credentialKeys = Seq(
+        DynamoDBConstants.DYNAMODB_ACCESS_KEY_CONF,
+        DynamoDBConstants.DYNAMODB_SECRET_KEY_CONF
+      ) ++ credentials.maybeSessionToken
+        .map(_ => DynamoDBConstants.DYNAMODB_SESSION_TOKEN_CONF)
+        .toSeq
+
+      SparkSecretRedaction.ensureKeysRedacted(
+        redactionRegex,
+        credentialKeys,
+        "DynamoDB Hadoop job configuration"
+      )
       jobConf.set(DynamoDBConstants.DYNAMODB_ACCESS_KEY_CONF, credentials.accessKey)
       jobConf.set(DynamoDBConstants.DYNAMODB_SECRET_KEY_CONF, credentials.secretKey)
       for (sessionToken <- credentials.maybeSessionToken)
