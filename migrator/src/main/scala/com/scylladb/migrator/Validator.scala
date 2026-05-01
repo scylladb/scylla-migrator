@@ -1,10 +1,16 @@
 package com.scylladb.migrator
 
 import com.scylladb.migrator.alternator.AlternatorValidator
-import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
+import com.scylladb.migrator.config.{
+  MigratorConfig,
+  SourceSettings,
+  SparkSecretRedaction,
+  TargetSettings
+}
 import com.scylladb.migrator.validation.RowComparisonFailure
 import org.apache.logging.log4j.{ Level, LogManager }
 import org.apache.logging.log4j.core.config.Configurator
+import org.apache.spark.SparkConf
 import org.apache.spark.sql.SparkSession
 import com.scylladb.migrator.scylla.{ MySQLToScyllaValidator, ScyllaValidator }
 
@@ -32,8 +38,12 @@ object Validator {
     }
 
   def main(args: Array[String]): Unit = {
+    val sparkConf = new SparkConf()
+    SparkSecretRedaction.ensureMigratorRedactionRegex(sparkConf)
+
     implicit val spark = SparkSession
       .builder()
+      .config(sparkConf)
       .appName("scylla-validator")
       .config("spark.task.maxFailures", "1024")
       .config("spark.stage.maxConsecutiveAttempts", "60")

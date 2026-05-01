@@ -14,7 +14,20 @@ case class SSLOptions(
   trustStorePassword: Option[String],
   trustStorePath: Option[String],
   trustStoreType: Option[String]
-)
+) {
+  override def toString: String =
+    "SSLOptions(" +
+      s"$clientAuthEnabled," +
+      s"$enabled," +
+      s"$enabledAlgorithms," +
+      s"${keyStorePassword.map(_ => "<redacted>")}," +
+      s"$keyStorePath," +
+      s"$keyStoreType," +
+      s"$protocol," +
+      s"${trustStorePassword.map(_ => "<redacted>")}," +
+      s"$trustStorePath," +
+      s"$trustStoreType)"
+}
 
 object SSLOptions {
   implicit val encoder: Encoder[SSLOptions] = deriveEncoder[SSLOptions]

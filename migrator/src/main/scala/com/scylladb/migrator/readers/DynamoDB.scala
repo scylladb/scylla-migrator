@@ -2,7 +2,12 @@ package com.scylladb.migrator.readers
 
 import com.scylladb.migrator.{ AWSCredentials, DynamoUtils }
 import com.scylladb.migrator.DynamoUtils.{ setDynamoDBJobConf, setOptionalConf }
-import com.scylladb.migrator.config.{ AlternatorSettings, DynamoDBEndpoint, SourceSettings }
+import com.scylladb.migrator.config.{
+  AlternatorSettings,
+  DynamoDBEndpoint,
+  SourceSettings,
+  SparkSecretRedaction
+}
 import org.apache.hadoop.dynamodb.read.DynamoDBInputFormat
 import org.apache.hadoop.dynamodb.{ DynamoDBConstants, DynamoDBItemWritable }
 import org.apache.hadoop.io.Text
@@ -145,7 +150,8 @@ object DynamoDB {
       maxMapTasks,
       credentials,
       removeConsumedCapacity,
-      alternatorSettings
+      alternatorSettings,
+      SparkSecretRedaction.redactionRegex(spark)
     )
     jobConf.set(DynamoDBConstants.INPUT_TABLE_NAME, table)
     setOptionalConf(jobConf, DynamoDBConstants.ITEM_COUNT, maybeItemCount.map(_.toString))
