@@ -22,6 +22,7 @@ case class MigratorConfig(
 ) {
   def render: String = this.asJson.asYaml.spaces2
   def renderRedacted: String = MigratorConfig.redactSecrets(this.asJson).asYaml.spaces2
+  override def toString: String = renderRedacted
 
   def getRenamesOrNil: List[Rename] = renames.getOrElse(Nil)
 
@@ -140,12 +141,9 @@ object MigratorConfig {
       )
     }
 
-  private def isMySQLSourceObject(obj: JsonObject): Boolean =
-    obj("type").flatMap(_.asString).contains("mysql")
-
-  private def shouldRedactValue(key: String, value: Json, obj: JsonObject): Boolean =
+  private def shouldRedactValue(key: String, value: Json): Boolean =
     value.isString && (SensitiveKeys
-      .isSensitiveKey(key) || (key == "where" && isMySQLSourceObject(obj)))
+      .isSensitiveKey(key) || key == "where")
 
   private[config] def redactSecrets(json: Json): Json =
     json.arrayOrObject(
@@ -155,7 +153,7 @@ object MigratorConfig {
         Json.fromJsonObject(
           obj.toIterable.foldLeft(JsonObject.empty) { case (acc, (key, value)) =>
             val updatedValue =
-              if (shouldRedactValue(key, value, obj))
+              if (shouldRedactValue(key, value))
                 Json.fromString(RedactedValue)
               else
                 redactSecrets(value)

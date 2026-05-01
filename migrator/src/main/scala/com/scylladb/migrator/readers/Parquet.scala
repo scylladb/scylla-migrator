@@ -1,6 +1,11 @@
 package com.scylladb.migrator.readers
 
-import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
+import com.scylladb.migrator.config.{
+  MigratorConfig,
+  SourceSettings,
+  SparkSecretRedaction,
+  TargetSettings
+}
 import com.scylladb.migrator.scylla.{ ScyllaMigrator, ScyllaParquetMigrator, SourceDataFrame }
 import org.apache.logging.log4j.LogManager
 import org.apache.spark.sql.{ AnalysisException, SparkSession }
@@ -92,6 +97,9 @@ object Parquet {
 
         ScyllaParquetMigrator.migrate(config, target, sourceDF, savepointsManager)
 
+        // Listener events can trail the completed Spark action; a successful write means every
+        // selected file was consumed, so make the final savepoint deterministic.
+        filesToProcess.foreach(savepointsManager.markFileAsProcessed)
         savepointsManager.dumpMigrationState("completed")
 
         log.info(
@@ -161,12 +169,26 @@ object Parquet {
     source: SourceSettings.Parquet
   ): Unit =
     source.finalCredentials.foreach { credentials =>
+      val credentialOptions =
+        Seq(
+          "fs.s3a.access.key" -> credentials.accessKey,
+          "fs.s3a.secret.key" -> credentials.secretKey
+        ) ++ credentials.maybeSessionToken.toSeq.map { sessionToken =>
+          "fs.s3a.session.token" -> sessionToken
+        }
+
+      SparkSecretRedaction.ensureKeysRedacted(
+        spark,
+        credentialOptions.map(_._1),
+        "Parquet S3A Hadoop configuration"
+      )
       log.info("Loaded AWS credentials from config file")
       source.region.foreach { region =>
         spark.sparkContext.hadoopConfiguration.set("fs.s3a.endpoint.region", region)
       }
-      spark.sparkContext.hadoopConfiguration.set("fs.s3a.access.key", credentials.accessKey)
-      spark.sparkContext.hadoopConfiguration.set("fs.s3a.secret.key", credentials.secretKey)
+      credentialOptions.foreach { case (key, value) =>
+        spark.sparkContext.hadoopConfiguration.set(key, value)
+      }
       credentials.maybeSessionToken.foreach { sessionToken =>
         spark.sparkContext.hadoopConfiguration.set(
           "fs.s3a.aws.credentials.provider",

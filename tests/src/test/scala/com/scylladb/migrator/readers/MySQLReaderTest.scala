@@ -1,18 +1,29 @@
 package com.scylladb.migrator.readers
 
-import com.scylladb.migrator.config.{ Credentials, HostValidation, SourceSettings }
+import com.scylladb.migrator.config.{
+  Credentials,
+  HostValidation,
+  SourceSettings,
+  SparkSecretRedaction
+}
+import org.apache.spark.SparkConf
 import org.apache.spark.sql.SparkSession
 
 import java.util.Locale
 
 class MySQLReaderTest extends munit.FunSuite {
 
-  private lazy val spark: SparkSession = SparkSession
-    .builder()
-    .master("local[1]")
-    .appName("MySQLReaderTest")
-    .config("spark.ui.enabled", "false")
-    .getOrCreate()
+  private lazy val spark: SparkSession = {
+    val sparkConf = new SparkConf(false)
+    SparkSecretRedaction.ensureMigratorRedactionRegex(sparkConf)
+    SparkSession
+      .builder()
+      .config(sparkConf)
+      .master("local[1]")
+      .appName("MySQLReaderTest")
+      .config("spark.ui.enabled", "false")
+      .getOrCreate()
+  }
 
   override def afterAll(): Unit = {
     spark.stop()
