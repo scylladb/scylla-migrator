@@ -4,7 +4,7 @@ import com.datastax.spark.connector._
 import com.datastax.spark.connector.cql.{ Schema, TableDef }
 import com.datastax.spark.connector.rdd.ReadConf
 import com.datastax.spark.connector.rdd.partitioner.dht.Token
-import com.datastax.spark.connector.types.CassandraOption
+import com.datastax.spark.connector.types.{ CassandraOption, CounterType }
 import com.scylladb.migrator.Connectors
 import com.scylladb.migrator.config.{ CopyType, SourceSettings }
 import org.apache.logging.log4j.LogManager
@@ -28,6 +28,9 @@ object Cassandra {
     timestampColumns: Option[TimestampColumns]
   )
 
+  def hasCounterColumns(tableDef: TableDef): Boolean =
+    tableDef.columns.exists(_.columnType == CounterType)
+
   def determineCopyType(
     tableDef: TableDef,
     preserveTimesRequest: Boolean
@@ -38,7 +41,12 @@ object Cassandra {
           "TTL/Writetime preservation is unsupported for tables with collection types. Please check in your config the option 'preserveTimestamps' and set it to false to continue."
         )
       )
-    else if (preserveTimesRequest && tableDef.regularColumns.nonEmpty)
+    else if (hasCounterColumns(tableDef) && preserveTimesRequest) {
+      log.warn(
+        "Counter columns detected - disabling timestamp preservation (counters do not support USING TIMESTAMP)"
+      )
+      Right(CopyType.NoTimestampPreservation)
+    } else if (preserveTimesRequest && tableDef.regularColumns.nonEmpty)
       Right(CopyType.WithTimestampPreservation)
     else if (preserveTimesRequest && tableDef.regularColumns.isEmpty) {
       log.warn("No regular columns in the table - disabling timestamp preservation")

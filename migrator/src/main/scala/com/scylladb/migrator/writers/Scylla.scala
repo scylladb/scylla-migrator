@@ -2,7 +2,8 @@ package com.scylladb.migrator.writers
 
 import com.datastax.spark.connector.writer._
 import com.datastax.spark.connector._
-import com.datastax.spark.connector.cql.Schema
+import com.datastax.spark.connector.cql.{ Schema, TableDef }
+import com.datastax.spark.connector.types.CounterType
 import com.scylladb.migrator.Connectors
 import com.scylladb.migrator.config.{ Rename, SourceSettings, TargetSettings }
 import com.scylladb.migrator.readers.TimestampColumns
@@ -121,6 +122,48 @@ object Scylla {
       }
     }
 
+  /** Identify counter column indices in the DataFrame based on the target table definition. Returns
+    * indices of columns whose type is CounterType.
+    */
+  private[writers] def counterColumnIndices(
+    tableDef: TableDef,
+    renames: List[Rename],
+    dfSchema: StructType
+  ): Set[Int] = {
+    val renameMap = renames.map(r => r.to -> r.from).toMap
+    val counterNames = tableDef.columns
+      .filter(_.columnType == CounterType)
+      .map(_.columnName)
+      .toSet
+    val dfFieldNamesLower = dfSchema.fieldNames.zipWithIndex.map { case (name, idx) =>
+      name.toLowerCase(Locale.ROOT) -> idx
+    }.toMap
+    counterNames.flatMap { targetName =>
+      val sourceName = renameMap.getOrElse(targetName, targetName)
+      dfFieldNamesLower.get(sourceName.toLowerCase(Locale.ROOT))
+    }
+  }
+
+  /** Replace null counter values with 0L to avoid "Invalid null value for counter increment"
+    * errors. Rows where all counter columns are null are filtered out entirely.
+    */
+  private[writers] def fixNullCounterValues(
+    rdd: RDD[Row],
+    counterIndices: Set[Int]
+  ): RDD[Row] =
+    rdd
+      .filter { row =>
+        // Drop rows where all counter columns are null (nothing to increment)
+        counterIndices.exists(i => !row.isNullAt(i))
+      }
+      .map { row =>
+        val values = row.toSeq.zipWithIndex.map { case (value, idx) =>
+          if (counterIndices.contains(idx) && value == null) 0L
+          else value
+        }
+        Row.fromSeq(values)
+      }
+
   /** Columns that the Spark Cassandra Connector considers internal and filters from the write path
     * (see `TableWriter.InternalColumns`). If these columns are present in the source DataFrame, the
     * Row will have more values than the connector's `selectedColumns`, causing
@@ -222,6 +265,9 @@ object Scylla {
           })
         }
 
+    val tableDef =
+      connector.withSessionDo(Schema.tableFromCassandra(_, target.keyspace, target.table))
+
     // Optionally filter out rows where any primary key column is null to prevent
     // infinite retries against the target database (see issue #262).
     // Auto-detected from the source type, or overridden via target `dropNullPrimaryKeys`.
@@ -229,8 +275,6 @@ object Scylla {
     log.info(s"Drop null primary key rows: ${dropNullPks}")
     val (finalRdd, nullPkRowsDropped) =
       if (dropNullPks) {
-        val tableDef =
-          connector.withSessionDo(Schema.tableFromCassandra(_, target.keyspace, target.table))
         val targetPkNames = tableDef.primaryKey.map(_.columnName).toSet
 
         val pkResolution = resolvePrimaryKeyColumns(targetPkNames, renames, cleanDf.schema)
@@ -253,7 +297,17 @@ object Scylla {
         (rdd, None)
       }
 
-    finalRdd
+    // Fix null counter values: replace nulls with 0 and drop all-null-counter rows
+    val counterIdxs = counterColumnIndices(tableDef, renames, cleanDf.schema)
+    val writeRdd =
+      if (counterIdxs.nonEmpty) {
+        log.info(
+          s"Counter columns detected at indices: ${counterIdxs.mkString(", ")}. Replacing null values with 0."
+        )
+        fixNullCounterValues(finalRdd, counterIdxs)
+      } else finalRdd
+
+    writeRdd
       .saveToCassandra(
         target.keyspace,
         target.table,
