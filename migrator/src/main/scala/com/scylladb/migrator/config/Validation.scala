@@ -18,6 +18,10 @@ import java.util.Locale
   *   Tolerance for floating-point value comparisons.
   * @param timestampMsTolerance
   *   Tolerance in milliseconds for timestamp comparisons.
+  * @param copyMissingRows
+  *   If true, rows that exist in the source but are missing in the target are copied to the target
+  *   during validation. Only missing rows are copied — rows with value differences are still only
+  *   reported, never overwritten. Defaults to false.
   * @param hashColumns
   *   When set, validation compares these columns via a single content-hash column instead of
   *   joining their raw values. This reduces Spark-side join/shuffle volume, but the current
@@ -32,6 +36,7 @@ case class Validation(
   failuresToFetch: Int,
   floatingPointTolerance: Double,
   timestampMsTolerance: Long,
+  copyMissingRows: Boolean = false,
   hashColumns: Option[List[String]] = None
 )
 object Validation {

@@ -428,6 +428,17 @@ savepoints:
 #   floatingPointTolerance: 0.001
 #   # What difference in ms should we allow between timestamps?
 #   timestampMsTolerance: 0
+#   # If true, rows that exist in the source but are missing in the target will be
+#   # copied to the target during validation. Only missing rows are copied — rows
+#   # with value differences are still only reported, never overwritten.
+#   # Note: for Cassandra/Scylla, copied rows preserve source WRITETIMEs/TTLs
+#   # when timestamp preservation is enabled and supported; otherwise they use
+#   # current/fixed target write settings. A follow-up validation with
+#   # compareTimestamps: true may report writetime mismatches only in the latter
+#   # case. Use compareTimestamps: false for re-validation after such a copy, or
+#   # widen writetimeToleranceMillis accordingly.
+#   # Defaults to false.
+#   copyMissingRows: false
 #   # Optional - columns to hash for MySQL-to-ScyllaDB validation (use source-side names;
 #   # renames are applied automatically). This reduces Spark-side join/shuffle volume,
 #   # but the validator still reads the original payload columns before hashing.

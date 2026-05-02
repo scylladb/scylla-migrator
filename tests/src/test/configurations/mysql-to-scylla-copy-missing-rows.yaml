@@ -1,0 +1,43 @@
+# Integration-test configuration for MySQL-to-ScyllaDB validation with copyMissingRows.
+# The hosts below (mysql, scylla) are Docker Compose service names and are remapped to
+# localhost by SparkUtils when the test suite runs in-process.
+
+source:
+  type: mysql
+  host: mysql
+  port: 3306
+  database: testdb
+  table: users
+  credentials:
+    username: migrator
+    password: migrator
+  primaryKey:
+    - id
+  partitionColumn: created_at
+  numPartitions: 2
+  lowerBound: "2024-01-01 00:00:00"
+  upperBound: "2024-02-01 00:00:00"
+  fetchSize: 100
+
+target:
+  type: scylla
+  host: scylla
+  port: 9042
+  localDC: datacenter1
+  credentials:
+    username: dummy
+    password: dummy
+  keyspace: test
+  table: users
+  consistencyLevel: LOCAL_QUORUM
+  connections: 16
+  stripTrailingZerosForDecimals: false
+
+validation:
+  compareTimestamps: false
+  ttlToleranceMillis: 0
+  writetimeToleranceMillis: 0
+  failuresToFetch: 100
+  floatingPointTolerance: 0.001
+  timestampMsTolerance: 1000
+  copyMissingRows: true
