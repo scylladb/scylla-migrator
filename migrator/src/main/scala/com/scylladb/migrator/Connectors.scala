@@ -1,15 +1,23 @@
 package com.scylladb.migrator
 
-import java.net.{ InetAddress, InetSocketAddress }
+import java.net.InetSocketAddress
 
 import com.datastax.spark.connector.cql.{
   CassandraConnector,
   CassandraConnectorConf,
+  CloudBasedContactInfo,
+  ContactInfo,
   IpBasedContactInfo,
   NoAuthConf,
   PasswordAuthConf
 }
-import com.scylladb.migrator.config.{ Credentials, SSLOptions, SourceSettings, TargetSettings }
+import com.scylladb.migrator.config.{
+  CloudConfig,
+  Credentials,
+  SSLOptions,
+  SourceSettings,
+  TargetSettings
+}
 import org.apache.spark.SparkConf
 
 object Connectors {
@@ -111,6 +119,73 @@ object Connectors {
     }
   }
 
+  /** Build a `CassandraConnectorConf` from a Cassandra source.
+    *
+    * Exposed as `private[migrator]` so unit tests can assert on the resulting `contactInfo` (cloud
+    * bundle vs IP+SSL) without spinning up a real `CassandraConnector` (which would try to open a
+    * session at construction time in some code paths).
+    */
+  private[migrator] def buildSourceConf(
+    sparkConf: SparkConf,
+    sourceSettings: SourceSettings.Cassandra
+  ): CassandraConnectorConf = {
+    val auth = authConf(sourceSettings.credentials)
+    val contact = sourceSettings.cloud match {
+      case Some(cloud) =>
+        cloudContactInfo(cloud, auth)
+      case None =>
+        ipContactInfo(
+          sourceSettings.host,
+          sourceSettings.port,
+          auth,
+          sourceSettings.sslOptions
+        )
+    }
+    CassandraConnectorConf(sparkConf).copy(
+      contactInfo = contact,
+      localDC     = if (sourceSettings.cloud.isDefined) None else sourceSettings.localDC,
+      localConnectionsPerExecutor  = sourceSettings.connections,
+      remoteConnectionsPerExecutor = sourceSettings.connections,
+      queryRetryCount              = -1
+    )
+  }
+
+  /** Mirror of [[buildSourceConf]] for Scylla targets. */
+  private[migrator] def buildTargetConf(
+    sparkConf: SparkConf,
+    targetSettings: TargetSettings.Scylla
+  ): CassandraConnectorConf = {
+    val auth = authConf(targetSettings.credentials)
+    val contact = targetSettings.cloud match {
+      case Some(cloud) =>
+        cloudContactInfo(cloud, auth)
+      case None =>
+        ipContactInfo(
+          targetSettings.host,
+          targetSettings.port,
+          auth,
+          targetSettings.sslOptions
+        )
+    }
+    CassandraConnectorConf(sparkConf).copy(
+      contactInfo = contact,
+      localDC     = if (targetSettings.cloud.isDefined) None else targetSettings.localDC,
+      localConnectionsPerExecutor  = targetSettings.connections,
+      remoteConnectionsPerExecutor = targetSettings.connections,
+      queryRetryCount              = -1
+    )
+  }
+
+  def sourceConnector(sparkConf: SparkConf, sourceSettings: SourceSettings.Cassandra) =
+    new CassandraConnector(buildSourceConf(sparkConf, sourceSettings))
+
+  def targetConnector(sparkConf: SparkConf, targetSettings: TargetSettings.Scylla) =
+    new CassandraConnector(buildTargetConf(sparkConf, targetSettings))
+
+  /** Map optional credentials to the connector's auth model. Missing credentials become
+    * [[NoAuthConf]] rather than a parse-time error — Astra will reject unauthenticated sessions at
+    * connect time, and non-Astra cloud bundles may use mTLS-only auth embedded in the bundle.
+    */
   private def authConf(credentials: Option[Credentials]) =
     credentials match {
       case None                                  => NoAuthConf
@@ -136,27 +211,38 @@ object Connectors {
         )
     }
 
-  private def connector(
-    sparkConf: SparkConf,
-    options: SessionOptions
-  ) =
-    new CassandraConnector(
-      CassandraConnectorConf(sparkConf).copy(
-        contactInfo = IpBasedContactInfo(
-          hosts            = Set(new InetSocketAddress(options.host, options.port)),
-          authConf         = authConf(options.credentials),
-          cassandraSSLConf = cassandraSSLConf(options.sslOptions)
-        ),
-        localDC                      = options.localDC,
-        localConnectionsPerExecutor  = options.connections,
-        remoteConnectionsPerExecutor = options.connections,
-        queryRetryCount              = options.queryRetryCount
-      )
+  /** Build a [[CloudBasedContactInfo]]. The driver opens the bundle on every node that creates a
+    * session, so the path must be reachable from every executor — see [[CloudConfig]] for
+    * deployment guidance.
+    *
+    * Absolute local paths (`/opt/...`) are normalized to `file:///opt/...` URLs because the
+    * connector's `DefaultConnectionFactory.maybeGetLocalFile` falls back to `new URL(path)`, which
+    * requires a scheme — bare absolute paths would throw `MalformedURLException`.
+    */
+  private[migrator] def cloudContactInfo(
+    cloud: CloudConfig,
+    auth: com.datastax.spark.connector.cql.AuthConf
+  ): ContactInfo = {
+    val resolvedPath =
+      if (cloud.secureBundlePath.startsWith("/"))
+        new java.io.File(cloud.secureBundlePath).toURI.toString
+      else cloud.secureBundlePath
+    CloudBasedContactInfo(resolvedPath, auth)
+  }
+
+  private def ipContactInfo(
+    host: String,
+    port: Int,
+    auth: com.datastax.spark.connector.cql.AuthConf,
+    sslOptions: Option[SSLOptions]
+  ): ContactInfo = {
+    val resolvedHost =
+      if (host.startsWith("[") && host.endsWith("]")) host.slice(1, host.length - 1)
+      else host
+    IpBasedContactInfo(
+      hosts            = Set(new InetSocketAddress(resolvedHost, port)),
+      authConf         = auth,
+      cassandraSSLConf = cassandraSSLConf(sslOptions)
     )
-
-  def sourceConnector(sparkConf: SparkConf, sourceSettings: SourceSettings.Cassandra) =
-    connector(sparkConf, sourceSessionOptions(sourceSettings))
-
-  def targetConnector(sparkConf: SparkConf, targetSettings: TargetSettings.Scylla) =
-    connector(sparkConf, targetSessionOptions(targetSettings))
+  }
 }

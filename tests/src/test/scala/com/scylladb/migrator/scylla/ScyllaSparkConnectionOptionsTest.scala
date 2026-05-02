@@ -2,7 +2,7 @@ package com.scylladb.migrator.scylla
 
 import com.datastax.spark.connector.datasource.CassandraSourceUtil
 import com.scylladb.migrator.Connectors
-import com.scylladb.migrator.config.{ Credentials, SSLOptions, TargetSettings }
+import com.scylladb.migrator.config.{ CloudConfig, Credentials, SSLOptions, TargetSettings }
 import org.apache.spark.SparkConf
 
 class ScyllaSparkConnectionOptionsTest extends munit.FunSuite {
@@ -163,6 +163,17 @@ class ScyllaSparkConnectionOptionsTest extends munit.FunSuite {
     assertEquals(consolidated.get("spark.cassandra.connection.host"), "scylla-host")
     assertEquals(consolidated.get("spark.cassandra.connection.port"), "9042")
     assertEquals(consolidated.get("spark.cassandra.query.retry.count"), "-1")
+  }
+
+  test("cloud target is rejected with IllegalArgumentException") {
+    val cloudTarget = baseTarget.copy(
+      host  = "",
+      port  = 0,
+      cloud = Some(CloudConfig("/opt/bundle.zip"))
+    )
+    intercept[IllegalArgumentException] {
+      ScyllaSparkConnectionOptions.sessionConfFromTargetSettings(cloudTarget)
+    }
   }
 
   test("helper reuses the production target connector session defaults") {

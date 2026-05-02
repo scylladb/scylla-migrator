@@ -116,6 +116,64 @@ A source of type ``cassandra`` can be used together with a target of type ``cass
     # Optional - Condition to filter data that will be migrated
     where: race_start_date = '2015-05-27' AND race_end_date = '2015-05-27'
 
+.. _config-cassandra-cloud-source:
+
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+DataStax Astra (Cloud Secure Connect bundle)
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+Set the ``cloud`` block to migrate from a managed cluster (DataStax Astra DB) that is reached
+through an SNI proxy. The bundle carries the contact points, the local datacenter and all the TLS
+material; therefore the ``host``, ``port``, ``localDC`` and ``sslOptions`` fields **must not** be
+set in the same source — the migrator rejects the configuration if they are. Authentication
+credentials are not embedded in the bundle and must still be supplied via ``credentials``.
+
+.. code-block:: yaml
+
+  source:
+    type: cassandra
+    cloud:
+      # Path or URL to the Astra secure-connect bundle (zip).
+      # The path must be readable from the Spark driver and from every Spark executor that
+      # opens a CQL session. Accepted forms:
+      #   - Absolute filesystem path (auto-converted to file:// URL at runtime):
+      #       /opt/migrator/secure-connect-mycluster.zip
+      #   - https:// URL reachable from every node
+      #   - Bare filename (for bundles distributed via spark-submit --files):
+      #       secure-connect-mycluster.zip
+      #   - s3:// or s3a:// URL (works in standard Spark environments; for maximum
+      #     reliability prefer --files instead — see below)
+      secureBundlePath: /opt/migrator/secure-connect-mycluster.zip
+    credentials:
+      username: <client-id>
+      password: <client-secret>
+    keyspace: <keyspace>
+    table: <table>
+    consistencyLevel: LOCAL_QUORUM
+    preserveTimestamps: true
+    splitCount: 256
+    connections: 8
+    fetchSize: 1000
+
+**Using ``--files`` for S3-hosted bundles** (recommended): instead of placing the ``s3://``
+URL directly in ``secureBundlePath``, distribute the bundle through Spark's ``--files``
+mechanism and refer to it by bare filename:
+
+.. code-block:: bash
+
+  spark-submit --files s3://my-bucket/secure-connect-prod.zip \
+    --class com.scylladb.migrator.Migrator migrator.jar
+
+.. code-block:: yaml
+
+  cloud:
+    secureBundlePath: secure-connect-prod.zip
+
+Spark downloads the file once per executor before any task runs, so the connector always
+finds a local copy — no dependency on Hadoop URL handlers or repeated S3 fetches.
+
+This setting is also accepted on a Cassandra target. See :ref:`config-cassandra-cloud-target`.
+
 ^^^^^^^^^^^^^^
 Parquet Source
 ^^^^^^^^^^^^^^
@@ -333,6 +391,32 @@ Apache Cassandra Target
        - TLS_RSA_WITH_AES_128_CBC_SHA
        - TLS_RSA_WITH_AES_256_CBC_SHA
       protocol: TLS
+
+.. _config-cassandra-cloud-target:
+
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+DataStax Astra (Cloud Secure Connect bundle)
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+Same semantics as :ref:`config-cassandra-cloud-source` but on the target side. ``host``, ``port``,
+``localDC`` and ``sslOptions`` must not be set when ``cloud`` is provided. The same
+``secureBundlePath`` forms (absolute path, ``https://``, bare filename via ``--files``, ``s3://``)
+are accepted.
+
+.. code-block:: yaml
+
+  target:
+    type: cassandra
+    cloud:
+      secureBundlePath: /opt/migrator/secure-connect-mycluster.zip
+    credentials:
+      username: <client-id>
+      password: <client-secret>
+    keyspace: <keyspace>
+    table: <table>
+    consistencyLevel: LOCAL_QUORUM
+    connections: 16
+    stripTrailingZerosForDecimals: false
 
 
 ^^^^^^^^^^^^^^^

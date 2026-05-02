@@ -23,8 +23,119 @@ object TargetSettings {
     writeTTLInS: Option[Int],
     writeWritetimestampInuS: Option[Long],
     consistencyLevel: String,
-    dropNullPrimaryKeys: Option[Boolean] = None
+    dropNullPrimaryKeys: Option[Boolean] = None,
+    cloud: Option[CloudConfig] = None
   ) extends TargetSettings
+
+  /** Mirror of `SourceSettings.Cassandra` cloud handling. See the doc-comment on [[CloudConfig]]
+    * for why `host`/`port`/`localDC`/`sslOptions` are rejected when `cloud` is set.
+    */
+  object Scylla {
+    private val SentinelHost: String = ""
+    private val SentinelPort: Int = 0
+
+    implicit val decoder: Decoder[Scylla] = Decoder.instance { c =>
+      val hasHost = c.get[Option[String]]("host").exists(_.isDefined)
+      val hasPort = c.get[Option[Int]]("port").exists(_.isDefined)
+      for {
+        cloud <- c.get[Option[CloudConfig]]("cloud")
+        _ <- (cloud.isDefined, hasHost, hasPort) match {
+               case (true, true, _) =>
+                 Left(
+                   DecodingFailure(
+                     "Scylla target: 'cloud' is mutually exclusive with 'host'/'port'. " +
+                       "Remove 'host' and 'port' when using a secure-connect bundle.",
+                     c.history
+                   )
+                 )
+               case (true, _, true) =>
+                 Left(
+                   DecodingFailure(
+                     "Scylla target: 'cloud' is mutually exclusive with 'host'/'port'. " +
+                       "Remove 'host' and 'port' when using a secure-connect bundle.",
+                     c.history
+                   )
+                 )
+               case (false, true, true) => Right(())
+               case (false, _, _) =>
+                 Left(
+                   DecodingFailure(
+                     "Scylla target: 'host' and 'port' are required unless 'cloud' is set.",
+                     c.history
+                   )
+                 )
+               case (true, false, false) => Right(())
+             }
+        host                          <- c.getOrElse[String]("host")(SentinelHost)
+        port                          <- c.getOrElse[Int]("port")(SentinelPort)
+        localDC                       <- c.get[Option[String]]("localDC")
+        credentials                   <- c.get[Option[Credentials]]("credentials")
+        sslOptions                    <- c.get[Option[SSLOptions]]("sslOptions")
+        keyspace                      <- c.get[String]("keyspace")
+        table                         <- c.get[String]("table")
+        connections                   <- c.get[Option[Int]]("connections")
+        stripTrailingZerosForDecimals <- c.get[Boolean]("stripTrailingZerosForDecimals")
+        writeTTLInS                   <- c.get[Option[Int]]("writeTTLInS")
+        writeWritetimestampInuS       <- c.get[Option[Long]]("writeWritetimestampInuS")
+        consistencyLevel              <- c.get[String]("consistencyLevel")
+        dropNullPrimaryKeys           <- c.get[Option[Boolean]]("dropNullPrimaryKeys")
+        _ <- if (cloud.isDefined && localDC.isDefined)
+               Left(
+                 DecodingFailure(
+                   "Scylla target: 'localDC' must not be set when using 'cloud' (the bundle " +
+                     "carries the local DC).",
+                   c.history
+                 )
+               )
+             else Right(())
+        _ <- if (cloud.isDefined && sslOptions.isDefined)
+               Left(
+                 DecodingFailure(
+                   "Scylla target: 'sslOptions' must not be set when using 'cloud' (the bundle " +
+                     "carries the TLS material).",
+                   c.history
+                 )
+               )
+             else Right(())
+      } yield Scylla(
+        host,
+        port,
+        localDC,
+        credentials,
+        sslOptions,
+        keyspace,
+        table,
+        connections,
+        stripTrailingZerosForDecimals,
+        writeTTLInS,
+        writeWritetimestampInuS,
+        consistencyLevel,
+        dropNullPrimaryKeys,
+        cloud
+      )
+    }
+
+    implicit val encoder: Encoder.AsObject[Scylla] = Encoder.AsObject.instance { s =>
+      val common = io.circe.JsonObject(
+        "localDC"                       -> s.localDC.asJson,
+        "credentials"                   -> s.credentials.asJson,
+        "sslOptions"                    -> s.sslOptions.asJson,
+        "keyspace"                      -> s.keyspace.asJson,
+        "table"                         -> s.table.asJson,
+        "connections"                   -> s.connections.asJson,
+        "stripTrailingZerosForDecimals" -> s.stripTrailingZerosForDecimals.asJson,
+        "writeTTLInS"                   -> s.writeTTLInS.asJson,
+        "writeWritetimestampInuS"       -> s.writeWritetimestampInuS.asJson,
+        "consistencyLevel"              -> s.consistencyLevel.asJson,
+        "dropNullPrimaryKeys"           -> s.dropNullPrimaryKeys.asJson
+      )
+      s.cloud match {
+        case Some(cloud) => common.add("cloud", cloud.asJson)
+        case None =>
+          common.add("host", s.host.asJson).add("port", s.port.asJson)
+      }
+    }
+  }
 
   /** Common trait for DynamoDB-protocol targets (both AWS DynamoDB and Scylla Alternator). */
   sealed trait DynamoDBLike extends TargetSettings {
@@ -118,16 +229,19 @@ object TargetSettings {
     Decoder.instance { cursor =>
       cursor.get[String]("type").flatMap {
         case "scylla" | "cassandra" =>
-          deriveDecoder[Scylla].apply(cursor).flatMap { s =>
-            val allErrors = validateScyllaTarget(s)
-            if (allErrors.nonEmpty)
-              Left(
-                DecodingFailure(
-                  s"Target type 'scylla': ${allErrors.mkString("; ")}",
-                  cursor.history
+          Scylla.decoder.apply(cursor).flatMap { s =>
+            if (s.cloud.isDefined) Right(s)
+            else {
+              val allErrors = validateScyllaTarget(s)
+              if (allErrors.nonEmpty)
+                Left(
+                  DecodingFailure(
+                    s"Target type 'scylla': ${allErrors.mkString("; ")}",
+                    cursor.history
+                  )
                 )
-              )
-            else Right(s)
+              else Right(s)
+            }
           }
         case "dynamodb" | "dynamo" =>
           AlternatorSettings.guardDynamoDBType(cursor, "Target").flatMap { _ =>
@@ -277,7 +391,7 @@ object TargetSettings {
   implicit val encoder: Encoder[TargetSettings] =
     Encoder.instance {
       case t: Scylla =>
-        deriveEncoder[Scylla]
+        Scylla.encoder
           .encodeObject(t)
           .filter { case (_, v) => !v.isNull }
           .add("type", Json.fromString("scylla"))
