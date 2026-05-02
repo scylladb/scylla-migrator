@@ -1,5 +1,6 @@
 package com.scylladb.migrator.alternator
 
+import com.scylladb.migrator.TestFileUtils
 import com.scylladb.migrator.SparkUtils.successfullyPerformMigration
 import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.services.dynamodb.model.{
@@ -120,6 +121,31 @@ class DynamoDBS3ExportMigrationTest extends MigratorSuiteWithDynamoDBLocal {
       )
     )
     checkItemWasMigrated(tableName, item3Key, item3Data)
+  }
+
+  // Verify that the S3 export import path does not instantiate DynamoDbSavepointsManager
+  // (issue #247). The SavepointsManager base class unconditionally creates the savepoints
+  // directory in its constructor, so its absence proves the manager was never instantiated.
+  private val savepointsDir =
+    Paths.get("docker/spark-master/s3-export-no-savepoints")
+
+  withResources("test-bucket", "BasicTest").test(
+    "S3 export import does not instantiate DynamoDbSavepointsManager (issue #247)"
+  ) { case (bucketName, tableName) =>
+    if (savepointsDir.toFile.exists())
+      TestFileUtils.deleteRecursive(savepointsDir.toFile)
+
+    runS3ExportMigration(
+      bucketName,
+      tableName,
+      "dynamodb-s3-export-to-alternator-no-savepoints.yaml"
+    )
+
+    assert(
+      !Files.exists(savepointsDir),
+      s"DynamoDbSavepointsManager should not be instantiated for S3 export imports, " +
+        s"but its directory was created at $savepointsDir"
+    )
   }
 
   // Make sure to properly set up and clean up the target database and the S3 instance

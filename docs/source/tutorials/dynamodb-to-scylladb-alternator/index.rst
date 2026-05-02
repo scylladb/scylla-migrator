@@ -26,7 +26,7 @@ In an empty directory, create the following ``docker-compose.yaml`` file to defi
 Let’s break down this Docker Compose file.
 
 1. We define the DynamoDB service by reusing the official image ``amazon/dynamodb-local``. We use the TCP port 8000 for communicating with DynamoDB.
-2. We define the Spark master and Spark worker services by using a custom image (see below). Indeed, the official Docker images for Spark 3.5.1 only support Scala 2.12 for now, but we need Scala 2.13. We mount the local directory ``./spark-data`` to the Spark master container path ``/app`` so that we can supply the Migrator jar and configuration to the Spark master node. We expose the ports 8080 and 4040 of the master node to access the Spark UIs from our host environment. We allocate 2 cores and 4 GB of memory to the Spark worker node. As a general rule, we recommend allocating 2 GB of memory per core on each worker.
+2. We define the Spark master and Spark worker services by using a custom image (see below). The image installs Spark 4.0.2, matching the Spark version required by Migrator 2.x. We mount the local directory ``./spark-data`` to the Spark master container path ``/app`` so that we can supply the Migrator jar and configuration to the Spark master node. We expose the ports 8080 and 4040 of the master node to access the Spark UIs from our host environment. We allocate 2 cores and 4 GB of memory to the Spark worker node. As a general rule, we recommend allocating 2 GB of memory per core on each worker.
 3. We define the ScyllaDB service by reusing the official image ``scylladb/scylla``. We use the TCP port 8001 for communicating with ScyllaDB Alternator.
 
 Create the ``Dockerfile`` required by the Spark services at path ``./dockerfiles/spark/Dockerfile`` and write the following content:
@@ -148,4 +148,3 @@ During the migration, it is possible to monitor the underlying Spark job by open
 `Example of a migration broken down in 6 tasks. The Spark UI allows us to follow the overall progress, and it can also show specific metrics such as the memory consumption of an executor`.
 
 In our example the size of the source table is ~200 MB. In practice, it is common to migrate tables containing several terabytes of data. If necessary, and as long as your DynamoDB source supports a higher read throughput level, you can increase the migration throughput by adding more Spark worker nodes. The Spark engine will automatically spread the workload between all the worker nodes.
-

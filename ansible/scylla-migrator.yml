@@ -5,6 +5,8 @@
   vars:
     home_dir: /home/ubuntu
     spark_home: /opt/spark
+    spark_version: "4.0.2"
+    spark_package: "spark-{{ spark_version }}-bin-hadoop3"
   tasks: 
     - name: add universe repository
       become: true
@@ -66,12 +68,12 @@
 
     - name: Download spark
       get_url: 
-        url: https://archive.apache.org/dist/spark/spark-3.5.1/spark-3.5.1-bin-hadoop3-scala2.13.tgz
-        dest: "{{ home_dir }}/spark-3.5.1-bin-hadoop3-scala2.13.tgz"
+        url: "https://archive.apache.org/dist/spark/spark-{{ spark_version }}/{{ spark_package }}.tgz"
+        dest: "{{ home_dir }}/{{ spark_package }}.tgz"
 
     - name: Extract spark
       ansible.builtin.unarchive:
-        src: "{{ home_dir }}/spark-3.5.1-bin-hadoop3-scala2.13.tgz"
+        src: "{{ home_dir }}/{{ spark_package }}.tgz"
         dest: "{{ home_dir }}"
         remote_src: yes
 
@@ -83,7 +85,7 @@
 
     - name: Move spark to opt/spark
       become: true
-      command: "sudo mv {{ home_dir }}/spark-3.5.1-bin-hadoop3-scala2.13 {{ spark_home }}"
+      command: "sudo mv {{ home_dir }}/{{ spark_package }} {{ spark_home }}"
 
     - name: Set JAVA_HOME
       ansible.builtin.lineinfile:

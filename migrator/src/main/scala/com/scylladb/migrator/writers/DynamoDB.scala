@@ -2,7 +2,7 @@ package com.scylladb.migrator.writers
 
 import com.scylladb.migrator.DynamoUtils
 import com.scylladb.migrator.DynamoUtils.{ setDynamoDBJobConf, setOptionalConf }
-import com.scylladb.migrator.config.TargetSettings
+import com.scylladb.migrator.config.{ SparkSecretRedaction, TargetSettings }
 import org.apache.hadoop.dynamodb.{ DynamoDBConstants, DynamoDBItemWritable }
 import org.apache.hadoop.io.Text
 import org.apache.hadoop.mapred.JobConf
@@ -93,7 +93,8 @@ object DynamoDB {
       maybeMaxMapTasks  = None,
       target.finalCredentials,
       target.removeConsumedCapacity,
-      target.alternatorSettings
+      target.alternatorSettings,
+      SparkSecretRedaction.redactionRegex(spark)
     )
     jobConf.set(DynamoDBConstants.OUTPUT_TABLE_NAME, target.table)
     val writeThroughput =

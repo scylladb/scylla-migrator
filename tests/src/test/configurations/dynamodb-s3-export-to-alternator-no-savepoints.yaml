@@ -1,0 +1,40 @@
+source:
+  type: dynamodb-s3-export
+  bucket: test-bucket
+  manifestKey: dynamodb-export/AWSDynamoDB/01715685260608-c488b4e1/manifest-summary.json
+  region: eu-central-1
+  endpoint:
+    host: http://s3
+    port: 4566
+  credentials:
+    accessKey: dummy
+    secretKey: dummy
+  usePathStyleAccess: true
+  tableDescription:
+    attributeDefinitions:
+      - name: id
+        type: S
+    keySchema:
+      - name: id
+        type: HASH
+    billingMode: PAY_PER_REQUEST
+
+target:
+  type: alternator
+  table: BasicTest
+  region: dummy
+  endpoint:
+    host: http://scylla
+    port: 8000
+  credentials:
+    accessKey: dummy
+    secretKey: dummy
+  streamChanges: false
+  removeConsumedCapacity: true
+  billingMode: PAY_PER_REQUEST
+
+# Savepoint settings are required by the config schema but unused for
+# DynamoDB S3 export imports, since savepoints are not supported on this path.
+savepoints:
+  path: /app/savepoints/s3-export-no-savepoints
+  intervalSeconds: 300
