@@ -135,13 +135,14 @@ credentials are not embedded in the bundle and must still be supplied via ``cred
     cloud:
       # Path or URL to the Astra secure-connect bundle (zip).
       # The path must be readable from the Spark driver and from every Spark executor that
-      # opens a CQL session. Use one of:
-      #   - an absolute filesystem path that exists identically on every node
-      #     (e.g. baked into the worker image, or on a shared mount), or
-      #   - an https://, s3://, or s3a:// URL reachable from every node.
-      # Plain HTTP URLs, relative paths, URL user-info credentials, and query strings are rejected.
-      # Relative paths are NOT auto-resolved via SparkFiles.get because the resolved path is
-      # computed on the driver and would be incorrect on executors.
+      # opens a CQL session. Accepted forms:
+      #   - Absolute filesystem path (auto-converted to file:// URL at runtime):
+      #       /opt/migrator/secure-connect-mycluster.zip
+      #   - https:// URL reachable from every node
+      #   - Bare filename (for bundles distributed via spark-submit --files):
+      #       secure-connect-mycluster.zip
+      #   - s3:// or s3a:// URL (works in standard Spark environments; for maximum
+      #     reliability prefer --files instead — see below)
       secureBundlePath: /opt/migrator/secure-connect-mycluster.zip
     credentials:
       username: <client-id>
@@ -153,6 +154,23 @@ credentials are not embedded in the bundle and must still be supplied via ``cred
     splitCount: 256
     connections: 8
     fetchSize: 1000
+
+**Using ``--files`` for S3-hosted bundles** (recommended): instead of placing the ``s3://``
+URL directly in ``secureBundlePath``, distribute the bundle through Spark's ``--files``
+mechanism and refer to it by bare filename:
+
+.. code-block:: bash
+
+  spark-submit --files s3://my-bucket/secure-connect-prod.zip \
+    --class com.scylladb.migrator.Migrator migrator.jar
+
+.. code-block:: yaml
+
+  cloud:
+    secureBundlePath: secure-connect-prod.zip
+
+Spark downloads the file once per executor before any task runs, so the connector always
+finds a local copy — no dependency on Hadoop URL handlers or repeated S3 fetches.
 
 This setting is also accepted on a Cassandra target. See :ref:`config-cassandra-cloud-target`.
 
@@ -381,7 +399,9 @@ DataStax Astra (Cloud Secure Connect bundle)
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 Same semantics as :ref:`config-cassandra-cloud-source` but on the target side. ``host``, ``port``,
-``localDC`` and ``sslOptions`` must not be set when ``cloud`` is provided.
+``localDC`` and ``sslOptions`` must not be set when ``cloud`` is provided. The same
+``secureBundlePath`` forms (absolute path, ``https://``, bare filename via ``--files``, ``s3://``)
+are accepted.
 
 .. code-block:: yaml
 

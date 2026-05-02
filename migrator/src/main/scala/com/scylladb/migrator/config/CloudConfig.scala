@@ -23,27 +23,31 @@ import scala.util.Try
   * @param secureBundlePath
   *   Path to the secure-connect bundle. Must be readable from the Spark driver and from every Spark
   *   executor that will open a CQL session. Supported forms:
-  *   - An absolute filesystem path that exists identically on every node (recommended for
-  *     standalone clusters: bake the bundle into the worker image, or place it on a shared mount).
-  *   - An `https://`, `s3://`, or `s3a://` URL accessible from every node.
-  *
-  * Note: relative paths are intentionally not auto-resolved via `SparkFiles.get` because the
-  * resolved path is computed on the driver and would be incorrect on executors. If you want to ship
-  * the bundle through `--files`, materialise it on a deterministic path on every node (e.g. via the
-  * entrypoint script) and pass that absolute path here.
+  *   - An absolute filesystem path (e.g. `/opt/migrator/bundle.zip`) that exists identically on
+  *     every node. The migrator auto-converts this to a `file://` URL at runtime because the
+  *     connector resolves bundle paths via `new URL(path)`, which requires a scheme.
+  *   - An `https://` URL accessible from every node.
+  *   - A bare filename (e.g. `bundle.zip`) for bundles distributed via Spark's `--files` mechanism.
+  *     The connector resolves bare filenames through `SparkFiles.get` on each executor.
+  *   - `s3://` or `s3a://` URLs. '''Note:''' these rely on Hadoop's URL stream handler being
+  *     registered in the JVM (standard in most Spark environments). For maximum reliability, prefer
+  *     distributing the bundle with `--files s3://bucket/bundle.zip` and setting `secureBundlePath`
+  *     to the bare filename instead.
   */
 case class CloudConfig(secureBundlePath: String)
 
 object CloudConfig {
-  private val RemoteSchemes = Set("https", "s3", "s3a")
+  private val RemoteSchemes = Set("https", "s3", "s3a", "file")
 
   implicit val encoder: Encoder[CloudConfig] = deriveEncoder[CloudConfig]
+  private val BareFilenamePattern = "[a-zA-Z0-9][a-zA-Z0-9._-]*".r
+
   implicit val decoder: Decoder[CloudConfig] = Decoder.instance { c =>
     for {
       rawPath <- c.get[String]("secureBundlePath")
       path = rawPath.trim
       _ <-
-        if (path.trim.isEmpty)
+        if (path.isEmpty)
           Left(
             DecodingFailure(
               "cloud.secureBundlePath must not be empty.",
@@ -51,6 +55,7 @@ object CloudConfig {
             )
           )
         else if (path.startsWith("/")) Right(())
+        else if (BareFilenamePattern.matches(path) && !path.contains("/")) Right(())
         else {
           val uri = Try(new URI(path)).toOption
           val scheme = uri.flatMap(u => Option(u.getScheme).map(_.toLowerCase))
@@ -58,7 +63,8 @@ object CloudConfig {
             case Some("http") =>
               Left(
                 DecodingFailure(
-                  "cloud.secureBundlePath must not use plain HTTP; use an absolute local path, https://, s3://, or s3a://.",
+                  "cloud.secureBundlePath must not use plain HTTP; use an absolute local path, " +
+                    "an https://, s3://, or s3a:// URL, or a bare filename for --files.",
                   c.history
                 )
               )
@@ -80,7 +86,8 @@ object CloudConfig {
             case _ =>
               Left(
                 DecodingFailure(
-                  "cloud.secureBundlePath must be an absolute local path, https:// URL, s3:// URL, or s3a:// URL.",
+                  "cloud.secureBundlePath must be an absolute local path, an https://, s3://, " +
+                    "or s3a:// URL, or a bare filename (for Spark --files distribution).",
                   c.history
                 )
               )

@@ -48,12 +48,19 @@ source:
   # When this block is present the 'host', 'port', 'localDC' and 'sslOptions' fields above must
   # NOT be set: they are carried by the bundle and would conflict with it. Authentication
   # credentials must still be supplied via the 'credentials' block.
-  # The 'secureBundlePath' must be readable on the driver and on every Spark executor that opens
-  # a CQL session — typically an absolute path that exists identically on every node, or an
-  # https/s3/s3a URL reachable from every node. Relative paths and plain HTTP URLs are rejected.
-  # Do not include credentials or signed-token query strings in the URL because configs may be
-  # logged or saved. Relative paths are NOT auto-resolved via SparkFiles.get because the resolved
-  # path differs between driver and executors.
+  #
+  # Accepted secureBundlePath forms:
+  #   - Absolute local path: /opt/migrator/secure-connect-mycluster.zip
+  #     (auto-converted to file:// URL at runtime; must exist on every node)
+  #   - https:// URL reachable from every node
+  #   - Bare filename: secure-connect-mycluster.zip
+  #     (for bundles distributed via spark-submit --files; resolved via SparkFiles.get)
+  #   - s3:// or s3a:// URL — works in standard Spark environments where Hadoop URL handlers
+  #     are registered. For maximum reliability, prefer --files instead:
+  #       spark-submit --files s3://bucket/bundle.zip ...
+  #     then set secureBundlePath to just the filename: bundle.zip
+  #
+  # Do not embed credentials or signed-token query strings in the URL.
   #cloud:
   #  secureBundlePath: /opt/migrator/secure-connect-mycluster.zip
 
@@ -72,6 +79,16 @@ source:
 #   splitCount: 256
 #   connections: 8
 #   fetchSize: 1000
+#
+# Alternative: distribute the bundle via --files (recommended for S3-hosted bundles):
+#   spark-submit --files s3://my-bucket/secure-connect-mycluster.zip \
+#     --class com.scylladb.migrator.Migrator migrator.jar
+# then use a bare filename in the config:
+# source:
+#   type: cassandra
+#   cloud:
+#     secureBundlePath: secure-connect-mycluster.zip
+#   ...
 
 # Example for loading from MySQL:
 # source:
@@ -315,15 +332,7 @@ target:
   #writeWritetimestampInuS: 1640998861000
 
   # Optional - Connect via a DataStax Astra Cloud Secure Connect bundle.
-  # When this block is present the 'host', 'port', 'localDC' and 'sslOptions' fields above must
-  # NOT be set: they are carried by the bundle and would conflict with it. Authentication
-  # credentials must still be supplied via the 'credentials' block.
-  # The 'secureBundlePath' must be readable on the driver and on every Spark executor that opens
-  # a CQL session — typically an absolute path that exists identically on every node, or an
-  # https/s3/s3a URL reachable from every node. Relative paths and plain HTTP URLs are rejected.
-  # Do not include credentials or signed-token query strings in the URL because configs may be
-  # logged or saved. Relative paths are NOT auto-resolved via SparkFiles.get because the resolved
-  # path differs between driver and executors.
+  # Same path rules as the source cloud block above. See source section for details.
   #cloud:
   #  secureBundlePath: /opt/migrator/secure-connect-mycluster.zip
 

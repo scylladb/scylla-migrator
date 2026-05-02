@@ -225,7 +225,7 @@ class CassandraCloudConfigTest extends munit.FunSuite {
     assertEquals(parsed.cloud.map(_.secureBundlePath), Some("/opt/bundle.zip"))
   }
 
-  test("source cassandra: cloud with relative secureBundlePath is rejected") {
+  test("source cassandra: cloud with bare filename (--files pattern) is accepted") {
     val config =
       """type: cassandra
         |cloud:
@@ -237,10 +237,83 @@ class CassandraCloudConfigTest extends munit.FunSuite {
         |fetchSize: 1000
         |""".stripMargin
 
+    val parsed = parseSourceCassandra(config)
+    assertEquals(parsed.cloud.map(_.secureBundlePath), Some("secure-connect.zip"))
+  }
+
+  test("source cassandra: cloud with relative path containing slash is rejected") {
+    val config =
+      """type: cassandra
+        |cloud:
+        |  secureBundlePath: some/path/bundle.zip
+        |keyspace: ks
+        |table: tbl
+        |consistencyLevel: LOCAL_QUORUM
+        |preserveTimestamps: true
+        |fetchSize: 1000
+        |""".stripMargin
+
     val ex = intercept[DecodingFailure](parseSourceCassandra(config))
     assert(
-      ex.getMessage.contains("absolute local path"),
+      ex.getMessage.contains("absolute local path") || ex.getMessage.contains("bare filename"),
       s"unexpected error: ${ex.getMessage}"
+    )
+  }
+
+  test("source cassandra: cloud with https:// secureBundlePath is accepted") {
+    val config =
+      """type: cassandra
+        |cloud:
+        |  secureBundlePath: https://storage.example.com/secure-connect.zip
+        |keyspace: ks
+        |table: tbl
+        |consistencyLevel: LOCAL_QUORUM
+        |preserveTimestamps: true
+        |fetchSize: 1000
+        |""".stripMargin
+
+    val parsed = parseSourceCassandra(config)
+    assertEquals(
+      parsed.cloud.map(_.secureBundlePath),
+      Some("https://storage.example.com/secure-connect.zip")
+    )
+  }
+
+  test("source cassandra: cloud with s3:// secureBundlePath is accepted") {
+    val config =
+      """type: cassandra
+        |cloud:
+        |  secureBundlePath: s3://my-bucket/bundles/secure-connect.zip
+        |keyspace: ks
+        |table: tbl
+        |consistencyLevel: LOCAL_QUORUM
+        |preserveTimestamps: true
+        |fetchSize: 1000
+        |""".stripMargin
+
+    val parsed = parseSourceCassandra(config)
+    assertEquals(
+      parsed.cloud.map(_.secureBundlePath),
+      Some("s3://my-bucket/bundles/secure-connect.zip")
+    )
+  }
+
+  test("source cassandra: cloud with file:// secureBundlePath is accepted") {
+    val config =
+      """type: cassandra
+        |cloud:
+        |  secureBundlePath: file:/opt/migrator/secure-connect.zip
+        |keyspace: ks
+        |table: tbl
+        |consistencyLevel: LOCAL_QUORUM
+        |preserveTimestamps: true
+        |fetchSize: 1000
+        |""".stripMargin
+
+    val parsed = parseSourceCassandra(config)
+    assertEquals(
+      parsed.cloud.map(_.secureBundlePath),
+      Some("file:/opt/migrator/secure-connect.zip")
     )
   }
 

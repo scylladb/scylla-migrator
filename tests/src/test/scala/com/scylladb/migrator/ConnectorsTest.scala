@@ -29,7 +29,7 @@ class ConnectorsTest extends munit.FunSuite {
 
     conf.contactInfo match {
       case CloudBasedContactInfo(path, PasswordAuthConf(u, p)) =>
-        assertEquals(path, "/opt/bundle.zip")
+        assertEquals(path, "file:/opt/bundle.zip")
         assertEquals(u, "client-id")
         assertEquals(p, "client-secret")
       case other =>
@@ -50,7 +50,7 @@ class ConnectorsTest extends munit.FunSuite {
 
     conf.contactInfo match {
       case CloudBasedContactInfo(path, NoAuthConf) =>
-        assertEquals(path, "/opt/bundle.zip")
+        assertEquals(path, "file:/opt/bundle.zip")
       case other =>
         fail(s"Expected CloudBasedContactInfo with NoAuthConf, got $other")
     }
@@ -99,7 +99,7 @@ class ConnectorsTest extends munit.FunSuite {
 
     conf.contactInfo match {
       case CloudBasedContactInfo(path, PasswordAuthConf(u, p)) =>
-        assertEquals(path, "/opt/bundle.zip")
+        assertEquals(path, "file:/opt/bundle.zip")
         assertEquals(u, "u")
         assertEquals(p, "p")
       case other => fail(s"Expected CloudBasedContactInfo, got $other")
@@ -125,6 +125,58 @@ class ConnectorsTest extends munit.FunSuite {
       case other => fail(s"Expected IpBasedContactInfo, got $other")
     }
     assertEquals(conf.localDC, Some("dc1"))
+  }
+
+  // ---------------------------------------------------------------------------
+  // cloudContactInfo: path normalization
+  // ---------------------------------------------------------------------------
+
+  test("cloudContactInfo: absolute path is normalized to file: URL via File.toURI") {
+    val info = Connectors.cloudContactInfo(CloudConfig("/opt/bundle.zip"), NoAuthConf)
+    info match {
+      case CloudBasedContactInfo(path, _) =>
+        assertEquals(path, "file:/opt/bundle.zip")
+      case other => fail(s"Expected CloudBasedContactInfo, got $other")
+    }
+  }
+
+  test("cloudContactInfo: absolute path with spaces is percent-encoded") {
+    val info = Connectors.cloudContactInfo(CloudConfig("/opt/my bundle.zip"), NoAuthConf)
+    info match {
+      case CloudBasedContactInfo(path, _) =>
+        assertEquals(path, "file:/opt/my%20bundle.zip")
+      case other => fail(s"Expected CloudBasedContactInfo, got $other")
+    }
+  }
+
+  test("cloudContactInfo: https:// URL is passed through unchanged") {
+    val url = "https://storage.example.com/bundle.zip"
+    val info = Connectors.cloudContactInfo(CloudConfig(url), NoAuthConf)
+    info match {
+      case CloudBasedContactInfo(path, _) =>
+        assertEquals(path, url)
+      case other => fail(s"Expected CloudBasedContactInfo, got $other")
+    }
+  }
+
+  test("cloudContactInfo: s3:// URL is passed through unchanged") {
+    val url = "s3://my-bucket/bundle.zip"
+    val info = Connectors.cloudContactInfo(CloudConfig(url), NoAuthConf)
+    info match {
+      case CloudBasedContactInfo(path, _) =>
+        assertEquals(path, url)
+      case other => fail(s"Expected CloudBasedContactInfo, got $other")
+    }
+  }
+
+  test("cloudContactInfo: bare filename (--files) is passed through unchanged") {
+    val filename = "secure-connect-prod.zip"
+    val info = Connectors.cloudContactInfo(CloudConfig(filename), NoAuthConf)
+    info match {
+      case CloudBasedContactInfo(path, _) =>
+        assertEquals(path, filename)
+      case other => fail(s"Expected CloudBasedContactInfo, got $other")
+    }
   }
 
   // ---------------------------------------------------------------------------

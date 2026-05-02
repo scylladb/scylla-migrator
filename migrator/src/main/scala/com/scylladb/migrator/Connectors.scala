@@ -210,12 +210,21 @@ object Connectors {
   /** Build a [[CloudBasedContactInfo]]. The driver opens the bundle on every node that creates a
     * session, so the path must be reachable from every executor — see [[CloudConfig]] for
     * deployment guidance.
+    *
+    * Absolute local paths (`/opt/...`) are normalized to `file:///opt/...` URLs because the
+    * connector's `DefaultConnectionFactory.maybeGetLocalFile` falls back to `new URL(path)`, which
+    * requires a scheme — bare absolute paths would throw `MalformedURLException`.
     */
-  private def cloudContactInfo(
+  private[migrator] def cloudContactInfo(
     cloud: CloudConfig,
     auth: com.datastax.spark.connector.cql.AuthConf
-  ): ContactInfo =
-    CloudBasedContactInfo(cloud.secureBundlePath, auth)
+  ): ContactInfo = {
+    val resolvedPath =
+      if (cloud.secureBundlePath.startsWith("/"))
+        new java.io.File(cloud.secureBundlePath).toURI.toString
+      else cloud.secureBundlePath
+    CloudBasedContactInfo(resolvedPath, auth)
+  }
 
   private def ipContactInfo(
     host: String,
