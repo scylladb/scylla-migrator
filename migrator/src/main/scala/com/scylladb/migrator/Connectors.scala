@@ -182,6 +182,10 @@ object Connectors {
   def targetConnector(sparkConf: SparkConf, targetSettings: TargetSettings.Scylla) =
     new CassandraConnector(buildTargetConf(sparkConf, targetSettings))
 
+  /** Map optional credentials to the connector's auth model. Missing credentials become
+    * [[NoAuthConf]] rather than a parse-time error — Astra will reject unauthenticated sessions at
+    * connect time, and non-Astra cloud bundles may use mTLS-only auth embedded in the bundle.
+    */
   private def authConf(credentials: Option[Credentials]) =
     credentials match {
       case None                                  => NoAuthConf
@@ -231,10 +235,14 @@ object Connectors {
     port: Int,
     auth: com.datastax.spark.connector.cql.AuthConf,
     sslOptions: Option[SSLOptions]
-  ): ContactInfo =
+  ): ContactInfo = {
+    val resolvedHost =
+      if (host.startsWith("[") && host.endsWith("]")) host.slice(1, host.length - 1)
+      else host
     IpBasedContactInfo(
-      hosts            = Set(new InetSocketAddress(host, port)),
+      hosts            = Set(new InetSocketAddress(resolvedHost, port)),
       authConf         = auth,
       cassandraSSLConf = cassandraSSLConf(sslOptions)
     )
+  }
 }

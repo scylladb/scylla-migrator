@@ -533,6 +533,36 @@ class CassandraCloudConfigTest extends munit.FunSuite {
     )
   }
 
+  test("target scylla: encoder filters null optional fields") {
+    import io.circe.syntax._
+    val target: TargetSettings = TargetSettings.Scylla(
+      host                          = "h",
+      port                          = 9042,
+      localDC                       = None,
+      credentials                   = None,
+      sslOptions                    = None,
+      keyspace                      = "ks",
+      table                         = "tbl",
+      connections                   = None,
+      stripTrailingZerosForDecimals = false,
+      writeTTLInS                   = None,
+      writeWritetimestampInuS       = None,
+      consistencyLevel              = "LOCAL_QUORUM",
+      dropNullPrimaryKeys           = None,
+      cloud                         = None
+    )
+    val json = target.asJson
+    val obj = json.asObject.get
+    assert(!obj.contains("localDC"), s"localDC should be absent: ${json.noSpaces}")
+    assert(!obj.contains("sslOptions"), s"sslOptions should be absent: ${json.noSpaces}")
+    assert(!obj.contains("writeTTLInS"), s"writeTTLInS should be absent: ${json.noSpaces}")
+    assert(
+      !obj.contains("dropNullPrimaryKeys"),
+      s"dropNullPrimaryKeys should be absent: ${json.noSpaces}"
+    )
+    assert(!obj.contains("connections"), s"connections should be absent: ${json.noSpaces}")
+  }
+
   test("target scylla: round-trip preserves cloud and omits host/port") {
     val original = TargetSettings.Scylla(
       host                          = "",

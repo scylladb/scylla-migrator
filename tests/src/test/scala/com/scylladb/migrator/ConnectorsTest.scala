@@ -128,6 +128,28 @@ class ConnectorsTest extends munit.FunSuite {
   }
 
   // ---------------------------------------------------------------------------
+  // ipContactInfo: IPv6 bracket stripping
+  // ---------------------------------------------------------------------------
+
+  test("source: bracketed IPv6 host has brackets stripped for InetSocketAddress") {
+    val source = baseCassandraSource.copy(
+      host  = "[2001:db8::1]",
+      port  = 9042,
+      cloud = None
+    )
+
+    val conf = Connectors.buildSourceConf(new SparkConf(false), source)
+
+    conf.contactInfo match {
+      case ip: IpBasedContactInfo =>
+        val one = ip.hosts.head
+        assert(!one.getHostString.contains("["), s"brackets not stripped: ${one.getHostString}")
+        assertEquals(one.getPort, 9042)
+      case other => fail(s"Expected IpBasedContactInfo, got $other")
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // cloudContactInfo: path normalization
   // ---------------------------------------------------------------------------
 

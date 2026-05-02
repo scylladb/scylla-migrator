@@ -391,7 +391,11 @@ object TargetSettings {
   implicit val encoder: Encoder[TargetSettings] =
     Encoder.instance {
       case t: Scylla =>
-        Scylla.encoder.encodeObject(t).add("type", Json.fromString("scylla")).asJson
+        Scylla.encoder
+          .encodeObject(t)
+          .filter { case (_, v) => !v.isNull }
+          .add("type", Json.fromString("scylla"))
+          .asJson
 
       case t: DynamoDB =>
         deriveEncoder[DynamoDB]
