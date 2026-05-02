@@ -3,7 +3,7 @@ package com.scylladb.migrator.scylla
 import com.datastax.spark.connector._
 import com.datastax.spark.connector.cql.{ CassandraConnector, Schema, TableDef }
 import com.datastax.spark.connector.rdd.ReadConf
-import com.scylladb.migrator.Connectors
+import com.scylladb.migrator.{ writers, Connectors }
 import com.scylladb.migrator.config.{ MigratorConfig, Rename, SourceSettings, TargetSettings }
 import com.scylladb.migrator.readers
 import com.scylladb.migrator.readers.MySQL
@@ -1016,6 +1016,36 @@ object MySQLToScyllaValidator {
         s"${targetSettings.keyspace}.${targetSettings.table}. " +
         s"Collected ${failures.size} failure(s) in sample."
     )
+
+    if (validationConfig.copyMissingRows) {
+      log.info("Copying missing rows from source to target")
+
+      val missingSourceDf = rawSourceDF
+        .join(
+          rawTargetDF.select(renamedPK.map(sparkColumn): _*).distinct(),
+          renamedPK,
+          "left_anti"
+        )
+        .persist(StorageLevel.MEMORY_AND_DISK)
+
+      try {
+        val missingCount = missingSourceDf.count()
+
+        writers.Scylla.writeDataframe(
+          targetSettings,
+          Nil,
+          missingSourceDf,
+          None,
+          None,
+          sourceSettings
+        )
+
+        log.info(
+          s"Finished copying missing rows to target: $missingCount missing row(s) copied"
+        )
+      } finally
+        missingSourceDf.unpersist()
+    }
 
     failures
   }
