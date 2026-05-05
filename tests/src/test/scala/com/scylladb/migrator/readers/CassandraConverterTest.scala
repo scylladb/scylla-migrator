@@ -33,5 +33,4 @@ class CassandraConverterTest extends munit.FunSuite {
     assertEquals(Cassandra.convertValue(42L), 42L)
     assertEquals(Cassandra.convertValue(null), null)
   }
-
 }
