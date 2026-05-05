@@ -156,14 +156,38 @@ object Cassandra {
         }
     }
 
+  /** Maximum millisecond value that can be safely converted to Spark's internal microsecond
+    * representation without overflowing a Long (Long.MaxValue / 1000).
+    */
+  val MaxTimestampMillis: Long = Long.MaxValue / 1000L
+
+  /** Minimum millisecond value that can be safely converted to Spark's internal microsecond
+    * representation without overflowing a Long (Long.MinValue / 1000, rounds toward zero).
+    */
+  val MinTimestampMillis: Long = Long.MinValue / 1000L
+
   /** Convert Cassandra-specific types to standard Spark types.
     *
     * Handles UTF8Strings, UDTValues, TupleValues, and collections thereof. These conversions are
     * done in the SourceRelation connector of the DataFrame API but need to be replicated here since
     * we use the RDD API.
+    *
+    * Also clamps java.util.Date / java.sql.Timestamp values to the range representable as Spark
+    * microseconds (Long), preventing an ArithmeticException in Spark's millisToMicros when the
+    * source data contains out-of-range timestamps such as 9999999999999999.
     */
   val convertValue: Any => Any = {
     case x: UTF8String => x.toString
+    case d: java.util.Date =>
+      val millis = d.getTime
+      if (millis > MaxTimestampMillis || millis < MinTimestampMillis) {
+        val clamped = math.min(math.max(millis, MinTimestampMillis), MaxTimestampMillis)
+        log.warn(
+          s"Clamping out-of-range timestamp value ${millis}ms to ${clamped}ms " +
+            s"(valid range: [${MinTimestampMillis}, ${MaxTimestampMillis}])"
+        )
+        new java.sql.Timestamp(clamped)
+      } else d
     case set: Set[_]   => set.map(convertValue)
     case list: List[_] => list.map(convertValue)
     case map: Map[_, _] =>
