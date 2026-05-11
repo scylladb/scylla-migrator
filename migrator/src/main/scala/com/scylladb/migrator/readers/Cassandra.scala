@@ -11,7 +11,7 @@ import org.apache.logging.log4j.LogManager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.cassandra.{ CassandraSQLRow, DataTypeConverter }
 import org.apache.spark.sql.types.{ IntegerType, LongType, StructField, StructType }
-import org.apache.spark.sql.{ DataFrame, Encoders, Row, SparkSession }
+import org.apache.spark.sql.{ DataFrame, Row, SparkSession }
 import org.apache.spark.unsafe.types.UTF8String
 import com.scylladb.migrator.ConsistencyLevelUtils
 import com.scylladb.migrator.scylla.SourceDataFrame
@@ -145,12 +145,15 @@ object Cassandra {
           val newValues = schema.fields.map { field =>
             primaryKeyOrdinals
               .get(field.name)
-              .flatMap { ord =>
-                if (row.isNullAt(ord)) None
-                else Some(row.get(ord))
+              .map { ord =>
+                if (row.isNullAt(ord)) null
+                else convertValue(row.get(ord))
               }
               .getOrElse(fields.getOrElse(field.name, CassandraOption.Unset))
-          } ++ Seq(ttl.getOrElse(0L), writetime.getOrElse(CassandraOption.Unset))
+          } ++ Seq(
+            Integer.valueOf(ttl.getOrElse(0)),
+            writetime.map(java.lang.Long.valueOf).getOrElse(CassandraOption.Unset)
+          )
 
           Row(ArraySeq.unsafeWrapArray(newValues): _*)
         }
@@ -201,44 +204,6 @@ object Cassandra {
     (primaryKeyIndices, regularKeyIndices)
   }
 
-  def adjustDataframeForTimestampPreservation(
-    spark: SparkSession,
-    df: DataFrame,
-    timestampColumns: Option[TimestampColumns],
-    origSchema: StructType,
-    tableDef: TableDef
-  ): DataFrame =
-    timestampColumns match {
-      case None => df
-      case Some(TimestampColumns(ttl, writeTime)) =>
-        val (primaryKeyOrdinals, regularKeyOrdinals) = indexFields(
-          df.schema.fields.map(_.name).toList,
-          origSchema.fields.map(_.name).toList,
-          tableDef
-        )
-
-        val broadcastPrimaryKeyOrdinals = spark.sparkContext.broadcast(primaryKeyOrdinals)
-        val broadcastRegularKeyOrdinals = spark.sparkContext.broadcast(regularKeyOrdinals)
-        val broadcastSchema = spark.sparkContext.broadcast(origSchema)
-        val finalSchema = StructType(
-          origSchema.fields ++
-            Seq(StructField(ttl, IntegerType, true), StructField(writeTime, LongType, true))
-        )
-
-        log.info("Schema that'll be used for writing to Scylla:")
-        log.info(finalSchema.treeString)
-
-        df.flatMap {
-          explodeRow(
-            _,
-            broadcastSchema.value,
-            broadcastPrimaryKeyOrdinals.value,
-            broadcastRegularKeyOrdinals.value
-          )
-        }(Encoders.row(finalSchema))
-
-    }
-
   /** Infer primary key and regular column ordinals from the schema, based on the naming convention
     * used by `createSelection`: regular columns have companion `_ttl` and `_writetime` columns.
     */
@@ -269,20 +234,24 @@ object Cassandra {
 
   /** Perform the row explosion on a DataFrame with per-column `_ttl`/`_writetime` columns.
     *
-    * This is used when reading from Parquet files that contain per-column timestamp metadata, to
-    * produce a DataFrame suitable for writing to Scylla via `saveToCassandra()`.
+    * This is used when reading from Parquet files that contain per-column timestamp metadata, and
+    * when repairing missing rows in the Scylla validator, to produce rows for writing to Scylla via
+    * `saveToCassandra()` on an [[org.apache.spark.rdd.RDD]].
     *
-    * The explosion groups columns by their (TTL, writetime) pair and produces one row per group,
-    * using `CassandraOption.Unset` for columns not in the current group.
+    * Exploded rows keep [[CassandraOption]] on regular columns so [[CassandraOption.Null]]
+    * (explicit CQL null) stays distinct from [[CassandraOption.Unset]] (column not in the current
+    * TTL/writetime group). Spark 4 cannot represent that tri-state through a [[DataFrame]] row
+    * encoder, so the write path uses [[writers.Scylla.writeRowRDD]] instead of
+    * [[writers.Scylla.writeDataframe]].
     *
     * @return
-    *   a tuple of the exploded DataFrame and the `TimestampColumns` describing the consolidated
-    *   `ttl` and `writetime` columns.
+    *   exploded rows, logical [[StructType]] for the write, and [[TimestampColumns]] for per-row
+    *   TTL/writetime.
     */
-  def explodeDataframeFromPerColumnMeta(
+  def explodeRowsFromPerColumnMeta(
     spark: SparkSession,
     df: DataFrame
-  ): (DataFrame, TimestampColumns) = {
+  ): (RDD[Row], StructType, TimestampColumns) = {
     val (primaryKeyOrdinals, regularKeyOrdinals) = indexFieldsFromSchema(df.schema)
 
     val metaColumns =
@@ -302,21 +271,23 @@ object Cassandra {
     log.info("Schema after explosion from per-column metadata:")
     log.info(finalSchema.treeString)
 
-    val resultDf = df.flatMap {
+    val explodedRdd = df.rdd.flatMap { row =>
       explodeRow(
-        _,
+        row,
         broadcastSchema.value,
         broadcastPrimaryKeyOrdinals.value,
         broadcastRegularKeyOrdinals.value
       )
-    }(Encoders.row(finalSchema))
+    }
 
-    (resultDf, timestampColumns)
+    (explodedRdd, finalSchema, timestampColumns)
   }
 
   /** @param skipExplosion
     *   when `true`, return the raw DataFrame with per-column `_ttl`/`_writetime` columns (standard
-    *   Spark types) instead of the exploded DataFrame with `CassandraOption` types. Use this for
+    *   Spark types). When `false` and timestamps are preserved, [[cassandraExplodedWrite]] carries
+    *   exploded `RDD` of [[org.apache.spark.sql.Row]] for the write path while [[dataFrame]] stays
+    *   the wide pre-explosion frame (Cassandra token metadata). Use `skipExplosion` true when
     *   writing to Parquet.
     */
   def readDataframe(
@@ -377,14 +348,43 @@ object Cassandra {
     if (skipExplosion) {
       SourceDataFrame(rawDataframe, selection.timestampColumns, true)
     } else {
-      val resultingDataframe = adjustDataframeForTimestampPreservation(
-        spark,
-        rawDataframe,
-        selection.timestampColumns,
-        origSchema,
-        tableDef
-      )
-      SourceDataFrame(resultingDataframe, selection.timestampColumns, true)
+      selection.timestampColumns match {
+        case None =>
+          SourceDataFrame(rawDataframe, selection.timestampColumns, true)
+        case Some(TimestampColumns(ttl, writeTime)) =>
+          val (primaryKeyOrdinals, regularKeyOrdinals) = indexFields(
+            rawDataframe.schema.fields.map(_.name).toList,
+            origSchema.fields.map(_.name).toList,
+            tableDef
+          )
+
+          val broadcastPrimaryKeyOrdinals = spark.sparkContext.broadcast(primaryKeyOrdinals)
+          val broadcastRegularKeyOrdinals = spark.sparkContext.broadcast(regularKeyOrdinals)
+          val broadcastSchema = spark.sparkContext.broadcast(origSchema)
+          val finalSchema = StructType(
+            origSchema.fields ++
+              Seq(StructField(ttl, IntegerType, true), StructField(writeTime, LongType, true))
+          )
+
+          log.info("Schema that'll be used for writing to Scylla:")
+          log.info(finalSchema.treeString)
+
+          val explodedRdd = rawDataframe.rdd.flatMap { row =>
+            explodeRow(
+              row,
+              broadcastSchema.value,
+              broadcastPrimaryKeyOrdinals.value,
+              broadcastRegularKeyOrdinals.value
+            )
+          }
+
+          SourceDataFrame(
+            rawDataframe,
+            selection.timestampColumns,
+            true,
+            Some((explodedRdd, finalSchema))
+          )
+      }
     }
   }
 }

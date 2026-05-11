@@ -217,22 +217,28 @@ object ScyllaValidator {
           repairSchema
         )
 
-        val (repairDf, timestampColumns) =
-          if (includePerColumnMetadata) {
-            val (df, cols) = readers.Cassandra.explodeDataframeFromPerColumnMeta(spark, rawRepairDf)
-            (df, Some(cols))
-          } else {
-            (rawRepairDf, None)
-          }
-
-        writers.Scylla.writeDataframe(
-          targetSettings,
-          Nil,
-          repairDf,
-          timestampColumns,
-          None,
-          sourceSettings
-        )
+        if (includePerColumnMetadata) {
+          val (repairRdd, repairSchema, timestampColumns) =
+            readers.Cassandra.explodeRowsFromPerColumnMeta(spark, rawRepairDf)
+          writers.Scylla.writeRowRDD(
+            targetSettings,
+            Nil,
+            repairRdd,
+            repairSchema,
+            Some(timestampColumns),
+            None,
+            sourceSettings
+          )
+        } else {
+          writers.Scylla.writeDataframe(
+            targetSettings,
+            Nil,
+            rawRepairDf,
+            None,
+            None,
+            sourceSettings
+          )
+        }
 
         log.info(
           s"Finished copying missing rows to target: $missingSourceRowCount missing row(s) copied"

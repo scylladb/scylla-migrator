@@ -86,9 +86,14 @@ object Parquet {
               "Performing row explosion for TTL/writetime preservation."
           )
           val renamed = TimestampColumns.renameFromParquet(df)
-          val (explodedDf, timestampColumns) =
-            Cassandra.explodeDataframeFromPerColumnMeta(spark, renamed)
-          SourceDataFrame(explodedDf, Some(timestampColumns), savepointsSupported = false)
+          val (explodedRdd, writeSchema, timestampColumns) =
+            Cassandra.explodeRowsFromPerColumnMeta(spark, renamed)
+          SourceDataFrame(
+            renamed,
+            Some(timestampColumns),
+            savepointsSupported    = false,
+            cassandraExplodedWrite = Some((explodedRdd, writeSchema))
+          )
         } else {
           SourceDataFrame(df, None, savepointsSupported = false)
         }
