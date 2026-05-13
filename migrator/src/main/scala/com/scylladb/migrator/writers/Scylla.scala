@@ -128,7 +128,7 @@ object Scylla {
     *
     * We drop them from the DataFrame before writing so that both sides agree on the column count.
     */
-  // Mirrors the private TableWriter.InternalColumns from spark-scylladb-connector 4.1.0.
+  // Mirrors the private TableWriter.InternalColumns from spark-scylladb-connector 4.1.1.
   // If the connector version changes, verify this set is still in sync.
   private[writers] val InternalColumns: Set[String] = Set("solr_query")
 
