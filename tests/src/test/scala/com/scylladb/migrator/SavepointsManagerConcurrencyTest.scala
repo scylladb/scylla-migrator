@@ -171,7 +171,11 @@ class SavepointsManagerConcurrencyTest extends munit.FunSuite {
         val barrier = new CyclicBarrier(rounds)
         val latch = new CountDownLatch(rounds)
         try {
-          (1 to rounds).foreach { i =>
+          // Collect the `Future`s so worker exceptions surface as test failures. Without this,
+          // a broken `CyclicBarrier` or a thrown `dumpMigrationState` would still hit
+          // `latch.countDown()` in the `finally`, the latch would drain, and the post-assertions
+          // could pass even though no real contention occurred — a silent false negative.
+          val futures: Seq[java.util.concurrent.Future[_]] = (1 to rounds).map { i =>
             pool.submit(new Runnable {
               override def run(): Unit =
                 try {
@@ -184,6 +188,19 @@ class SavepointsManagerConcurrencyTest extends munit.FunSuite {
             })
           }
           assert(latch.await(30, TimeUnit.SECONDS), "concurrent dumps did not finish in time")
+          futures.foreach { f =>
+            try f.get(5, TimeUnit.SECONDS)
+            catch {
+              case e: java.util.concurrent.ExecutionException =>
+                // Surface the worker's original exception with its full stack trace instead of
+                // the generic `ExecutionException` wrapper, which would otherwise hide the
+                // actual broken-barrier or dump-throw cause.
+                throw new AssertionError(
+                  s"worker future failed: ${e.getCause.getMessage}",
+                  e.getCause
+                )
+            }
+          }
         } finally pool.shutdownNow()
 
         // Terminal dump with the full state, emulating the "final"/"completed" dump issued by the
@@ -306,6 +323,38 @@ class SavepointsManagerConcurrencyTest extends munit.FunSuite {
     } finally deleteRecursively(dir)
   }
 
+  test("seed rejects hostile near-Long.MAX_VALUE filenames so the counter cannot wrap") {
+    // Reproduces the lens-C finding: a planted `savepoint_<near-MAX>_<near-MAX>.yaml` would,
+    // pre-fix, seed `savepointSequence` to near `Long.MAX_VALUE`. The next `incrementAndGet`
+    // wraps to `Long.MIN_VALUE`, `String.format("%010d", ...)` emits a negative 20-char field,
+    // the `\d{10}` regex no longer matches, and resume permanently fails. The seed must
+    // reject these values up front and produce a sane next filename.
+    val dir = Files.createTempDirectory("savepoints-hostile-seed")
+    try {
+      val near = java.lang.Long.MAX_VALUE - 2L
+      val hostile =
+        dir.resolve(f"savepoint_${near}%013d_${near}%010d.yaml")
+      Files.write(hostile, Array.emptyByteArray)
+
+      val cfg = newConfig(dir, intervalSeconds = 3600)
+      val manager = new TestManager(cfg, processed = Set("alpha"))
+      try manager.dumpMigrationState("after-hostile-seed")
+      finally manager.close()
+
+      // The new savepoint's filename must still match the `savepoint_\d{13}_\d{10}.yaml`
+      // grammar — i.e., the counter did NOT wrap negative.
+      val produced =
+        listSavepoints(dir).map(_.getFileName.toString).filter(_ != hostile.getFileName.toString)
+      assert(produced.nonEmpty, "manager produced no new savepoint after the hostile seed")
+      produced.foreach { name =>
+        assert(
+          savepointName.pattern.matcher(name).matches(),
+          s"produced filename ${name} does not match the new-format regex (counter likely wrapped)"
+        )
+      }
+    } finally deleteRecursively(dir)
+  }
+
   test("hostile filenames do not crash sort / findLatest") {
     // An attacker (or a buggy external tool) could drop a savepoint-looking file whose numeric
     // fields overflow `Long`.  `parseLong` then throws `NumberFormatException`; an un-guarded
@@ -332,6 +381,76 @@ class SavepointsManagerConcurrencyTest extends munit.FunSuite {
         winner.getFileName.toString != hostile.getFileName.toString,
         s"hostile filename ${hostile.getFileName} beat the real savepoint in sort order"
       )
+    } finally deleteRecursively(dir)
+  }
+
+  test("signal fail-safe: tryDumpMigrationState gives up if dumpLock is held past the deadline") {
+    // Reproduces the dkropachev PR-356 review concern: the signal handler must not wait
+    // indefinitely on a wedged scheduled dump that still holds `dumpLock`. With the bounded
+    // `tryLock` path, `tryDumpMigrationState` must return `false` close to the requested
+    // timeout when another thread is holding the lock. Previously the signal path used
+    // unconditional `lock()` and would block for the full duration of the in-flight dump.
+    val dir = Files.createTempDirectory("savepoints-trylock-fail")
+    val cfg = newConfig(dir, intervalSeconds = 3600)
+    try {
+      val holdMillis = 1_500L
+      val timeoutMillis = 200L
+      val snapshotStarted = new CountDownLatch(1)
+      val manager = new TestManager(
+        cfg,
+        processed           = Set("x"),
+        snapshotDelayMillis = holdMillis,
+        onSnapshotStarted   = () => snapshotStarted.countDown()
+      )
+      try {
+        val blockerFinished = new CountDownLatch(1)
+        val blocker = new Thread(() =>
+          try manager.dumpMigrationState("blocker")
+          finally blockerFinished.countDown()
+        )
+        blocker.setDaemon(true)
+        blocker.start()
+        assert(
+          snapshotStarted.await(5, TimeUnit.SECONDS),
+          "blocker never entered the snapshot delay (lock not yet held)"
+        )
+
+        val start = System.nanoTime()
+        val wrote = manager.tryDumpMigrationState("signal", timeoutMillis)
+        val elapsedMillis = (System.nanoTime() - start) / 1_000_000L
+        assert(!wrote, "tryDumpMigrationState must time out under a contended dumpLock")
+        // Tight upper bound: timeout budget + generous CI jitter slack. A regression that
+        // swaps `tryLock(timeout)` back to unconditional `lock()` would block until the
+        // blocker finishes (~holdMillis = 1500 ms) and would fail this assertion. The
+        // previous bound of `< holdMillis` could not distinguish "bounded 200 ms wait" from
+        // "unbounded 1499 ms wait".
+        val maxAllowedMillis = timeoutMillis + 800L
+        assert(
+          elapsedMillis < maxAllowedMillis,
+          s"tryDumpMigrationState waited ${elapsedMillis} ms; expected bounded by ~${maxAllowedMillis} ms " +
+            s"(timeout=${timeoutMillis} ms, hold=${holdMillis} ms)"
+        )
+        assert(blockerFinished.await(5, TimeUnit.SECONDS), "blocker dump never finished")
+      } finally manager.close()
+    } finally deleteRecursively(dir)
+  }
+
+  test("signal fail-safe: tryDumpMigrationState writes when the lock is uncontended") {
+    // Counterpart to the timeout test: when no other thread holds `dumpLock`, the bounded
+    // `tryLock` must succeed (return true) and produce a real savepoint, so the routine
+    // signal path still writes the savepoint as before.
+    val dir = Files.createTempDirectory("savepoints-trylock-ok")
+    val cfg = newConfig(dir, intervalSeconds = 3600)
+    try {
+      val manager = new TestManager(cfg, processed = Set("alpha", "beta"))
+      try {
+        val wrote = manager.tryDumpMigrationState("signal", 5_000L)
+        assert(wrote, "uncontended tryDumpMigrationState must succeed")
+        val files = listSavepoints(dir)
+        assert(files.nonEmpty, "tryDumpMigrationState returned true but wrote no savepoint")
+        val parsed = MigratorConfig.loadFrom(latest(dir).toString)
+        assertEquals(parsed.skipParquetFiles.getOrElse(Set.empty), Set("alpha", "beta"))
+      } finally manager.close()
     } finally deleteRecursively(dir)
   }
 

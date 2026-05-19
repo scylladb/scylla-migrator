@@ -53,9 +53,11 @@ import scala.util.control.NonFatal
   *   - `close()` awaits the scheduler so no scheduled tick races the final dump issued by the
   *     caller after `close()`. The wait is bounded by `MaxCloseAwaitMillis` so a stuck filesystem
   *     cannot hang shutdown indefinitely.
-  *   - The first SIGINT/SIGTERM/USR2 still writes a savepoint before exit. A second signal acts as
-  *     a force-quit escape hatch, so operators can terminate even if the first dump is stuck on
-  *     slow or unhealthy storage.
+  *   - The first SIGINT/SIGTERM/USR2 attempts to write a savepoint before exit, but the wait for
+  *     `dumpLock` is bounded by `SignalDumpLockTimeoutMillis`. If a previous dump is stuck past
+  *     that deadline, the signal still triggers `sys.exit(0)` without writing — preserving "first
+  *     signal exits" over "first signal writes". A second signal acts as a force-quit escape hatch,
+  *     so operators can terminate even if the first dump is stuck on slow or unhealthy storage.
   */
 abstract class SavepointsManager(migratorConfig: MigratorConfig) extends AutoCloseable {
 
@@ -68,8 +70,12 @@ abstract class SavepointsManager(migratorConfig: MigratorConfig) extends AutoClo
   private var oldIntHandler: SignalHandler = _
 
   // Serializes `dumpMigrationState` across the scheduler, the driver thread, and signal handlers.
-  // `ReentrantLock` (rather than a bare `synchronized`) lets the signal handler use `tryLock` with
-  // a bounded timeout, which avoids turning a stuck write into an unkillable process.
+  // `ReentrantLock` (rather than a bare `synchronized`) is used so that signal-triggered dumps
+  // can call `tryLock(SignalDumpLockTimeoutMillis, …)` via `tryDumpMigrationState` and avoid
+  // waiting forever on a wedged scheduled dump: a stuck write can otherwise turn the first
+  // SIGTERM/SIGINT into an unkillable process when the orchestrator only emits one graceful
+  // signal before SIGKILL. The driver and scheduler paths still acquire the lock unconditionally
+  // because they have no deadline pressure.
   private val dumpLock = new ReentrantLock()
   // Per-instance monotonic counter: disambiguates dumps that share the same millisecond timestamp
   // and makes the filename order consistent with the logical order of dumps.
@@ -120,15 +126,32 @@ abstract class SavepointsManager(migratorConfig: MigratorConfig) extends AutoClo
             case SavepointsManager.SavepointName(head, tailOrNull) =>
               val millis =
                 try
-                  if (tailOrNull == null) java.lang.Long.parseLong(head) * 1000L
+                  if (tailOrNull == null)
+                    // Legacy filenames carry epoch seconds; scale to millis but reject values
+                    // that would silently overflow `Long`. `multiplyExact` throws
+                    // `ArithmeticException` instead of wrapping around to a negative number,
+                    // so a hostile filename like `savepoint_99999999999999999.yaml` cannot
+                    // poison the seeded `lastSavepointMillis` with a bogus huge value.
+                    java.lang.Math.multiplyExact(java.lang.Long.parseLong(head), 1000L)
                   else java.lang.Long.parseLong(head)
-                catch { case _: NumberFormatException => 0L }
+                catch {
+                  case _: NumberFormatException | _: ArithmeticException => 0L
+                }
               val seq =
                 if (tailOrNull == null) 0L
                 else
                   try java.lang.Long.parseLong(tailOrNull)
                   catch { case _: NumberFormatException => 0L }
-              if (millis > maxMillis || (millis == maxMillis && seq > maxSeq)) {
+              // Reject hostile near-`Long.MAX_VALUE` values; a single planted file must not be
+              // allowed to push `savepointSequence` to within one `incrementAndGet` of overflow
+              // (which would emit a negative counter in the next filename and permanently break
+              // the `\d{10}` regex on resume).
+              if (millis >= MaxReasonableSeedValue || seq >= MaxReasonableSeedValue) {
+                log.warn(
+                  s"Ignoring hostile/corrupted savepoint filename ${name} during seed " +
+                    s"(millis=${millis}, seq=${seq} exceeds ${MaxReasonableSeedValue})."
+                )
+              } else if (millis > maxMillis || (millis == maxMillis && seq > maxSeq)) {
                 maxMillis = millis
                 maxSeq    = seq
               }
@@ -189,22 +212,35 @@ abstract class SavepointsManager(migratorConfig: MigratorConfig) extends AutoClo
         }
 
         // The first signal preserves the historical contract: write a savepoint before exiting.
-        // If the dump itself fails (disk full, permission denied, subclass bug), we still need
-        // to honour "first signal -> exit": swallow the error, log it, reset the in-progress
-        // flag so the JVM is not left in a half-terminated state, and proceed to `sys.exit(0)`
-        // from the `finally` block. A second signal while the dump is in flight still takes the
+        // Crucially, the lock acquisition is bounded by `SignalDumpLockTimeoutMillis` so a
+        // wedged scheduled dump cannot indefinitely stall a graceful shutdown — orchestrators
+        // like k8s typically deliver only one SIGTERM before promoting to SIGKILL, so blocking
+        // here would defeat the shutdown deadline. If the lock cannot be acquired in time, or
+        // the dump itself fails (disk full, permission denied, subclass bug), we still honour
+        // "first signal -> exit": log the cause, reset the in-progress flag, and `sys.exit(0)`
+        // from the `finally` block. A second signal during an in-flight dump still takes the
         // fast-path above.
-        try dumpMigrationState(reason)
-        catch {
+        try {
+          val wrote = tryDumpMigrationState(reason, SignalDumpLockTimeoutMillis)
+          if (!wrote) {
+            log.warn(
+              s"Did not write a savepoint for ${reason}: dumpLock was contended or the wait " +
+                s"was interrupted within ${SignalDumpLockTimeoutMillis} ms. See prior warnings " +
+                s"for the specific cause. Exiting anyway to preserve the first-signal-exits contract."
+            )
+          }
+        } catch {
           case NonFatal(t) =>
             log.error(
               s"Signal-triggered savepoint dump for ${reason} failed; exiting anyway.",
               t
             )
-        } finally {
-          signalDumpInProgress.set(false)
+        } finally
+          // The JVM is already on its way out via `sys.exit(0)`. Resetting the in-progress
+          // flag here serves no purpose (no future signal can observe the reset before the
+          // JVM halts) and opens a tiny re-entry window where a third signal could pass the
+          // CAS gate and start a redundant dump. Leave the flag set and exit.
           sys.exit(0)
-        }
       }
     }
 
@@ -251,6 +287,38 @@ abstract class SavepointsManager(migratorConfig: MigratorConfig) extends AutoClo
     dumpLock.lock()
     try doDump(reason)
     finally dumpLock.unlock()
+  }
+
+  /** Bounded-wait variant of `dumpMigrationState` for the signal-handler fail-safe path.
+    *
+    * Returns `true` if `dumpLock` was acquired within `timeoutMillis` and the dump was attempted
+    * (any exception from `doDump` propagates so the caller can log it). Returns `false` if the lock
+    * could not be acquired in time, so the caller can give up the dump and continue exiting.
+    *
+    * Visible to `private[migrator]` so unit tests can exercise the timeout branch without going
+    * through `sys.exit`.
+    */
+  private[migrator] def tryDumpMigrationState(reason: String, timeoutMillis: Long): Boolean = {
+    val acquired =
+      try dumpLock.tryLock(timeoutMillis, TimeUnit.MILLISECONDS)
+      catch {
+        case _: InterruptedException =>
+          // Distinguish interrupt from timeout: the handler's generic log would otherwise
+          // misattribute the cause to "lock contention", masking the real reason (shutdown
+          // hook or framework-initiated interrupt) in incident review.
+          log.warn(
+            s"tryDumpMigrationState(${reason}) was interrupted while waiting for dumpLock; " +
+              s"not writing a savepoint."
+          )
+          Thread.currentThread().interrupt()
+          false
+      }
+    if (!acquired) false
+    else
+      try {
+        doDump(reason)
+        true
+      } finally dumpLock.unlock()
   }
 
   private def doDump(reason: String): Unit = {
@@ -361,6 +429,20 @@ object SavepointsManager {
   // Ceiling for the same deadline. Prevents `close()` from blocking for multiple minutes when
   // `intervalSeconds` is large (e.g. 3600) and the filesystem is stuck.
   private val MaxCloseAwaitMillis: Long = 30_000L
+
+  // How long a signal-triggered dump waits for `dumpLock` before giving up and exiting without
+  // writing a savepoint. Chosen well below the typical orchestrator grace period (k8s default is
+  // 30 s before SIGKILL) so the JVM still has headroom to flush logs and run shutdown hooks
+  // after the bounded wait, even if a scheduled dump is wedged on slow/unhealthy storage.
+  private[migrator] val SignalDumpLockTimeoutMillis: Long = 5_000L
+
+  // Sanity ceiling for values read from filenames during seed. Any field at or above this
+  // threshold is treated as hostile / corrupted: ignoring it keeps a single planted file from
+  // poisoning `lastSavepointMillis` / `savepointSequence` to within one increment of
+  // `Long.MAX_VALUE`, which would wrap the next counter to `Long.MIN_VALUE` and break the
+  // `\d{10}` filename regex. Chosen as half of `Long.MAX_VALUE` (~year 146,135,510 AD for
+  // millis) so legitimate values have effectively infinite headroom.
+  private[migrator] val MaxReasonableSeedValue: Long = java.lang.Long.MAX_VALUE / 2L
 
   // Filename grammar for savepoints. Two groups:
   //   - new format: `savepoint_<epochMillis>_<counter>.yaml` (tail is the counter)
