@@ -365,6 +365,102 @@ class MigratorConfigTest extends munit.FunSuite {
     assert(cfg.target.asInstanceOf[TargetSettings.DynamoDB].streamChanges)
   }
 
+  test("MySQL config round-trips without savepoints block (supportsSavepoints = false)") {
+    val config = MigratorConfig(
+      source = SourceSettings.MySQL(
+        host                 = "mysql.example.com",
+        port                 = 3306,
+        database             = "testdb",
+        table                = "t",
+        credentials          = Credentials("user", "pass"),
+        primaryKey           = None,
+        partitionColumn      = None,
+        numPartitions        = None,
+        lowerBound           = None,
+        upperBound           = None,
+        zeroDateTimeBehavior = SourceSettings.MySQL.ZeroDateTimeBehavior.Exception,
+        fetchSize            = SourceSettings.MySQL.DefaultFetchSize,
+        where                = None,
+        connectionProperties = None
+      ),
+      target = TargetSettings.Scylla(
+        host                          = "scylla.example.com",
+        port                          = 9042,
+        localDC                       = Some("dc1"),
+        credentials                   = None,
+        sslOptions                    = None,
+        keyspace                      = "ks",
+        table                         = "t",
+        connections                   = None,
+        stripTrailingZerosForDecimals = false,
+        writeTTLInS                   = None,
+        writeWritetimestampInuS       = None,
+        consistencyLevel              = "LOCAL_QUORUM"
+      ),
+      renames          = None,
+      savepoints       = Savepoints(intervalSeconds = 300, path = "/tmp/savepoints"),
+      skipTokenRanges  = None,
+      skipSegments     = None,
+      skipParquetFiles = None,
+      validation       = None
+    )
+    val rendered = config.render
+    assert(!rendered.contains("savepoints"), "Encoder should omit savepoints for MySQL")
+    val parsed = yaml.parser.parse(rendered).flatMap(_.as[MigratorConfig])
+    assert(parsed.isRight, s"Round-trip failed: ${parsed}")
+    val roundTripped = parsed.toOption.get
+    assertEquals(roundTripped.source, config.source)
+    assertEquals(roundTripped.target, config.target)
+  }
+
+  test(
+    "DynamoDBS3Export config round-trips without savepoints block (supportsSavepoints = false)"
+  ) {
+    val config = MigratorConfig(
+      source = SourceSettings.DynamoDBS3Export(
+        bucket      = "exports",
+        manifestKey = "manifest.json",
+        tableDescription = SourceSettings.DynamoDBS3Export.TableDescription(
+          attributeDefinitions = Seq(
+            SourceSettings.DynamoDBS3Export
+              .AttributeDefinition("pk", SourceSettings.DynamoDBS3Export.AttributeType.S)
+          ),
+          keySchema = Seq(
+            SourceSettings.DynamoDBS3Export
+              .KeySchema("pk", SourceSettings.DynamoDBS3Export.KeyType.Hash)
+          )
+        ),
+        endpoint           = None,
+        region             = Some("us-east-1"),
+        credentials        = None,
+        usePathStyleAccess = None
+      ),
+      target = TargetSettings.DynamoDB(
+        endpoint                    = None,
+        region                      = None,
+        credentials                 = None,
+        table                       = "DstTable",
+        writeThroughput             = None,
+        throughputWritePercent      = None,
+        streamChanges               = false,
+        skipInitialSnapshotTransfer = None
+      ),
+      renames          = None,
+      savepoints       = Savepoints(intervalSeconds = 300, path = "/tmp/savepoints"),
+      skipTokenRanges  = None,
+      skipSegments     = None,
+      skipParquetFiles = None,
+      validation       = None
+    )
+    val rendered = config.render
+    assert(!rendered.contains("savepoints"), "Encoder should omit savepoints for DynamoDBS3Export")
+    val parsed = yaml.parser.parse(rendered).flatMap(_.as[MigratorConfig])
+    assert(parsed.isRight, s"Round-trip failed: ${parsed}")
+    val roundTripped = parsed.toOption.get
+    assertEquals(roundTripped.source, config.source)
+    assertEquals(roundTripped.target, config.target)
+  }
+
   test("MigratorConfig roundtrip with skipTokenRanges containing LongToken and BigIntToken") {
     val config = MigratorConfig(
       source = SourceSettings.DynamoDB(

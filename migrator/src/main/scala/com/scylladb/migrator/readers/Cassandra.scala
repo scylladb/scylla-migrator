@@ -375,7 +375,7 @@ object Cassandra {
     val rawDataframe = spark.createDataFrame(rdd, selection.schema)
 
     if (skipExplosion) {
-      SourceDataFrame(rawDataframe, selection.timestampColumns, true)
+      SourceDataFrame(rawDataframe, selection.timestampColumns, source.supportsSavepoints)
     } else {
       val resultingDataframe = adjustDataframeForTimestampPreservation(
         spark,
@@ -384,7 +384,7 @@ object Cassandra {
         origSchema,
         tableDef
       )
-      SourceDataFrame(resultingDataframe, selection.timestampColumns, true)
+      SourceDataFrame(resultingDataframe, selection.timestampColumns, source.supportsSavepoints)
     }
   }
 }

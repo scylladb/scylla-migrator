@@ -364,7 +364,7 @@ class MySQLReaderTest extends munit.FunSuite {
   }
 
   test("MySQL source dataframes do not support savepoints") {
-    val sourceDF = MySQL.sourceDataFrame(spark.emptyDataFrame)
+    val sourceDF = MySQL.sourceDataFrame(spark.emptyDataFrame, mysqlSource())
 
     assert(!sourceDF.savepointsSupported)
     assertEquals(sourceDF.timestampColumns, None)
