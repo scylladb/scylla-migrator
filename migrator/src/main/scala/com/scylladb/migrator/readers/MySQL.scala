@@ -16,7 +16,6 @@ import org.apache.logging.log4j.LogManager
 import org.apache.spark.sql.{ DataFrame, DataFrameReader, SparkSession }
 
 import java.sql.{ Connection, DriverManager }
-import java.util.Locale
 import java.util.Properties
 
 import scala.util.Using
@@ -126,10 +125,11 @@ object MySQL {
 
   private def partitionColumnMetadata(
     source: SourceSettings.MySQL,
-    configuredColumn: String
+    configuredColumn: String,
+    safeProps: Map[String, String] = Map.empty
   ): PartitionColumnMetadata = {
     val requestedColumn = normalizedPartitionColumnName(configuredColumn)
-    withJdbcConnection(source) { connection =>
+    withJdbcConnection(source, safeProps) { connection =>
       val catalog = Option(connection.getCatalog).getOrElse(source.database)
       JdbcMetadata.resolvePartitionColumn(
         connection       = connection,
@@ -539,12 +539,16 @@ object MySQL {
     props
   }
 
-  private[migrator] def withJdbcConnection[A](source: SourceSettings.MySQL)(
-    f: Connection => A
-  ): A = {
+  private[migrator] def withJdbcConnection[A](
+    source: SourceSettings.MySQL,
+    safeProps: Map[String, String] = Map.empty
+  )(f: Connection => A): A = {
     Class.forName("com.mysql.cj.jdbc.Driver")
     Using.resource(
-      DriverManager.getConnection(buildJdbcUrl(source), jdbcConnectionProperties(source))
+      DriverManager.getConnection(
+        buildJdbcUrl(source),
+        jdbcConnectionProperties(source, safeProps)
+      )
     )(
       f
     )
@@ -640,7 +644,7 @@ object MySQL {
       case (Some(col), Some(n)) =>
         (source.lowerBound, source.upperBound) match {
           case (Some(lower), Some(upper)) =>
-            val partitionColumnInfo = partitionColumnMetadata(source, col)
+            val partitionColumnInfo = partitionColumnMetadata(source, col, safeProps)
             validatePartitionBoundsForColumnType(
               partitionColumn = partitionColumnInfo.columnName,
               jdbcTypeName    = partitionColumnInfo.jdbcTypeName,

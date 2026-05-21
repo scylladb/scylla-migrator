@@ -36,6 +36,17 @@ object JdbcMetadata {
       .replace("_", s"${searchEscape}_")
   }
 
+  /** Default escape strategy for [[resolvePartitionColumn]]: reads the driver's
+    * `getSearchStringEscape` and delegates to [[escapeMetadataPattern]]. Backends whose driver
+    * returns an empty escape string (bracket-escaping drivers such as SQL Server) should supply
+    * their own `escapeTablePattern` function that wraps `_` / `%` literals in `[...]` instead.
+    */
+  def defaultEscapeTablePattern(table: String, connection: Connection): String =
+    escapeMetadataPattern(
+      table,
+      Option(connection.getMetaData.getSearchStringEscape).getOrElse("\\")
+    )
+
   /** Resolved partition-column lookup against `connection.getMetaData.getColumns`.
     *
     * @param connection
@@ -43,7 +54,7 @@ object JdbcMetadata {
     * @param catalog
     *   catalog name to scope the lookup (e.g. database name).
     * @param table
-    *   raw (un-escaped) table name; will be wildcard-escaped before the JDBC call.
+    *   raw (un-escaped) table name; escaped via `escapeTablePattern` before the JDBC call.
     * @param configuredColumn
     *   user-supplied partition column name (may be back-tick quoted).
     * @param normalizedColumn
@@ -56,6 +67,10 @@ object JdbcMetadata {
     *   builds a [[JdbcPartitionBounds.PartitionColumnMetadata]] from the resolved
     *   `(columnName, jdbcType, jdbcTypeName)` triple, allowing each backend to plug in its
     *   `classifyPartitionColumnType` logic.
+    * @param escapeTablePattern
+    *   strategy for escaping the raw table name before passing it as the `tableNamePattern`
+    *   argument to `DatabaseMetaData.getColumns`. Defaults to [[defaultEscapeTablePattern]]
+    *   (character-escape drivers). Bracket-escaping drivers must override this.
     */
   def resolvePartitionColumn(
     connection: Connection,
@@ -64,13 +79,10 @@ object JdbcMetadata {
     configuredColumn: String,
     normalizedColumn: String,
     onMissing: List[String] => Nothing,
-    classifier: (String, Int, String) => JdbcPartitionBounds.PartitionColumnMetadata
+    classifier: (String, Int, String) => JdbcPartitionBounds.PartitionColumnMetadata,
+    escapeTablePattern: (String, Connection) => String = defaultEscapeTablePattern
   ): JdbcPartitionBounds.PartitionColumnMetadata = {
-    val tablePattern =
-      escapeMetadataPattern(
-        table,
-        Option(connection.getMetaData.getSearchStringEscape).getOrElse("\\")
-      )
+    val tablePattern = escapeTablePattern(table, connection)
 
     Using.resource(connection.getMetaData.getColumns(catalog, null, tablePattern, "%")) {
       resultSet =>
