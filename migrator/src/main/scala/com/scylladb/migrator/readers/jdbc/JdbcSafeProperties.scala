@@ -114,7 +114,9 @@ object JdbcSafeProperties {
     *   - `jar:file:...` nesting,
     *   - Windows UNC paths (`\\server\share`) — flagged as `"file"` because they resolve via the
     *     local filesystem,
-    *   - plain `http://...`.
+    *   - plain `http://...`,
+    *   - `jar:http://...` nesting — a JAR URL over plain HTTP is still insecure for keystore
+    *     material because the JDK fetches the outer archive over an unencrypted channel.
     */
   def insecureUrlScheme(value: String): Option[String] = {
     val normalized = value.trim.toLowerCase(Locale.ROOT)
@@ -123,7 +125,10 @@ object JdbcSafeProperties {
       normalized.startsWith("jar:file:") ||
       normalized.startsWith("\\\\")
     ) Some("file")
-    else if (normalized.startsWith("http://")) Some("http")
+    else if (
+      normalized.startsWith("http://") ||
+      normalized.startsWith("jar:http://")
+    ) Some("http")
     else None
   }
 

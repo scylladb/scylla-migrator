@@ -108,6 +108,17 @@ class JdbcSafePropertiesTest extends munit.FunSuite {
     assertEquals(JdbcSafeProperties.insecureUrlScheme("\\\\fileserver\\share\\k.jks"), Some("file"))
   }
 
+  test("insecureUrlScheme detects jar:http:// as insecure") {
+    assertEquals(
+      JdbcSafeProperties.insecureUrlScheme("jar:http://attacker.com/evil.jar!/keystore.jks"),
+      Some("http")
+    )
+    assertEquals(
+      JdbcSafeProperties.insecureUrlScheme("JAR:HTTP://attacker.com/evil.jar!/keystore.jks"),
+      Some("http")
+    )
+  }
+
   test("looksLikeTlsKeystoreUrlKey targets *keystore*url* and *cert*url* keys") {
     assert(JdbcSafeProperties.looksLikeTlsKeystoreUrlKey("trustCertificateKeyStoreUrl"))
     assert(JdbcSafeProperties.looksLikeTlsKeystoreUrlKey("clientCertificateKeyStoreUrl"))

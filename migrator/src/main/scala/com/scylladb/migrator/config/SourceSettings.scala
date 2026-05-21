@@ -755,7 +755,7 @@ object SourceSettings {
                 .keys
                 .filter(k =>
                   com.scylladb.migrator.readers.MySQL.DangerousJdbcKeys
-                    .contains(k.toLowerCase(Locale.ROOT))
+                    .exists(_.equalsIgnoreCase(k))
                 )
                 .toList
               if (dangerousKeys.nonEmpty)

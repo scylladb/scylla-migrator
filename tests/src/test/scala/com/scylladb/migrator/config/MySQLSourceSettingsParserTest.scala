@@ -912,6 +912,33 @@ class MySQLSourceSettingsParserTest extends munit.FunSuite {
     }
   }
 
+  test("connectionProperties with Turkish-\u0130 crafted dangerous key fails at parse time") {
+    // Regression: parse-time check previously used toLowerCase(Locale.ROOT) which expands U+0130
+    // into "i\u0307" (2 chars), letting a crafted key bypass the blocklist. The fix uses
+    // equalsIgnoreCase per-character matching, consistent with the runtime JdbcSafeProperties path.
+    val config =
+      s"""type: mysql
+         |host: localhost
+         |port: 3306
+         |database: mydb
+         |table: data
+         |credentials:
+         |  username: user
+         |  password: pass
+         |connectionProperties:
+         |  allowLoadLocal\u0130nfile: "true"
+         |""".stripMargin
+
+    val parsed = yaml.parser
+      .parse(config)
+      .flatMap(_.as[SourceSettings])
+    assert(
+      parsed.isLeft,
+      "Should reject crafted key with U+0130 that expands under toLowerCase(Locale.ROOT)"
+    )
+    assert(parsed.left.exists(_.getMessage.contains("blocked security-sensitive keys")))
+  }
+
   test("connectionProperties with safe keys passes at parse time") {
     val config =
       """type: mysql
