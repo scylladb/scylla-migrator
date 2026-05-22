@@ -26,6 +26,11 @@
         - unzip
         - python3-pip
 
+    - name: Discover JAVA_HOME
+      shell: dirname $(dirname $(readlink -f $(which java)))
+      register: java_home_result
+      changed_when: false
+
     - name: install cqlsh
       ansible.builtin.pip:
         name: scylla-cqlsh
@@ -38,7 +43,7 @@
 
     - name: Download the awscli bundle.
       get_url: 
-        url: https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
+        url: "https://awscli.amazonaws.com/awscli-exe-linux-{{ 'aarch64' if ansible_architecture in ['aarch64', 'arm64'] else 'x86_64' }}.zip"
         dest: "{{ home_dir }}/awscliv2.zip"
       when: not stat_result.stat.exists
       register: aws_cli_download_bundle
@@ -91,7 +96,7 @@
       ansible.builtin.lineinfile:
         path: "{{ home_dir }}/.profile"
         regexp: '^JAVA_HOME='
-        line: export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+        line: "export JAVA_HOME={{ java_home_result.stdout }}"
 
     - name: Add JAVA_HOME to PATH
       ansible.builtin.lineinfile:
