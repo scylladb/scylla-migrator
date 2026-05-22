@@ -10,7 +10,16 @@ import com.scylladb.migrator.config.{ CopyType, SourceSettings }
 import org.apache.logging.log4j.LogManager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.cassandra.{ CassandraSQLRow, DataTypeConverter }
-import org.apache.spark.sql.types.{ IntegerType, LongType, StructField, StructType }
+import org.apache.spark.sql.types.{
+  ArrayType,
+  DataType,
+  IntegerType,
+  LongType,
+  MapType,
+  StructField,
+  StructType,
+  TimestampType
+}
 import org.apache.spark.sql.{ DataFrame, Encoders, Row, SparkSession }
 import org.apache.spark.unsafe.types.UTF8String
 import com.scylladb.migrator.ConsistencyLevelUtils
@@ -173,6 +182,46 @@ object Cassandra {
     case ab: ArrayBuffer[_] => ab.map(convertValue)
     case udt: UDTValue      => Row.fromSeq(udt.columnValues.map(convertValue))
     case tuple: TupleValue  => Row.fromSeq(tuple.values.map(convertValue))
+    case x                  => x
+  }
+
+  /** CQL `timestamp` is a 64-bit signed integer of milliseconds since epoch, so its range is
+    * `[Long.MinValue, Long.MaxValue]` ms. Spark's `TimestampType` is encoded internally as
+    * microseconds since epoch (also Long), so building a `TimestampType` column from a row whose
+    * millis value lies outside `±(Long.MaxValue / 1000)` overflows in
+    * `DateTimeUtils.millisToMicros` (`Math.multiplyExact(millis, 1000)`). To migrate the full CQL
+    * range losslessly, replace `TimestampType` with `LongType` (epoch millis) in the source schema.
+    * Recurses into UDT (`StructType`), list/set (`ArrayType`), and map (`MapType`).
+    */
+  def widenCqlTimestamps(dataType: DataType): DataType = dataType match {
+    case TimestampType => LongType
+    case s: StructType =>
+      StructType(s.fields.map(f => f.copy(dataType = widenCqlTimestamps(f.dataType))))
+    case a: ArrayType =>
+      a.copy(elementType = widenCqlTimestamps(a.elementType))
+    case m: MapType =>
+      m.copy(keyType = widenCqlTimestamps(m.keyType), valueType = widenCqlTimestamps(m.valueType))
+    case other => other
+  }
+
+  /** Recursively convert any `java.sql.Timestamp`/`java.util.Date`/`java.time.Instant` produced by
+    * the Spark Cassandra connector to its epoch-millisecond `Long` value. Pairs with
+    * [[widenCqlTimestamps]] so each row's runtime value matches the widened schema. The Scylla
+    * writer (`saveToCassandra` via `SqlRowWriter`) accepts `Long` as millis for CQL `timestamp`
+    * columns via the connector's `TypeConverter`, so the round-trip stays lossless.
+    */
+  val widenTimestampValue: Any => Any = {
+    case t: java.sql.Timestamp => t.getTime
+    case i: java.time.Instant  => i.toEpochMilli
+    case d: java.util.Date     => d.getTime
+    case row: Row              => Row.fromSeq(row.toSeq.map(widenTimestampValue))
+    case set: Set[_]           => set.map(widenTimestampValue)
+    case list: List[_]         => list.map(widenTimestampValue)
+    case map: Map[_, _] =>
+      map.map { case (k, v) =>
+        widenTimestampValue(k) -> widenTimestampValue(v)
+      }
+    case ab: ArrayBuffer[_] => ab.map(widenTimestampValue)
     case x                  => x
   }
 
@@ -345,7 +394,10 @@ object Cassandra {
     log.info("TableDef retrieved for source:")
     log.info(tableDef)
 
-    val origSchema = StructType(tableDef.columns.map(DataTypeConverter.toStructField))
+    val origSchema = StructType(tableDef.columns.map { col =>
+      val field = DataTypeConverter.toStructField(col)
+      field.copy(dataType = widenCqlTimestamps(field.dataType))
+    })
     log.info("Original schema loaded:")
     origSchema.printTreeString()
 
@@ -369,7 +421,7 @@ object Cassandra {
     val rdd = finalCassandraRDD
       .asInstanceOf[RDD[Row]]
       .map { row =>
-        Row.fromSeq(row.toSeq.map(convertValue))
+        Row.fromSeq(row.toSeq.map(v => widenTimestampValue(convertValue(v))))
       }
 
     val rawDataframe = spark.createDataFrame(rdd, selection.schema)
