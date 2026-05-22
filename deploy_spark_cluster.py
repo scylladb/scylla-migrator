@@ -9,6 +9,7 @@ created EC2 instances.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import shlex
@@ -384,6 +385,16 @@ def positive_int(value: str) -> int:
     return parsed
 
 
+def ipv4_cidr(value: str) -> str:
+    try:
+        network = ipaddress.ip_network(value, strict=False)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid CIDR: {value}") from exc
+    if network.version != 4:
+        raise argparse.ArgumentTypeError("must be an IPv4 CIDR")
+    return str(network)
+
+
 def repo_root() -> Path:
     return Path(__file__).resolve().parent
 
@@ -413,14 +424,19 @@ def run_command(
     *,
     cwd: Path | None = None,
     capture_output: bool = False,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     print(f"+ {shlex.join(args)}", file=sys.stderr)
+    process_env = os.environ.copy()
+    if env:
+        process_env.update(env)
     return subprocess.run(
         args,
         cwd=cwd,
         check=True,
         text=True,
         capture_output=capture_output,
+        env=process_env,
     )
 
 
@@ -453,18 +469,38 @@ def infer_aws_architecture(instance_type: str) -> str:
     return "x86_64"
 
 
-def ssh_options(private_key: Path) -> list[str]:
-    return [
+def known_hosts_path(state_dir: Path) -> Path:
+    path = state_dir / "known_hosts"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch(exist_ok=True)
+    return path
+
+
+def ssh_options(private_key: Path, known_hosts: Path, insecure: bool) -> list[str]:
+    options = [
         "-i",
         str(private_key),
         "-o",
         "BatchMode=yes",
         "-o",
         "IdentitiesOnly=yes",
+    ]
+
+    if insecure:
+        return [
+            *options,
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+        ]
+
+    return [
+        *options,
         "-o",
-        "StrictHostKeyChecking=no",
+        "StrictHostKeyChecking=accept-new",
         "-o",
-        "UserKnownHostsFile=/dev/null",
+        f"UserKnownHostsFile={known_hosts}",
     ]
 
 
@@ -473,9 +509,18 @@ def ssh_command(
     remote_command: str,
     *,
     private_key: Path,
+    known_hosts: Path,
+    insecure: bool,
     user: str = DEFAULT_USER,
 ) -> None:
-    run_command(["ssh", *ssh_options(private_key), f"{user}@{host}", remote_command])
+    run_command(
+        [
+            "ssh",
+            *ssh_options(private_key, known_hosts, insecure),
+            f"{user}@{host}",
+            remote_command,
+        ]
+    )
 
 
 def scp_to_host(
@@ -484,26 +529,34 @@ def scp_to_host(
     destination: str,
     *,
     private_key: Path,
+    known_hosts: Path,
+    insecure: bool,
     user: str = DEFAULT_USER,
 ) -> None:
     run_command(
         [
             "scp",
-            *ssh_options(private_key),
+            *ssh_options(private_key, known_hosts, insecure),
             str(source),
             f"{user}@{host}:{destination}",
         ]
     )
 
 
-def wait_for_ssh(hosts: list[str], private_key: Path, user: str = DEFAULT_USER) -> None:
+def wait_for_ssh(
+    hosts: list[str],
+    private_key: Path,
+    known_hosts: Path,
+    insecure: bool,
+    user: str = DEFAULT_USER,
+) -> None:
     for host in hosts:
         print(f"Waiting for SSH on {host} ...")
         for attempt in range(1, 31):
             completed = subprocess.run(
                 [
                     "ssh",
-                    *ssh_options(private_key),
+                    *ssh_options(private_key, known_hosts, insecure),
                     "-o",
                     "ConnectTimeout=10",
                     f"{user}@{host}",
@@ -541,6 +594,8 @@ def upload_config_if_requested(
     migration_type: str,
     master_public_ip: str,
     private_key: Path,
+    known_hosts: Path,
+    insecure: bool,
 ) -> None:
     if config_file is None:
         return
@@ -549,7 +604,14 @@ def upload_config_if_requested(
 
     remote_name = migration_config_name(migration_type)
     destination = f"{REMOTE_MIGRATOR_DIR}/{remote_name}"
-    scp_to_host(config_file, master_public_ip, destination, private_key=private_key)
+    scp_to_host(
+        config_file,
+        master_public_ip,
+        destination,
+        private_key=private_key,
+        known_hosts=known_hosts,
+        insecure=insecure,
+    )
 
 
 def write_terraform_files(args: argparse.Namespace, state_dir: Path) -> None:
@@ -622,8 +684,22 @@ def write_ansible_inventory(
     return inventory_path
 
 
-def run_ansible(inventory_path: Path, private_key: Path) -> None:
+def run_ansible(
+    inventory_path: Path,
+    private_key: Path,
+    known_hosts: Path,
+    insecure: bool,
+) -> None:
     ansible_dir = repo_root() / "ansible"
+    if insecure:
+        host_key_checking = "False"
+        ssh_common_args = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+    else:
+        host_key_checking = "True"
+        ssh_common_args = (
+            f"-o StrictHostKeyChecking=yes -o UserKnownHostsFile={known_hosts}"
+        )
+
     run_command(
         [
             "ansible-playbook",
@@ -633,18 +709,28 @@ def run_ansible(inventory_path: Path, private_key: Path) -> None:
             str(private_key),
             "-u",
             DEFAULT_USER,
+            "--ssh-common-args",
+            ssh_common_args,
             "scylla-migrator.yml",
         ],
         cwd=ansible_dir,
+        env={"ANSIBLE_HOST_KEY_CHECKING": host_key_checking},
     )
 
 
-def start_spark(outputs: dict[str, Any], private_key: Path) -> None:
+def start_spark(
+    outputs: dict[str, Any],
+    private_key: Path,
+    known_hosts: Path,
+    insecure: bool,
+) -> None:
     master_public_ip = outputs["master"]["public_ip"]
     ssh_command(
         master_public_ip,
         f"cd {shlex.quote(REMOTE_MIGRATOR_DIR)} && ./start-spark.sh",
         private_key=private_key,
+        known_hosts=known_hosts,
+        insecure=insecure,
     )
 
     for worker in outputs["workers"]:
@@ -652,6 +738,8 @@ def start_spark(outputs: dict[str, Any], private_key: Path) -> None:
             worker["public_ip"],
             "cd /home/ubuntu && ./start-slave.sh",
             private_key=private_key,
+            known_hosts=known_hosts,
+            insecure=insecure,
         )
 
 
@@ -672,6 +760,8 @@ def save_metadata(
         "workers": args.workers,
         "migration_type": args.migration_type,
         "ssh_private_key": str(private_key),
+        "ssh_known_hosts": str(known_hosts_path(state_dir)),
+        "insecure_ssh": args.insecure_ssh,
         "state_dir": str(state_dir),
         "terraform_outputs": outputs,
     }
@@ -682,14 +772,30 @@ def load_metadata(state_dir: Path) -> dict[str, Any]:
     return read_json(state_dir / "metadata.json")
 
 
+def validate_access_cidrs(args: argparse.Namespace) -> None:
+    public_cidrs = {
+        "--allowed-ssh-cidr": args.allowed_ssh_cidr,
+        "--allowed-web-cidr": args.allowed_web_cidr,
+    }
+    exposed = [flag for flag, cidr in public_cidrs.items() if cidr == "0.0.0.0/0"]
+    if exposed and not args.allow_public_access:
+        flags = ", ".join(exposed)
+        raise SystemExit(
+            f"{flags} opens access to the public internet. Re-run with "
+            "--allow-public-access if this is intentional."
+        )
+
+
 def handle_deploy(args: argparse.Namespace) -> None:
     if args.cloud_provider != "aws":
         raise SystemExit("Only AWS is currently supported")
+    validate_access_cidrs(args)
 
     state_dir = resolve_state_dir(args.state_dir)
     private_key = resolve_path(args.ssh_private_key)
     if private_key is None or not private_key.exists():
         raise SystemExit(f"SSH private key does not exist: {private_key}")
+    known_hosts = known_hosts_path(state_dir)
 
     required = ["terraform"]
     if not args.skip_ansible:
@@ -709,24 +815,26 @@ def handle_deploy(args: argparse.Namespace) -> None:
 
     all_public_ips = [outputs["master"]["public_ip"]]
     all_public_ips.extend(worker["public_ip"] for worker in outputs["workers"])
-    wait_for_ssh(all_public_ips, private_key)
+    wait_for_ssh(all_public_ips, private_key, known_hosts, args.insecure_ssh)
 
     inventory_path = write_ansible_inventory(
         outputs,
         private_key=private_key,
         state_dir=state_dir,
     )
-    run_ansible(inventory_path, private_key)
+    run_ansible(inventory_path, private_key, known_hosts, args.insecure_ssh)
 
     upload_config_if_requested(
         resolve_path(args.config_file),
         migration_type=args.migration_type,
         master_public_ip=outputs["master"]["public_ip"],
         private_key=private_key,
+        known_hosts=known_hosts,
+        insecure=args.insecure_ssh,
     )
 
     if not args.skip_start:
-        start_spark(outputs, private_key)
+        start_spark(outputs, private_key, known_hosts, args.insecure_ssh)
 
     print_cluster_details(outputs, metadata=load_metadata(state_dir))
 
@@ -786,6 +894,8 @@ def handle_run(args: argparse.Namespace) -> None:
     private_key = resolve_path(args.ssh_private_key or metadata.get("ssh_private_key"))
     if private_key is None or not private_key.exists():
         raise SystemExit("Could not find SSH private key. Pass --ssh-private-key.")
+    known_hosts = resolve_path(metadata.get("ssh_known_hosts")) or known_hosts_path(state_dir)
+    insecure = args.insecure_ssh or bool(metadata.get("insecure_ssh", False))
 
     migration_type = args.migration_type or metadata.get("migration_type") or "cql"
     upload_config_if_requested(
@@ -793,6 +903,8 @@ def handle_run(args: argparse.Namespace) -> None:
         migration_type=migration_type,
         master_public_ip=outputs["master"]["public_ip"],
         private_key=private_key,
+        known_hosts=known_hosts,
+        insecure=insecure,
     )
 
     submit_script = submit_script_name(migration_type, args.validator)
@@ -800,6 +912,8 @@ def handle_run(args: argparse.Namespace) -> None:
         outputs["master"]["public_ip"],
         f"cd {shlex.quote(REMOTE_MIGRATOR_DIR)} && ./{submit_script}",
         private_key=private_key,
+        known_hosts=known_hosts,
+        insecure=insecure,
     )
 
 
@@ -850,8 +964,23 @@ def build_parser() -> argparse.ArgumentParser:
     deploy.add_argument("--workers", type=positive_int, default=1)
     deploy.add_argument("--vpc-cidr", default="10.42.0.0/16")
     deploy.add_argument("--public-subnet-cidr", default="10.42.1.0/24")
-    deploy.add_argument("--allowed-ssh-cidr", default="0.0.0.0/0")
-    deploy.add_argument("--allowed-web-cidr", default="0.0.0.0/0")
+    deploy.add_argument(
+        "--allowed-ssh-cidr",
+        type=ipv4_cidr,
+        required=True,
+        help="IPv4 CIDR allowed to SSH to cluster nodes, for example YOUR_IP/32.",
+    )
+    deploy.add_argument(
+        "--allowed-web-cidr",
+        type=ipv4_cidr,
+        required=True,
+        help="IPv4 CIDR allowed to reach Spark web UIs, for example YOUR_IP/32.",
+    )
+    deploy.add_argument(
+        "--allow-public-access",
+        action="store_true",
+        help="Allow 0.0.0.0/0 for SSH or Spark UI access when explicitly requested.",
+    )
     deploy.add_argument("--root-volume-size-gb", type=positive_int, default=100)
     deploy.add_argument(
         "--iam-instance-profile",
@@ -866,6 +995,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     deploy.add_argument("--skip-ansible", action="store_true")
     deploy.add_argument("--skip-start", action="store_true")
+    deploy.add_argument(
+        "--insecure-ssh",
+        action="store_true",
+        help=(
+            "Disable SSH host key verification. This restores the previous "
+            "behavior and should only be used in trusted test environments."
+        ),
+    )
     deploy.set_defaults(func=handle_deploy)
 
     show = subparsers.add_parser(
@@ -887,6 +1024,14 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--migration-type", choices=["cql", "alternator"], default=None)
     run.add_argument("--config-file", default=None)
     run.add_argument("--validator", action="store_true")
+    run.add_argument(
+        "--insecure-ssh",
+        action="store_true",
+        help=(
+            "Disable SSH host key verification. This should only be used in "
+            "trusted test environments."
+        ),
+    )
     run.set_defaults(func=handle_run)
 
     destroy = subparsers.add_parser(
