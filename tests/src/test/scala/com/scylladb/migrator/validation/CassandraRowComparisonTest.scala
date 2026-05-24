@@ -2,6 +2,7 @@ package com.scylladb.migrator.validation
 
 import com.datastax.spark.connector.CassandraRow
 import com.scylladb.migrator.validation.RowComparisonFailure.{ cassandraRowComparisonFailure, Item }
+import com.scylladb.migrator.validation.core.NumericTypePolicy
 
 class CassandraRowComparisonTest extends munit.FunSuite {
 
@@ -102,21 +103,76 @@ class CassandraRowComparisonTest extends munit.FunSuite {
     assertEquals(result, expected)
   }
 
-  test("BigDecimal and integral wrappers remain different for Cassandra validation") {
+  test("BigDecimal and integral wrappers are equal under Lenient policy") {
     val left = CassandraRow.fromMap(Map("foo" -> new java.math.BigDecimal("42.0")))
     val right = CassandraRow.fromMap(Map("foo" -> 42L))
 
     val result = compareItems(left, Some(right))
-    val expected =
+    assertEquals(result, None)
+  }
+
+  test("Float vs Double under different policies") {
+    val left = CassandraRow.fromMap(Map("foo" -> 0.1f))
+    val right = CassandraRow.fromMap(Map("foo" -> 0.1))
+
+    // Lenient treats them as equal (under default tolerance)
+    assertEquals(
+      RowComparisonFailure.compareCassandraRows(
+        left,
+        Some(right),
+        0.01,
+        1,
+        1,
+        1,
+        true,
+        NumericTypePolicy.Lenient
+      ),
+      None
+    )
+
+    // DetectWiden flags lossy widening as TypeMismatch
+    assertEquals(
+      RowComparisonFailure.compareCassandraRows(
+        left,
+        Some(right),
+        0.01,
+        1,
+        1,
+        1,
+        true,
+        NumericTypePolicy.DetectWiden
+      ),
       Some(
-        cassandraRowComparisonFailure(
+        RowComparisonFailure.cassandraRowComparisonFailure(
           left,
           Some(right),
-          List(Item.DifferingFieldValues(List("foo")))
+          List(Item.NumericTypeMismatch(List(("foo", "Float", "Double"))))
         )
       )
+    )
 
-    assertEquals(result, expected)
+    // StrictType flags any Float/Double pair as TypeMismatch
+    val leftLossless = CassandraRow.fromMap(Map("foo" -> 1.5f))
+    val rightLossless = CassandraRow.fromMap(Map("foo" -> 1.5))
+    assertEquals(
+      RowComparisonFailure.compareCassandraRows(
+        leftLossless,
+        Some(rightLossless),
+        0.01,
+        1,
+        1,
+        1,
+        true,
+        NumericTypePolicy.StrictType
+      ),
+      Some(
+        RowComparisonFailure.cassandraRowComparisonFailure(
+          leftLossless,
+          Some(rightLossless),
+          List(Item.NumericTypeMismatch(List(("foo", "Float", "Double"))))
+        )
+      )
+    )
   }
 
 }

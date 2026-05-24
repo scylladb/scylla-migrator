@@ -8,6 +8,8 @@ import com.scylladb.migrator.config.{ MigratorConfig, Rename, SourceSettings, Ta
 import com.scylladb.migrator.readers
 import com.scylladb.migrator.readers.MySQL
 import com.scylladb.migrator.validation.RowComparisonFailure
+import com.scylladb.migrator.validation.core._
+import com.scylladb.migrator.validation.core.SchemaResolver.{ resolveFieldName, sparkColumn }
 import org.apache.logging.log4j.LogManager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.cassandra.{ CassandraSQLRow, DataTypeConverter }
@@ -42,141 +44,43 @@ object MySQLToScyllaValidator {
   private[scylla] def buildCaseInsensitiveRenameMap(
     renames: List[Rename]
   ): Map[String, String] =
-    renames
-      .groupBy(_.from.toLowerCase(Locale.ROOT))
-      .view
-      .map { case (sourceName, entries) =>
-        val targets = entries.map(_.to).distinct
-        if (targets.size > 1)
-          sys.error(
-            s"Renames contain conflicting case-insensitive mappings for source column '${sourceName}': " +
-              s"${targets.mkString(", ")}"
-          )
-        sourceName -> targets.head
-      }
-      .toMap
+    SchemaResolver.buildCaseInsensitiveRenameMap(renames)
 
   private[scylla] def escapeSparkColumnName(name: String): String =
-    s"`${name.replace("`", "``")}`"
+    SchemaResolver.escapeSparkColumnName(name)
 
   private[scylla] def sparkColumn(name: String): Column =
-    col(escapeSparkColumnName(name))
+    SchemaResolver.sparkColumn(name)
 
   private[scylla] def areDifferent(
     left: Option[Any],
     right: Option[Any],
     timestampMsTolerance: Long,
-    floatingPointTolerance: Double
+    floatingPointTolerance: Double,
+    numericTypePolicy: NumericTypePolicy = NumericTypePolicy.Lenient
   ): Boolean =
-    (left, right) match {
-      case (Some(l: Number), Some(r: Number)) =>
-        areNumbersDifferent(l, r, floatingPointTolerance)
-      case _ =>
-        RowComparisonFailure.areDifferent(
-          left,
-          right,
-          timestampMsTolerance,
-          floatingPointTolerance
-        )
-    }
-
-  private sealed trait FloatingPointSpecial
-  private case object NaNValue extends FloatingPointSpecial
-  private case class InfinityValue(sign: Int) extends FloatingPointSpecial
-
-  private def areNumbersDifferent(left: Number, right: Number, tolerance: Double): Boolean =
-    floatingPointSpecial(left)
-      .orElse(floatingPointSpecial(right))
-      .map { _ =>
-        (floatingPointSpecial(left), floatingPointSpecial(right)) match {
-          case (Some(NaNValue), Some(NaNValue)) => false
-          case (Some(InfinityValue(leftSign)), Some(InfinityValue(rightSign))) =>
-            leftSign != rightSign
-          case _ => true
-        }
-      }
-      .getOrElse {
-        (normalizedIntegralValue(left), normalizedIntegralValue(right)) match {
-          case (Some(l), Some(r)) => l != r
-          case _ =>
-            (normalizedDecimalValue(left), normalizedDecimalValue(right)) match {
-              case (Some(l), Some(r)) => areNumericalValuesDifferent(l, r, tolerance)
-              case _                  => left != right
-            }
-        }
-      }
-
-  private def floatingPointSpecial(value: Number): Option[FloatingPointSpecial] =
-    value match {
-      case d: java.lang.Double if d.isNaN      => Some(NaNValue)
-      case d: java.lang.Double if d.isInfinite => Some(InfinityValue(Math.signum(d).toInt))
-      case f: java.lang.Float if f.isNaN       => Some(NaNValue)
-      case f: java.lang.Float if f.isInfinite  => Some(InfinityValue(Math.signum(f).toInt))
-      case _                                   => None
-    }
-
-  private def normalizedIntegralValue(value: Number): Option[BigInt] =
-    value match {
-      case b: java.lang.Byte        => Some(BigInt(b.longValue))
-      case s: java.lang.Short       => Some(BigInt(s.longValue))
-      case i: java.lang.Integer     => Some(BigInt(i.longValue))
-      case l: java.lang.Long        => Some(BigInt(l.longValue))
-      case bi: java.math.BigInteger => Some(BigInt(bi))
-      case bi: BigInt               => Some(bi)
-      case bd: java.math.BigDecimal =>
-        val stripped = bd.stripTrailingZeros
-        if (stripped.scale <= 0) Some(BigInt(stripped.toBigIntegerExact)) else None
-      case bd: BigDecimal =>
-        val stripped = bd.bigDecimal.stripTrailingZeros
-        if (stripped.scale <= 0) Some(BigInt(stripped.toBigIntegerExact)) else None
-      case _ => None
-    }
-
-  private def normalizedDecimalValue(value: Number): Option[BigDecimal] =
-    value match {
-      case d: java.lang.Double if d.isNaN || d.isInfinite => None
-      case f: java.lang.Float if f.isNaN || f.isInfinite  => None
-      case b: java.lang.Byte                              => Some(BigDecimal(BigInt(b.longValue)))
-      case s: java.lang.Short                             => Some(BigDecimal(BigInt(s.longValue)))
-      case i: java.lang.Integer                           => Some(BigDecimal(BigInt(i.longValue)))
-      case l: java.lang.Long                              => Some(BigDecimal(BigInt(l.longValue)))
-      case bi: java.math.BigInteger                       => Some(BigDecimal(BigInt(bi)))
-      case bi: BigInt                                     => Some(BigDecimal(bi))
-      case bd: java.math.BigDecimal                       => Some(BigDecimal(bd))
-      case bd: BigDecimal                                 => Some(bd)
-      case f: java.lang.Float                             => Some(BigDecimal.decimal(f.doubleValue))
-      case d: java.lang.Double                            => Some(BigDecimal.decimal(d.doubleValue))
-      case _                                              => None
-    }
-
-  private def areNumericalValuesDifferent(
-    x: BigDecimal,
-    y: BigDecimal,
-    tolerance: BigDecimal
-  ): Boolean =
-    (x - y).abs > tolerance
+    RowComparisonFailure.areDifferent(
+      left,
+      right,
+      timestampMsTolerance,
+      floatingPointTolerance,
+      numericTypePolicy
+    )
 
   private[scylla] def differingFieldNamesForRow(
     joinedRow: Row,
     fieldIndices: Seq[(String, Int, Int)],
     timestampMsTolerance: Long,
-    floatingPointTolerance: Double
+    floatingPointTolerance: Double,
+    numericTypePolicy: NumericTypePolicy = NumericTypePolicy.Lenient
   ): List[String] =
-    fieldIndices.flatMap { case (colName, srcIdx, tgtIdx) =>
-      val srcVal = if (joinedRow.isNullAt(srcIdx)) None else Some(joinedRow.get(srcIdx))
-      val tgtVal = if (joinedRow.isNullAt(tgtIdx)) None else Some(joinedRow.get(tgtIdx))
-      if (
-        areDifferent(
-          srcVal,
-          tgtVal,
-          timestampMsTolerance,
-          floatingPointTolerance
-        )
-      )
-        Some(colName)
-      else
-        None
-    }.toList
+    ContentHashJoiner.differingFieldNamesForRow(
+      joinedRow,
+      fieldIndices,
+      timestampMsTolerance,
+      floatingPointTolerance,
+      numericTypePolicy
+    )
 
   private[scylla] def compareFieldsBySchemaForRow(
     joinedRow: Row,
@@ -184,64 +88,33 @@ object MySQLToScyllaValidator {
     hashBackedFieldIndices: Seq[(String, Int, Int)],
     contentHashFieldIndices: Option[(Int, Int)],
     timestampMsTolerance: Long,
-    floatingPointTolerance: Double
-  ): List[String] = {
-    val directDifferences =
-      differingFieldNamesForRow(
-        joinedRow,
-        directFieldIndices,
-        timestampMsTolerance,
-        floatingPointTolerance
-      )
-
-    val hashBackedDifferences = contentHashFieldIndices match {
-      case Some((srcHashIdx, tgtHashIdx)) =>
-        val srcHash = if (joinedRow.isNullAt(srcHashIdx)) None else Some(joinedRow.get(srcHashIdx))
-        val tgtHash = if (joinedRow.isNullAt(tgtHashIdx)) None else Some(joinedRow.get(tgtHashIdx))
-        if (
-          areDifferent(
-            srcHash,
-            tgtHash,
-            timestampMsTolerance,
-            floatingPointTolerance
-          )
-        )
-          differingFieldNamesForRow(
-            joinedRow,
-            hashBackedFieldIndices,
-            timestampMsTolerance,
-            floatingPointTolerance
-          )
-        else
-          Nil
-      case None =>
-        differingFieldNamesForRow(
-          joinedRow,
-          hashBackedFieldIndices,
-          timestampMsTolerance,
-          floatingPointTolerance
-        )
-    }
-
-    directDifferences ++ hashBackedDifferences
-  }
+    floatingPointTolerance: Double,
+    numericTypePolicy: NumericTypePolicy = NumericTypePolicy.Lenient
+  ): List[String] =
+    ContentHashJoiner.compareFieldsBySchemaForRow(
+      joinedRow,
+      directFieldIndices,
+      hashBackedFieldIndices,
+      contentHashFieldIndices,
+      timestampMsTolerance,
+      floatingPointTolerance,
+      numericTypePolicy
+    )
 
   private[scylla] def hasContentHashMismatch(
     joinedRow: Row,
     contentHashFieldIndices: Option[(Int, Int)],
     timestampMsTolerance: Long,
-    floatingPointTolerance: Double
+    floatingPointTolerance: Double,
+    numericTypePolicy: NumericTypePolicy = NumericTypePolicy.Lenient
   ): Boolean =
-    contentHashFieldIndices.exists { case (srcHashIdx, tgtHashIdx) =>
-      val srcHash = if (joinedRow.isNullAt(srcHashIdx)) None else Some(joinedRow.get(srcHashIdx))
-      val tgtHash = if (joinedRow.isNullAt(tgtHashIdx)) None else Some(joinedRow.get(tgtHashIdx))
-      areDifferent(
-        srcHash,
-        tgtHash,
-        timestampMsTolerance,
-        floatingPointTolerance
-      )
-    }
+    ContentHashJoiner.hasContentHashMismatch(
+      joinedRow,
+      contentHashFieldIndices,
+      timestampMsTolerance,
+      floatingPointTolerance,
+      numericTypePolicy
+    )
 
   private[scylla] def materializeValidationCandidate(
     candidate: ValidationCandidate,
@@ -281,7 +154,8 @@ object MySQLToScyllaValidator {
     hashBackedColumns: Seq[String],
     timestampMsTolerance: Long,
     floatingPointTolerance: Double,
-    failuresToFetch: Int
+    failuresToFetch: Int,
+    numericTypePolicy: NumericTypePolicy = NumericTypePolicy.Lenient
   )(implicit spark: SparkSession): List[RowComparisonFailure] =
     if (failuresToFetch <= 0) Nil
     else {
@@ -315,7 +189,8 @@ object MySQLToScyllaValidator {
                 hashMismatchCandidates.map(_.sourcePkValues),
                 hashBackedColumns,
                 timestampMsTolerance,
-                floatingPointTolerance
+                floatingPointTolerance,
+                numericTypePolicy
               )
             else Map.empty[Vector[Any], List[String]]
 
@@ -594,28 +469,17 @@ object MySQLToScyllaValidator {
     targetSettings: TargetSettings.Scylla,
     primaryKeyColumns: Seq[String],
     selectedColumns: Seq[String]
-  ): DataFrame = {
-    val sourceSchemaFields = sourceDF.schema.fieldNames
-    val resolvedSourcePK = primaryKeyColumns.map(resolveFieldName(sourceSchemaFields, _))
-    val resolvedTargetPK = resolveTargetColumns(targetTableDef, primaryKeyColumns)
-    val resolvedSelectedColumns = resolveTargetColumns(targetTableDef, selectedColumns)
-    val schema = buildTargetSchema(targetTableDef, resolvedSelectedColumns)
-    val targetRows = sourceDF
-      .select(resolvedSourcePK.map(sparkColumn): _*)
-      .distinct()
-      .rdd
-      .leftJoinWithCassandraTable[CassandraSQLRow](
-        targetSettings.keyspace,
-        targetSettings.table,
-        SomeColumns(resolvedSelectedColumns.map(ColumnName(_)): _*),
-        SomeColumns(resolvedTargetPK.map(ColumnName(_)): _*),
-        targetReadConf(spark, targetSettings)
-      )
-      .withConnector(targetConnector)
-      .flatMap(_._2)
-      .map(row => Row.fromSeq(row.toSeq.map(readers.Cassandra.convertValue)))
-    spark.createDataFrame(targetRows, schema)
-  }
+  ): DataFrame =
+    KeyDrivenLookup.lookupTargetRowsForSourceKeys(
+      spark,
+      sourceDF,
+      targetConnector,
+      targetTableDef,
+      targetSettings,
+      primaryKeyColumns,
+      selectedColumns,
+      targetReadConf(spark, targetSettings)
+    )
 
   private[scylla] def collectExtraTargetFailureSample(
     sourceKeys: DataFrame,
@@ -623,24 +487,12 @@ object MySQLToScyllaValidator {
     primaryKeyColumns: Seq[String],
     failuresToFetch: Int
   ): List[RowComparisonFailure] =
-    if (failuresToFetch <= 0) Nil
-    else
-      targetKeys
-        .join(sourceKeys.distinct(), primaryKeyColumns, "left_anti")
-        .rdd
-        .map { row =>
-          val targetRepr =
-            primaryKeyColumns
-              .map(pk => s"$pk=${row.getAs[Any](pk)}")
-              .mkString(", ")
-          RowComparisonFailure(
-            targetRepr,
-            None,
-            List(RowComparisonFailure.Item.ExtraTargetRow)
-          )
-        }
-        .take(failuresToFetch)
-        .toList
+    ExtraRowDetector.collectExtraTargetFailureSample(
+      sourceKeys,
+      targetKeys,
+      primaryKeyColumns,
+      failuresToFetch
+    )
 
   private[scylla] def collectExtraTargetFailureSample(
     sourceDF: DataFrame,
@@ -888,6 +740,7 @@ object MySQLToScyllaValidator {
     val joinedSchemaFields = joined.schema.fieldNames
     val floatTol = validationConfig.floatingPointTolerance
     val tsTol = validationConfig.timestampMsTolerance
+    val numericPolicy = validationConfig.numericTypePolicy
 
     // Pre-compute field indices to avoid repeated case-insensitive lookups on every row.
     // For wide tables (100+ columns) × millions of rows, this provides significant speedup.
@@ -954,15 +807,21 @@ object MySQLToScyllaValidator {
           )
         } else {
           val directDifferingFields =
-            differingFieldNamesForRow(joinedRow, directFieldIndices, tsTol, floatTol).map {
-              colName =>
+            differingFieldNamesForRow(joinedRow, directFieldIndices, tsTol, floatTol, numericPolicy)
+              .map { colName =>
                 val (srcIdx, tgtIdx) = fieldIndexByName(colName)
                 val srcVal = if (joinedRow.isNullAt(srcIdx)) None else Some(joinedRow.get(srcIdx))
                 val tgtVal = if (joinedRow.isNullAt(tgtIdx)) None else Some(joinedRow.get(tgtIdx))
                 s"$colName (source=${truncateValue(srcVal)}, target=${truncateValue(tgtVal)})"
-            }
+              }
           val hashMismatch =
-            hasContentHashMismatch(joinedRow, contentHashFieldIndices, tsTol, floatTol)
+            hasContentHashMismatch(
+              joinedRow,
+              contentHashFieldIndices,
+              tsTol,
+              floatTol,
+              numericPolicy
+            )
           if (directDifferingFields.isEmpty && !hashMismatch) None
           else {
             val srcPkValues = srcPKIndices.map { case (_, idx) => joinedRow.get(idx) }.toVector
@@ -995,7 +854,8 @@ object MySQLToScyllaValidator {
       finalHashBackedColumns,
       tsTol,
       floatTol,
-      validationConfig.failuresToFetch
+      validationConfig.failuresToFetch,
+      numericPolicy
     )
     val failures =
       if (
@@ -1027,7 +887,8 @@ object MySQLToScyllaValidator {
     primaryKeyValues: Seq[Vector[Any]],
     hashBackedColumns: Seq[String],
     timestampMsTolerance: Long,
-    floatingPointTolerance: Double
+    floatingPointTolerance: Double,
+    numericTypePolicy: NumericTypePolicy = NumericTypePolicy.Lenient
   )(implicit spark: SparkSession): Map[Vector[Any], List[String]] = {
     val refinementFrames =
       createHashRefinementFrames(rawSourceDF, rawTargetDF, primaryKey, hashBackedColumns)
@@ -1038,7 +899,8 @@ object MySQLToScyllaValidator {
         primaryKeyValues,
         hashBackedColumns,
         timestampMsTolerance,
-        floatingPointTolerance
+        floatingPointTolerance,
+        numericTypePolicy
       )
     finally {
       refinementFrames.source.unpersist(blocking = false)
@@ -1052,7 +914,8 @@ object MySQLToScyllaValidator {
     primaryKeyValues: Seq[Vector[Any]],
     hashBackedColumns: Seq[String],
     timestampMsTolerance: Long,
-    floatingPointTolerance: Double
+    floatingPointTolerance: Double,
+    numericTypePolicy: NumericTypePolicy
   )(implicit spark: SparkSession): Map[Vector[Any], List[String]] = {
     val projectedSource = refinementFrames.source
     val projectedTarget = refinementFrames.target
@@ -1109,11 +972,12 @@ object MySQLToScyllaValidator {
               val srcVal = if (joinedRow.isNullAt(srcIdx)) None else Some(joinedRow.get(srcIdx))
               val tgtVal = if (joinedRow.isNullAt(tgtIdx)) None else Some(joinedRow.get(tgtIdx))
               if (
-                areDifferent(
+                RowComparisonFailure.areDifferent(
                   srcVal,
                   tgtVal,
                   timestampMsTolerance,
-                  floatingPointTolerance
+                  floatingPointTolerance,
+                  numericTypePolicy
                 )
               )
                 Some(
@@ -1145,59 +1009,11 @@ object MySQLToScyllaValidator {
     hashCols: List[String],
     pkCols: List[String],
     dropHashedColumns: Boolean = true
-  ): DataFrame = {
-    val dfColsLower = df.columns.map(_.toLowerCase(Locale.ROOT)).toSet
-    require(
-      !dfColsLower.contains(MySQL.ContentHashColumn.toLowerCase(Locale.ROOT)),
-      s"Source/target table contains a column named '${MySQL.ContentHashColumn}' which conflicts " +
-        "with the internal hash column. Rename the column or disable hash-based validation."
-    )
-    val existingHashCols = hashCols.filter(c => dfColsLower.contains(c.toLowerCase(Locale.ROOT)))
-    if (existingHashCols.isEmpty) {
-      log.warn("No hash columns found in DataFrame. Skipping hash computation.")
-      df
-    } else {
-      // Resolve user-supplied column names against the actual DataFrame schema so that
-      // subsequent operations (col(), drop()) use the exact case from the schema rather
-      // than the user-supplied case. Spark's drop() is case-insensitive by default, but
-      // using resolved names makes the code robust against configuration changes.
-      val dfCols = df.columns
-      def resolveCol(name: String): String =
-        dfCols.find(_.equalsIgnoreCase(name)).getOrElse(name)
-      val resolvedHashCols =
-        existingHashCols.map(resolveCol).sortBy(_.toLowerCase(Locale.ROOT))
-
-      log.info(
-        s"Computing content hash for columns: ${resolvedHashCols.mkString(", ")}"
-      )
-
-      val contentHashBits = 256
-      val perColHashes = resolvedHashCols.map { c =>
-        val encodedValue = df.schema(c).dataType match {
-          case BinaryType => base64(sparkColumn(c))
-          case _          => sparkColumn(c).cast(StringType)
-        }
-        when(sparkColumn(c).isNull, sha2(lit("1|"), contentHashBits))
-          .otherwise(sha2(concat(lit("0|"), encodedValue), contentHashBits))
-      }
-      val hashCol = sha2(concat_ws("|", perColHashes: _*), contentHashBits)
-      val withHash = df.withColumn(MySQL.ContentHashColumn, hashCol)
-
-      if (!dropHashedColumns) withHash
-      else {
-        // Preserve primary key columns; drop only the hashed columns to reduce shuffle volume.
-        val pkColsLower = pkCols.map(_.toLowerCase(Locale.ROOT)).toSet
-        val colsToDrop = resolvedHashCols
-          .filterNot(c => pkColsLower.contains(c.toLowerCase(Locale.ROOT)))
-        colsToDrop.foldLeft(withHash) { (d, c) =>
-          d.drop(c)
-        }
-      }
-    }
-  }
+  ): DataFrame =
+    ContentHashJoiner.addContentHash(df, hashCols, pkCols, dropHashedColumns)
 
   private[scylla] def prefixColumns(df: DataFrame, prefix: String): DataFrame =
-    df.select(df.columns.toIndexedSeq.map(c => sparkColumn(c).as(s"$prefix$c")): _*)
+    SchemaResolver.prefixColumns(df, prefix)
 
   private val MaxValueReprLength = 100
 

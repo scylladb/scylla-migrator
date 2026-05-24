@@ -320,13 +320,14 @@ class DynamoDBRowComparisonTest extends munit.FunSuite {
     assertEquals(result, expected)
   }
 
-  test("BigDecimal and integral wrappers remain different for shared row comparison") {
+  test("BigDecimal and integral wrappers are equal for shared row comparison under Lenient policy") {
     assert(
-      RowComparisonFailure.areDifferent(
+      !RowComparisonFailure.areDifferent(
         Some(new java.math.BigDecimal("42.0")),
         Some(42L),
         timestampMsTolerance   = 0L,
-        floatingPointTolerance = floatingPointTolerance
+        floatingPointTolerance = floatingPointTolerance,
+        numericTypePolicy      = com.scylladb.migrator.validation.core.NumericTypePolicy.Lenient
       )
     )
   }
