@@ -8,8 +8,8 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
   import DeploySparkClusterScriptTest.CommandResult
 
   private val repoRoot = findRepoRoot()
-  private val script   = repoRoot.resolve("deploy_spark_cluster.py")
-  private val python   = sys.env.getOrElse("PYTHON", "python3")
+  private val script = repoRoot.resolve("deploy_spark_cluster.py")
+  private val python = sys.env.getOrElse("PYTHON", "python3")
   private val missingPrivateKey =
     repoRoot.resolve("target/deploy-script-test/nonexistent-key")
 
@@ -124,7 +124,7 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     runPython((script.toString +: args): _*)
 
   private def runPython(args: String*): CommandResult = {
-    val output   = new StringBuilder
+    val output = new StringBuilder
     val exitCode = Process(python +: args, repoRoot.toFile).!(
       ProcessLogger(output append _ append "\n")
     )
