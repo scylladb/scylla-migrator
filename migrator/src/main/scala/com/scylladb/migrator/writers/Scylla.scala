@@ -6,6 +6,7 @@ import com.datastax.spark.connector.cql.Schema
 import com.scylladb.migrator.Connectors
 import com.scylladb.migrator.config.{ Rename, SourceSettings, TargetSettings }
 import com.scylladb.migrator.readers.TimestampColumns
+import com.scylladb.migrator.schema.SchemaResolver
 import org.apache.logging.log4j.{ LogManager, Logger }
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{ DataFrame, Row, SparkSession }
@@ -34,10 +35,9 @@ object Scylla {
     val reverseRenames = renames.map(r => r.to -> r.from).toMap
     val sourcePkNames =
       targetPkNames.map(name => reverseRenames.getOrElse(name, name))
-    val dfFieldNamesLower =
-      dfSchema.fieldNames.map(name => name.toLowerCase(Locale.ROOT) -> name).toMap
+    val fields = dfSchema.fieldNames
     val resolution = sourcePkNames.map { sourcePkName =>
-      sourcePkName -> dfFieldNamesLower.get(sourcePkName.toLowerCase(Locale.ROOT))
+      sourcePkName -> SchemaResolver.findFieldName(fields, sourcePkName)
     }
 
     val resolvedSourcePkNames = resolution.collect { case (_, Some(dfFieldName)) =>
@@ -74,24 +74,8 @@ object Scylla {
   private[writers] def requireNoCaseInsensitiveColumnNameCollisions(
     fieldNames: Seq[String],
     context: String
-  ): Unit = {
-    val collisions =
-      fieldNames
-        .groupBy(_.toLowerCase(Locale.ROOT))
-        .collect { case (_, names) if names.size > 1 => names.distinct }
-        .toList
-
-    if (collisions.nonEmpty) {
-      val collisionDetails = collisions
-        .map(names => names.mkString("[", ", ", "]"))
-        .mkString(", ")
-      throw new IllegalArgumentException(
-        s"Column name collision detected $context. " +
-          s"Multiple source columns resolve to the same target column name: $collisionDetails. " +
-          "Check the configured renames and source schema."
-      )
-    }
-  }
+  ): Unit =
+    SchemaResolver.requireNoCollisions(fieldNames, context)
 
   private[writers] def dropRowsWithNullPrimaryKeys(
     rdd: RDD[Row],

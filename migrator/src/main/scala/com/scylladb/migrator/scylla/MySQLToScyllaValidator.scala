@@ -7,6 +7,7 @@ import com.scylladb.migrator.Connectors
 import com.scylladb.migrator.config.{ MigratorConfig, Rename, SourceSettings, TargetSettings }
 import com.scylladb.migrator.readers
 import com.scylladb.migrator.readers.MySQL
+import com.scylladb.migrator.schema.SchemaResolver
 import com.scylladb.migrator.validation.RowComparisonFailure
 import org.apache.logging.log4j.LogManager
 import org.apache.spark.rdd.RDD
@@ -42,25 +43,13 @@ object MySQLToScyllaValidator {
   private[scylla] def buildCaseInsensitiveRenameMap(
     renames: List[Rename]
   ): Map[String, String] =
-    renames
-      .groupBy(_.from.toLowerCase(Locale.ROOT))
-      .view
-      .map { case (sourceName, entries) =>
-        val targets = entries.map(_.to).distinct
-        if (targets.size > 1)
-          sys.error(
-            s"Renames contain conflicting case-insensitive mappings for source column '${sourceName}': " +
-              s"${targets.mkString(", ")}"
-          )
-        sourceName -> targets.head
-      }
-      .toMap
+    Rename.buildCaseInsensitiveMap(renames)
 
   private[scylla] def escapeSparkColumnName(name: String): String =
-    s"`${name.replace("`", "``")}`"
+    SchemaResolver.escapeSparkColumnName(name)
 
   private[scylla] def sparkColumn(name: String): Column =
-    col(escapeSparkColumnName(name))
+    SchemaResolver.sparkColumn(name)
 
   private[scylla] def areDifferent(
     left: Option[Any],
@@ -336,14 +325,7 @@ object MySQLToScyllaValidator {
     }
 
   private[scylla] def resolveFieldName(fields: Array[String], name: String): String =
-    fields
-      .find(_.equalsIgnoreCase(name))
-      .getOrElse(
-        sys.error(
-          s"Column '$name' not found in schema. Available columns: ${fields.mkString(", ")}. " +
-            "This may indicate a missing rename entry or schema mismatch."
-        )
-      )
+    SchemaResolver.resolveFieldName(fields, name)
 
   private[scylla] def differingFieldsBetweenRows(
     sourceRow: Row,
@@ -432,25 +414,20 @@ object MySQLToScyllaValidator {
   private[scylla] def validateSourceColumnsPresentInTarget(
     sourceColumns: Seq[String],
     targetColumns: Seq[String]
-  ): Unit = {
-    val targetColumnsLower = targetColumns.map(_.toLowerCase(Locale.ROOT)).toSet
-    val missingInTarget =
-      sourceColumns.filterNot(c => targetColumnsLower.contains(c.toLowerCase(Locale.ROOT)))
-    if (missingInTarget.nonEmpty)
-      sys.error(
-        s"Source columns not found in target after renames: ${missingInTarget.mkString(", ")}. " +
-          "Validation would silently skip these columns, so the run has been aborted. " +
-          "If this is unexpected, check your target schema or 'renames' configuration."
-      )
-  }
+  ): Unit =
+    SchemaResolver.validateColumnPresence(
+      sourceColumns,
+      targetColumns,
+      "in target after renames. " +
+        "Validation would silently skip these columns, so the run has been aborted. " +
+        "If this is unexpected, check your target schema or 'renames' configuration"
+    )
 
   private[scylla] def targetOnlyColumns(
     sourceColumns: Seq[String],
     targetColumns: Seq[String]
-  ): Seq[String] = {
-    val sourceColumnsLower = sourceColumns.map(_.toLowerCase(Locale.ROOT)).toSet
-    targetColumns.filterNot(c => sourceColumnsLower.contains(c.toLowerCase(Locale.ROOT)))
-  }
+  ): Seq[String] =
+    SchemaResolver.columnsOnlyIn(targetColumns, sourceColumns)
 
   private[scylla] def normalizePrimaryKeyComponent(value: Any): Any = value match {
     case bytes: Array[Byte] => bytes.toIndexedSeq
@@ -486,14 +463,8 @@ object MySQLToScyllaValidator {
   private[scylla] def selectAndAliasColumns(
     df: DataFrame,
     requestedColumns: Seq[String]
-  ): DataFrame = {
-    val schemaFields = df.schema.fieldNames
-    df.select(
-      requestedColumns.toIndexedSeq.map { columnName =>
-        sparkColumn(resolveFieldName(schemaFields, columnName)).as(columnName)
-      }: _*
-    )
-  }
+  ): DataFrame =
+    SchemaResolver.selectAndAlias(df, requestedColumns)
 
   private[scylla] def validateHashColumnsPresentOnBothSides(
     requestedHashColumns: Seq[String],
@@ -1197,7 +1168,7 @@ object MySQLToScyllaValidator {
   }
 
   private[scylla] def prefixColumns(df: DataFrame, prefix: String): DataFrame =
-    df.select(df.columns.toIndexedSeq.map(c => sparkColumn(c).as(s"$prefix$c")): _*)
+    SchemaResolver.prefixColumns(df, prefix)
 
   private val MaxValueReprLength = 100
 
