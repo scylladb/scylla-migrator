@@ -44,6 +44,52 @@ source:
   # Optional condition to filter source table data that will be migrated
   # where: race_start_date = '2015-05-27' AND race_end_date = '2015-05-27'
 
+  # Optional - Connect via a DataStax Astra Cloud Secure Connect bundle.
+  # When this block is present the 'host', 'port', 'localDC' and 'sslOptions' fields above must
+  # NOT be set: they are carried by the bundle and would conflict with it. Authentication
+  # credentials must still be supplied via the 'credentials' block.
+  #
+  # Accepted secureBundlePath forms:
+  #   - Absolute local path: /opt/migrator/secure-connect-mycluster.zip
+  #     (auto-converted to file:// URL at runtime; must exist on every node)
+  #   - https:// URL reachable from every node
+  #   - Bare filename: secure-connect-mycluster.zip
+  #     (for bundles distributed via spark-submit --files; resolved via SparkFiles.get)
+  #   - s3:// or s3a:// URL — works in standard Spark environments where Hadoop URL handlers
+  #     are registered. For maximum reliability, prefer --files instead:
+  #       spark-submit --files s3://bucket/bundle.zip ...
+  #     then set secureBundlePath to just the filename: bundle.zip
+  #
+  # Do not embed credentials or signed-token query strings in the URL.
+  #cloud:
+  #  secureBundlePath: /opt/migrator/secure-connect-mycluster.zip
+
+# Example for connecting to a DataStax Astra source via a Cloud Secure Connect bundle:
+# source:
+#   type: cassandra
+#   cloud:
+#     secureBundlePath: /opt/migrator/secure-connect-mycluster.zip
+#   credentials:
+#     username: <client-id>
+#     password: <client-secret>
+#   keyspace: <keyspace>
+#   table: <table>
+#   consistencyLevel: LOCAL_QUORUM
+#   preserveTimestamps: true
+#   splitCount: 256
+#   connections: 8
+#   fetchSize: 1000
+#
+# Alternative: distribute the bundle via --files (recommended for S3-hosted bundles):
+#   spark-submit --files s3://my-bucket/secure-connect-mycluster.zip \
+#     --class com.scylladb.migrator.Migrator migrator.jar
+# then use a bare filename in the config:
+# source:
+#   type: cassandra
+#   cloud:
+#     secureBundlePath: secure-connect-mycluster.zip
+#   ...
+
 # Example for loading from MySQL:
 # source:
 #   type: mysql
@@ -284,6 +330,25 @@ target:
   #writeTTLInS: 7776000
   # writetime in microseconds (sample 1640998861000 is Saturday, January 1, 2022 2:01:01 AM GMT+01:00 )
   #writeWritetimestampInuS: 1640998861000
+
+  # Optional - Connect via a DataStax Astra Cloud Secure Connect bundle.
+  # Same path rules as the source cloud block above. See source section for details.
+  #cloud:
+  #  secureBundlePath: /opt/migrator/secure-connect-mycluster.zip
+
+# Example for loading into a DataStax Astra target via a Cloud Secure Connect bundle:
+# target:
+#   type: scylla
+#   cloud:
+#     secureBundlePath: /opt/migrator/secure-connect-mycluster.zip
+#   credentials:
+#     username: <client-id>
+#     password: <client-secret>
+#   keyspace: <keyspace>
+#   table: <table>
+#   consistencyLevel: LOCAL_QUORUM
+#   connections: 16
+#   stripTrailingZerosForDecimals: false
 
 # Example for writing into a DynamoDB target:
 # (Fields prefixed with ## are optional)

@@ -23,11 +23,22 @@ object ScyllaSparkConnectionOptions {
     *
     * These settings intentionally exclude table-selection properties so that credentials and SSL
     * secrets do not need to be passed through DataFrame reader options.
+    *
+    * '''Cloud mode is not supported''' through this helper — cloud targets use
+    * [[Connectors.buildTargetConf]] which directly constructs a `CloudBasedContactInfo`.
+    *
+    * @throws IllegalArgumentException
+    *   if `t.cloud` is defined
     */
   def sessionConfFromTargetSettings(
     t: TargetSettings.Scylla,
     cluster: String = MySQLValidatorCluster
   ): Map[String, String] = {
+    require(
+      t.cloud.isEmpty,
+      "ScyllaSparkConnectionOptions does not support cloud targets; " +
+        "use Connectors.buildTargetConf instead."
+    )
     val sessionConf =
       Connectors.sparkSessionOptions(Connectors.targetSessionOptions(t)) +
         (InputConsistencyLevel -> t.consistencyLevel)

@@ -61,8 +61,124 @@ object SourceSettings {
     fetchSize: Int,
     preserveTimestamps: Boolean,
     where: Option[String],
-    consistencyLevel: String
+    consistencyLevel: String,
+    cloud: Option[CloudConfig] = None
   ) extends SourceSettings
+
+  /** When `cloud` is set, the connector will reach the cluster through the Astra SNI proxy
+    * described by the secure-connect bundle. In that mode the `host` and `port` fields are
+    * meaningless (the bundle carries the contact points), so we make them optional in YAML and fall
+    * back to inert sentinels in the case class. The decoder rejects any combination that would
+    * silently ignore user input.
+    */
+  object Cassandra {
+    private val SentinelHost: String = ""
+    private val SentinelPort: Int = 0
+
+    implicit val decoder: Decoder[Cassandra] = Decoder.instance { c =>
+      val hasHost = c.get[Option[String]]("host").exists(_.isDefined)
+      val hasPort = c.get[Option[Int]]("port").exists(_.isDefined)
+      for {
+        cloud <- c.get[Option[CloudConfig]]("cloud")
+        _ <- (cloud.isDefined, hasHost, hasPort) match {
+               case (true, true, _) =>
+                 Left(
+                   DecodingFailure(
+                     "Cassandra source: 'cloud' is mutually exclusive with 'host'/'port'. " +
+                       "Remove 'host' and 'port' when using a secure-connect bundle.",
+                     c.history
+                   )
+                 )
+               case (true, _, true) =>
+                 Left(
+                   DecodingFailure(
+                     "Cassandra source: 'cloud' is mutually exclusive with 'host'/'port'. " +
+                       "Remove 'host' and 'port' when using a secure-connect bundle.",
+                     c.history
+                   )
+                 )
+               case (false, true, true) => Right(())
+               case (false, _, _) =>
+                 Left(
+                   DecodingFailure(
+                     "Cassandra source: 'host' and 'port' are required unless 'cloud' is set.",
+                     c.history
+                   )
+                 )
+               case (true, false, false) => Right(())
+             }
+        host               <- c.getOrElse[String]("host")(SentinelHost)
+        port               <- c.getOrElse[Int]("port")(SentinelPort)
+        localDC            <- c.get[Option[String]]("localDC")
+        credentials        <- c.get[Option[Credentials]]("credentials")
+        sslOptions         <- c.get[Option[SSLOptions]]("sslOptions")
+        keyspace           <- c.get[String]("keyspace")
+        table              <- c.get[String]("table")
+        splitCount         <- c.get[Option[Int]]("splitCount")
+        connections        <- c.get[Option[Int]]("connections")
+        fetchSize          <- c.get[Int]("fetchSize")
+        preserveTimestamps <- c.get[Boolean]("preserveTimestamps")
+        where              <- c.get[Option[String]]("where")
+        consistencyLevel   <- c.get[String]("consistencyLevel")
+        _ <- if (cloud.isDefined && localDC.isDefined)
+               Left(
+                 DecodingFailure(
+                   "Cassandra source: 'localDC' must not be set when using 'cloud' (the bundle " +
+                     "carries the local DC).",
+                   c.history
+                 )
+               )
+             else Right(())
+        _ <-
+          if (cloud.isDefined && sslOptions.isDefined)
+            Left(
+              DecodingFailure(
+                "Cassandra source: 'sslOptions' must not be set when using 'cloud' (the bundle " +
+                  "carries the TLS material).",
+                c.history
+              )
+            )
+          else Right(())
+      } yield Cassandra(
+        host,
+        port,
+        localDC,
+        credentials,
+        sslOptions,
+        keyspace,
+        table,
+        splitCount,
+        connections,
+        fetchSize,
+        preserveTimestamps,
+        where,
+        consistencyLevel,
+        cloud
+      )
+    }
+
+    implicit val encoder: Encoder.AsObject[Cassandra] = Encoder.AsObject.instance { c =>
+      val common = io.circe.JsonObject(
+        "localDC"            -> c.localDC.asJson,
+        "credentials"        -> c.credentials.asJson,
+        "sslOptions"         -> c.sslOptions.asJson,
+        "keyspace"           -> c.keyspace.asJson,
+        "table"              -> c.table.asJson,
+        "splitCount"         -> c.splitCount.asJson,
+        "connections"        -> c.connections.asJson,
+        "fetchSize"          -> c.fetchSize.asJson,
+        "preserveTimestamps" -> c.preserveTimestamps.asJson,
+        "where"              -> c.where.asJson,
+        "consistencyLevel"   -> c.consistencyLevel.asJson
+      )
+      c.cloud match {
+        case Some(cloud) =>
+          common.add("cloud", cloud.asJson)
+        case None =>
+          common.add("host", c.host.asJson).add("port", c.port.asJson)
+      }
+    }
+  }
 
   /** Common trait for DynamoDB-protocol sources (both AWS DynamoDB and Scylla Alternator). */
   sealed trait DynamoDBLike extends SourceSettings {
@@ -450,16 +566,19 @@ object SourceSettings {
   implicit val decoder: Decoder[SourceSettings] = Decoder.instance { cursor =>
     cursor.get[String]("type").flatMap {
       case "cassandra" | "scylla" =>
-        deriveDecoder[Cassandra].apply(cursor).flatMap { c =>
-          val allErrors = validateCassandraSource(c)
-          if (allErrors.nonEmpty)
-            Left(
-              DecodingFailure(
-                s"Source type 'cassandra': ${allErrors.mkString("; ")}",
-                cursor.history
+        Cassandra.decoder.apply(cursor).flatMap { c =>
+          if (c.cloud.isDefined) Right(c)
+          else {
+            val allErrors = validateCassandraSource(c)
+            if (allErrors.nonEmpty)
+              Left(
+                DecodingFailure(
+                  s"Source type 'cassandra': ${allErrors.mkString("; ")}",
+                  cursor.history
+                )
               )
-            )
-          else Right(c)
+            else Right(c)
+          }
         }
       case "parquet" =>
         deriveDecoder[Parquet].apply(cursor)
@@ -709,7 +828,7 @@ object SourceSettings {
 
   implicit val encoder: Encoder[SourceSettings] = Encoder.instance {
     case s: Cassandra =>
-      deriveEncoder[Cassandra]
+      Cassandra.encoder
         .encodeObject(s)
         .filter { case (_, v) => !v.isNull }
         .add("type", Json.fromString("cassandra"))
