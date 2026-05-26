@@ -31,6 +31,16 @@
       register: java_home_result
       changed_when: false
 
+    - name: Set JAVA_HOME fact
+      ansible.builtin.set_fact:
+        java_home: "{{ java_home_result.stdout }}"
+
+    - name: Set JAVA_HOME
+      ansible.builtin.lineinfile:
+        path: "{{ home_dir }}/.profile"
+        regexp: '^JAVA_HOME='
+        line: "export JAVA_HOME={{ java_home }}"
+
     - name: install cqlsh
       ansible.builtin.pip:
         name: scylla-cqlsh
@@ -91,12 +101,6 @@
     - name: Move spark to opt/spark
       become: true
       command: "sudo mv {{ home_dir }}/{{ spark_package }} {{ spark_home }}"
-
-    - name: Set JAVA_HOME
-      ansible.builtin.lineinfile:
-        path: "{{ home_dir }}/.profile"
-        regexp: '^JAVA_HOME='
-        line: "export JAVA_HOME={{ java_home_result.stdout }}"
 
     - name: Add JAVA_HOME to PATH
       ansible.builtin.lineinfile:
@@ -161,11 +165,12 @@
     home_dir: /home/ubuntu
     spark_home: /opt/spark
     java_home_arch: "{{ 'arm64' if ansible_architecture in ['aarch64', 'arm64'] else 'amd64' }}"
-    java_home: "{{ hostvars[inventory_hostname].java_home_result.stdout | default('/usr/lib/jvm/java-17-openjdk-' ~ java_home_arch) }}"
+    java_home_default: "{{ '/usr/lib/jvm/java-17-openjdk-' ~ java_home_arch }}"
+    master_java_home: "{{ hostvars[inventory_hostname].java_home | default(java_home_default) }}"
   environment:
-    JAVA_HOME: "{{ java_home }}"
+    JAVA_HOME: "{{ master_java_home }}"
     SPARK_HOME: /opt/spark
-    PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/ubuntu/.local/share/coursier/bin:{{ java_home }}:/opt/spark/bin:/opt/spark/sbin"
+    PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/ubuntu/.local/share/coursier/bin:{{ master_java_home }}:/opt/spark/bin:/opt/spark/sbin"
 
   tasks:
     - name: Create scylla-migrator directory
