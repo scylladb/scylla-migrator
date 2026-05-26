@@ -5,6 +5,7 @@ import java.nio.file.{ Files, Path, Paths }
 import scala.sys.process.{ Process, ProcessLogger }
 
 class DeploySparkClusterScriptTest extends munit.FunSuite {
+  import DeploySparkClusterScriptTest.CommandResult
 
   private val repoRoot = findRepoRoot()
   private val script   = repoRoot.resolve("deploy_spark_cluster.py")
@@ -144,6 +145,8 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
       .find(path => Files.isRegularFile(path.resolve("deploy_spark_cluster.py")))
       .getOrElse(fail(s"Could not find deploy_spark_cluster.py from $start"))
   }
+}
 
+object DeploySparkClusterScriptTest {
   private final case class CommandResult(exitCode: Int, output: String)
 }
