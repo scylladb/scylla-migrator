@@ -206,38 +206,40 @@ object ScyllaValidator {
           cachedJoined.filter { case (_, r) => r.isEmpty }
         val missingSourceRowCount = missingRowsRdd.count()
 
-        val rawRepairDf = spark.createDataFrame(
-          missingRowsRdd.map { case (sourceRow, _) =>
-            Row.fromSeq(
-              repairFieldNames.map { fieldName =>
-                readers.Cassandra.convertValue(sourceRow.getRaw(fieldName))
-              }
-            )
-          },
-          repairSchema
-        )
+        if (missingSourceRowCount > 0) {
+          val rawRepairDf = spark.createDataFrame(
+            missingRowsRdd.map { case (sourceRow, _) =>
+              Row.fromSeq(
+                repairFieldNames.map { fieldName =>
+                  readers.Cassandra.convertValue(sourceRow.getRaw(fieldName))
+                }
+              )
+            },
+            repairSchema
+          )
 
-        if (includePerColumnMetadata) {
-          val (repairRdd, repairSchema, timestampColumns) =
-            readers.Cassandra.explodeRowsFromPerColumnMeta(spark, rawRepairDf)
-          writers.Scylla.writeRowRDD(
-            targetSettings,
-            Nil,
-            repairRdd,
-            repairSchema,
-            Some(timestampColumns),
-            None,
-            sourceSettings
-          )
-        } else {
-          writers.Scylla.writeDataframe(
-            targetSettings,
-            Nil,
-            rawRepairDf,
-            None,
-            None,
-            sourceSettings
-          )
+          if (includePerColumnMetadata) {
+            val (repairRdd, repairSchema, timestampColumns) =
+              readers.Cassandra.explodeRowsFromPerColumnMeta(spark, rawRepairDf)
+            writers.Scylla.writeRowRDD(
+              targetSettings,
+              Nil,
+              repairRdd,
+              repairSchema,
+              Some(timestampColumns),
+              None,
+              sourceSettings
+            )
+          } else {
+            writers.Scylla.writeDataframe(
+              targetSettings,
+              Nil,
+              rawRepairDf,
+              None,
+              None,
+              sourceSettings
+            )
+          }
         }
 
         log.info(

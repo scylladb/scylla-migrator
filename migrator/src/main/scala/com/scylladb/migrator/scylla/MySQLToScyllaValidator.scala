@@ -1031,14 +1031,16 @@ object MySQLToScyllaValidator {
       try {
         val missingCount = missingSourceDf.count()
 
-        writers.Scylla.writeDataframe(
-          targetSettings,
-          Nil,
-          missingSourceDf,
-          None,
-          None,
-          sourceSettings
-        )
+        if (missingCount > 0) {
+          writers.Scylla.writeDataframe(
+            targetSettings,
+            Nil,
+            missingSourceDf,
+            None,
+            None,
+            sourceSettings
+          )
+        }
 
         log.info(
           s"Finished copying missing rows to target: $missingCount missing row(s) copied"
