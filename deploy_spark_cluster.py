@@ -103,6 +103,11 @@ variable "iam_instance_profile" {
   default = ""
 }
 
+variable "owner_tag" {
+  type    = string
+  default = ""
+}
+
 data "aws_availability_zones" "available" {
   state = "available"
 }
@@ -289,10 +294,13 @@ resource "aws_instance" "spark_master" {
     volume_size = var.root_volume_size_gb
   }
 
-  tags = {
-    Name = "${var.name_prefix}-master"
-    Role = "spark-master"
-  }
+  tags = merge(
+    {
+      Name = "${var.name_prefix}-master"
+      Role = "spark-master"
+    },
+    var.owner_tag == "" ? {} : { Owner = var.owner_tag }
+  )
 }
 
 resource "aws_instance" "spark_worker" {
@@ -314,10 +322,13 @@ resource "aws_instance" "spark_worker" {
     volume_size = var.root_volume_size_gb
   }
 
-  tags = {
-    Name = "${var.name_prefix}-worker-${count.index + 1}"
-    Role = "spark-worker"
-  }
+  tags = merge(
+    {
+      Name = "${var.name_prefix}-worker-${count.index + 1}"
+      Role = "spark-worker"
+    },
+    var.owner_tag == "" ? {} : { Owner = var.owner_tag }
+  )
 }
 
 output "region" {
@@ -644,6 +655,7 @@ def write_terraform_files(args: argparse.Namespace, state_dir: Path) -> None:
         "allowed_web_cidr": args.allowed_web_cidr,
         "root_volume_size_gb": args.root_volume_size_gb,
         "iam_instance_profile": args.iam_instance_profile or "",
+        "owner_tag": args.owner_tag or "",
     }
     write_json(state_dir / "terraform.tfvars.json", tfvars)
 
@@ -758,6 +770,7 @@ def save_metadata(
         "master_instance_type": args.master_instance_type,
         "worker_instance_type": args.worker_instance_type,
         "workers": args.workers,
+        "owner_tag": args.owner_tag or "",
         "migration_type": args.migration_type,
         "ssh_private_key": str(private_key),
         "ssh_known_hosts": str(known_hosts_path(state_dir)),
@@ -986,6 +999,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--iam-instance-profile",
         default="",
         help="Optional existing IAM instance profile for the EC2 instances.",
+    )
+    deploy.add_argument(
+        "--owner-tag",
+        default="",
+        help="Optional Owner tag value to apply to the Spark master and worker EC2 instances.",
     )
     deploy.add_argument("--migration-type", choices=["cql", "alternator"], default="cql")
     deploy.add_argument(

@@ -163,6 +163,7 @@ Common arguments:
 - `--master-instance-type`: Spark master EC2 instance type. Defaults to `x2iedn.2xlarge`.
 - `--worker-instance-type`: Spark worker EC2 instance type. Defaults to `i8g.4xlarge`.
 - `--workers`: Number of Spark worker instances. Defaults to `1`.
+- `--owner-tag`: Optional `Owner` tag value to apply to the Spark master and worker EC2 instances.
 - `--migration-type`: Migrator config and submit script family to use. Allowed values are `cql` and `alternator`. Defaults to `cql`.
 - `--config-file`: Optional local Migrator config file to upload to the Spark master.
 

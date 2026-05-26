@@ -34,6 +34,7 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(result.output, "--allowed-ssh-cidr")
     assertOutputContains(result.output, "--allowed-web-cidr")
     assertOutputContains(result.output, "--allow-public-access")
+    assertOutputContains(result.output, "--owner-tag")
     assertOutputContains(result.output, "--insecure-ssh")
   }
 

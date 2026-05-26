@@ -1,6 +1,10 @@
 *.class
 *.log
+*.swp
 build.sbt_back
+
+config.yaml
+config.dynamodb.yaml
 
 # sbt specific
 dist/*
