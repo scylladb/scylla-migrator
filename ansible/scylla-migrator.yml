@@ -65,7 +65,7 @@
 
     - name: Download the awscli bundle.
       get_url: 
-        url: "https://awscli.amazonaws.com/awscli-exe-linux-{{ 'aarch64' if ansible_architecture in ['aarch64', 'arm64'] else 'x86_64' }}.zip"
+        url: "https://awscli.amazonaws.com/awscli-exe-linux-{{ 'aarch64' if ansible_facts['architecture'] in ['aarch64', 'arm64'] else 'x86_64' }}.zip"
         dest: "{{ home_dir }}/awscliv2.zip"
       when: not stat_result.stat.exists
       register: aws_cli_download_bundle
@@ -176,7 +176,7 @@
   vars:
     home_dir: /home/ubuntu
     spark_home: /opt/spark
-    java_home_arch: "{{ 'arm64' if ansible_architecture in ['aarch64', 'arm64'] else 'amd64' }}"
+    java_home_arch: "{{ 'arm64' if ansible_facts['architecture'] in ['aarch64', 'arm64'] else 'amd64' }}"
     java_home_default: "{{ '/usr/lib/jvm/java-17-openjdk-' ~ java_home_arch }}"
     master_java_home: "{{ hostvars[inventory_hostname].java_home | default(java_home_default) }}"
   environment:

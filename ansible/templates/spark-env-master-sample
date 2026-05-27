@@ -26,7 +26,7 @@
 #    - If necessary, provision more worker nodes
 ##################################################################################################################
 
-export SPARK_MASTER_HOST={{ hostvars.spark_master.ansible_default_ipv4.address }}
+export SPARK_MASTER_HOST={{ hostvars["spark_master"]["ansible_facts"]["default_ipv4"]["address"] }}
 export EXECUTOR_CORES=4
 # By default, allocate 2GB of memory per core
 export EXECUTOR_MEMORY="$((EXECUTOR_CORES * 2))G"
