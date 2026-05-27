@@ -842,18 +842,100 @@ def wait_for_spark_master(
     raise SystemExit(f"Timed out waiting for Spark master at {master_url}")
 
 
+def registered_worker_count(
+    outputs: dict[str, Any],
+    private_key: Path,
+    known_hosts: Path,
+    insecure: bool,
+) -> int:
+    master_public_ip = outputs["master"]["public_ip"]
+    private_ip = outputs["master"]["private_ip"]
+    command = (
+        "python3 -c "
+        + shlex.quote(
+            "import json, urllib.request; "
+            f"data=json.load(urllib.request.urlopen('http://{private_ip}:8080/json', timeout=5)); "
+            "print(len(data.get('workers', [])))"
+        )
+    )
+    completed = subprocess.run(
+        [
+            "ssh",
+            *ssh_options(private_key, known_hosts, insecure),
+            f"{DEFAULT_USER}@{master_public_ip}",
+            command,
+        ],
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        return 0
+    try:
+        return int(completed.stdout.strip())
+    except ValueError:
+        return 0
+
+
+def start_workers(
+    outputs: dict[str, Any],
+    private_key: Path,
+    known_hosts: Path,
+    insecure: bool,
+) -> None:
+    for worker in outputs["workers"]:
+        ssh_command(
+            worker["public_ip"],
+            "cd /home/ubuntu && ./start-slave.sh",
+            private_key=private_key,
+            known_hosts=known_hosts,
+            insecure=insecure,
+        )
+
+
+def wait_for_spark_workers(
+    outputs: dict[str, Any],
+    private_key: Path,
+    known_hosts: Path,
+    insecure: bool,
+) -> None:
+    expected_workers = len(outputs["workers"])
+    if expected_workers == 0:
+        return
+
+    for _attempt in range(1, 25):
+        count = registered_worker_count(outputs, private_key, known_hosts, insecure)
+        if count >= expected_workers:
+            return
+        time.sleep(5)
+
+    count = registered_worker_count(outputs, private_key, known_hosts, insecure)
+    raise SystemExit(
+        "Timed out waiting for Spark workers to register "
+        f"({count}/{expected_workers} registered)"
+    )
+
+
 def ensure_spark_running(
     outputs: dict[str, Any],
     private_key: Path,
     known_hosts: Path,
     insecure: bool,
 ) -> None:
-    if spark_master_is_reachable(outputs, private_key, known_hosts, insecure):
-        return
+    if not spark_master_is_reachable(outputs, private_key, known_hosts, insecure):
+        print("Spark master is not reachable on port 7077; starting Spark...")
+        start_spark(outputs, private_key, known_hosts, insecure)
+        wait_for_spark_master(outputs, private_key, known_hosts, insecure)
+    else:
+        expected_workers = len(outputs["workers"])
+        current_workers = registered_worker_count(outputs, private_key, known_hosts, insecure)
+        if current_workers < expected_workers:
+            print(
+                "Spark master is reachable, but only "
+                f"{current_workers}/{expected_workers} workers are registered; starting workers..."
+            )
+            start_workers(outputs, private_key, known_hosts, insecure)
 
-    print("Spark master is not reachable on port 7077; starting Spark...")
-    start_spark(outputs, private_key, known_hosts, insecure)
-    wait_for_spark_master(outputs, private_key, known_hosts, insecure)
+    wait_for_spark_workers(outputs, private_key, known_hosts, insecure)
 
 
 def save_metadata(
@@ -973,6 +1055,7 @@ def handle_deploy(args: argparse.Namespace) -> None:
     if not args.skip_start:
         start_spark(outputs, private_key, known_hosts, args.insecure_ssh)
         wait_for_spark_master(outputs, private_key, known_hosts, args.insecure_ssh)
+        wait_for_spark_workers(outputs, private_key, known_hosts, args.insecure_ssh)
 
     print_cluster_details(outputs, metadata=load_metadata(state_dir))
 
