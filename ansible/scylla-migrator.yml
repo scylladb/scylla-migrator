@@ -93,10 +93,12 @@
         state: absent
         path: "{{ home_dir }}/aws"
 
-    - name: Download spark
+    - name: Download spark (poll every 15 seconds)
       get_url: 
         url: "https://archive.apache.org/dist/spark/spark-{{ spark_version }}/{{ spark_package }}.tgz"
         dest: "{{ home_dir }}/{{ spark_package }}.tgz"
+      async: 1800
+      poll: 15
 
     - name: Extract spark
       ansible.builtin.unarchive:
