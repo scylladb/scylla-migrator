@@ -59,15 +59,16 @@ object MigratorConfig {
     Decoder.instance { cursor =>
       deriveConfiguredDecoder[MigratorConfig].apply(cursor).flatMap { decoded =>
         val savepointsProvided = cursor.downField("savepoints").success.isDefined
-        val savepointsRequired = decoded.source match {
-          case _: SourceSettings.MySQL => false
-          case _                       => true
-        }
+        // Backend-neutral: each `SourceSettings` subtype declares its own capability via
+        // `supportsSavepoints`. Adding a new non-resumable source does not require editing
+        // this decoder.
+        val savepointsRequired = decoded.source.supportsSavepoints
 
         if (!savepointsProvided && savepointsRequired)
           Left(
             DecodingFailure(
-              "Missing required field: savepoints. This field is optional only for MySQL migrations.",
+              "Missing required field: savepoints. This field is optional only for sources " +
+                "that do not support savepoints.",
               cursor.history
             )
           )
@@ -105,10 +106,12 @@ object MigratorConfig {
     }
   implicit val migratorConfigEncoder: Encoder[MigratorConfig] =
     Encoder.instance { migratorConfig =>
-      val savepointsField = migratorConfig.source match {
-        case _: SourceSettings.MySQL => Nil
-        case _                       => List("savepoints" -> migratorConfig.savepoints.asJson)
-      }
+      // Mirror of the decoder: sources that do not support savepoints omit the field on
+      // round-trip rather than emitting an unused block.
+      val savepointsField =
+        if (migratorConfig.source.supportsSavepoints)
+          List("savepoints" -> migratorConfig.savepoints.asJson)
+        else Nil
 
       Json.obj(
         (
