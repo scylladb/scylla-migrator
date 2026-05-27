@@ -46,9 +46,9 @@ object AlternatorMigrator {
       sourceRDD,
       sourceTableDesc,
       maybeStreamedSource,
+      source,
       target,
-      migratorConfig,
-      hadoopPartitionedSource = true
+      migratorConfig
     )
   }
 
@@ -132,9 +132,9 @@ object AlternatorMigrator {
         normalizedRDD,
         sourceTableDesc,
         Some(streamedSource),
+        source,
         target,
         migratorConfig,
-        hadoopPartitionedSource   = false,
         snapshotStartTimeOverride = exportStartTime
       )
     } else {
@@ -142,9 +142,9 @@ object AlternatorMigrator {
         normalizedRDD,
         sourceTableDesc,
         None,
+        source,
         target,
-        migratorConfig,
-        hadoopPartitionedSource = false
+        migratorConfig
       )
     }
   }
@@ -155,15 +155,13 @@ object AlternatorMigrator {
     *   Description of the table to replicate on the target database
     * @param maybeStreamedSource
     *   Settings of the source table in case `streamChanges` was `true`
+    * @param source
+    *   The original `SourceSettings`. Used to consult `supportsSavepoints` so the RDD path follows
+    *   the same backend-neutral predicate as the DataFrame paths in `ScyllaMigrator`.
     * @param target
     *   Target table settings
     * @param migratorConfig
     *   The complete original configuration
-    * @param hadoopPartitionedSource
-    *   Whether the source RDD uses `HadoopPartition`s (from the DynamoDB Hadoop connector)
-    *   containing `DynamoDBSplit`s. When `true`, scan segment progress is tracked via
-    *   `DynamoDbSavepointsManager`. Must be `false` for source types whose RDDs use other partition
-    *   types (e.g., `ParallelCollectionPartition` from S3 exports).
     * @param snapshotStartTimeOverride
     *   When set (e.g. by `migrateFromS3Export`), use this as the Kinesis `AT_TIMESTAMP` default
     *   instead of capturing `Instant.now()` at the start of the migration. Ignored unless the
@@ -175,9 +173,9 @@ object AlternatorMigrator {
     sourceRDD: RDD[(Text, DynamoDBItemWritable)],
     sourceTableDesc: TableDescription,
     maybeStreamedSource: Option[SourceSettings.DynamoDB],
+    source: SourceSettings,
     target: TargetSettings.DynamoDBLike,
     migratorConfig: MigratorConfig,
-    hadoopPartitionedSource: Boolean,
     snapshotStartTimeOverride: Option[Instant] = None
   )(implicit spark: SparkSession): Unit = {
 
@@ -250,7 +248,12 @@ object AlternatorMigrator {
       if (target.streamChanges.isEnabled && target.skipInitialSnapshotTransfer.contains(true)) {
         log.info("Skip transferring table snapshot")
       } else {
-        if (hadoopPartitionedSource) {
+        // Backend-neutral gating: any `SourceSettings` subtype with `supportsSavepoints = true`
+        // (DynamoDB, Alternator) is wrapped in `DynamoDbSavepointsManager` to track scan-segment
+        // progress; sources with `supportsSavepoints = false` (DynamoDB S3 export, future
+        // non-resumable RDD sources) skip the manager and emit the generic "no savepoints"
+        // warning from `Migrator.migrate` instead of a per-source `log.warn` here.
+        if (source.supportsSavepoints) {
           Using.resource(
             DynamoDbSavepointsManager(migratorConfig, sourceRDD, spark.sparkContext)
           ) { _ =>
@@ -259,10 +262,6 @@ object AlternatorMigrator {
               .writeRDD(target, migratorConfig.renamesMap, sourceRDD, targetTableDesc)
           }
         } else {
-          log.warn(
-            "Savepoints are not supported when the source is a DynamoDB S3 export. " +
-              "If the migration is interrupted, it will reprocess all data on restart."
-          )
           log.info("Starting write...")
           writers.DynamoDB.writeRDD(target, migratorConfig.renamesMap, sourceRDD, targetTableDesc)
         }

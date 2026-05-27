@@ -156,8 +156,9 @@ object SparkUtils {
 
   private def remapForLocalExecution(config: MigratorConfig): MigratorConfig = {
     val newSource = config.source match {
-      case c: SourceSettings.Cassandra =>
+      case c: SourceSettings.Cassandra if c.cloud.isEmpty =>
         c.copy(host = "localhost", port = cqlHostPortMap.getOrElse(c.host, c.port))
+      case c: SourceSettings.Cassandra => c
       case d: SourceSettings.DynamoDB =>
         d.copy(endpoint = d.endpoint.map(remapEndpoint))
       case a: SourceSettings.Alternator =>
@@ -176,8 +177,9 @@ object SparkUtils {
         )
     }
     val newTarget = config.target match {
-      case s: TargetSettings.Scylla =>
+      case s: TargetSettings.Scylla if s.cloud.isEmpty =>
         s.copy(host = "localhost", port = cqlHostPortMap.getOrElse(s.host, s.port))
+      case s: TargetSettings.Scylla => s
       case d: TargetSettings.DynamoDB =>
         d.copy(endpoint = d.endpoint.map(remapEndpoint))
       case a: TargetSettings.Alternator =>
