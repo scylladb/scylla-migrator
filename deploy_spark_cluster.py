@@ -647,6 +647,34 @@ def upload_config_if_requested(
     )
 
 
+def config_file_from_args_or_metadata(
+    config_file_arg: str | None,
+    metadata: dict[str, Any],
+) -> Path | None:
+    if config_file_arg is not None:
+        return resolve_path(config_file_arg)
+
+    saved_config_file = metadata.get("config_file")
+    if not saved_config_file:
+        return None
+    return resolve_path(saved_config_file)
+
+
+def remember_config_file(
+    state_dir: Path,
+    metadata: dict[str, Any],
+    *,
+    config_file: Path | None,
+    migration_type: str,
+) -> None:
+    if config_file is None:
+        return
+
+    metadata["config_file"] = str(config_file)
+    metadata["migration_type"] = migration_type
+    write_json(state_dir / "metadata.json", metadata)
+
+
 def write_terraform_files(args: argparse.Namespace, state_dir: Path) -> None:
     state_dir.mkdir(parents=True, exist_ok=True)
     (state_dir / "main.tf").write_text(TERRAFORM_MAIN)
@@ -845,6 +873,7 @@ def save_metadata(
         "workers": args.workers,
         "owner_tag": args.owner_tag or "",
         "migration_type": args.migration_type,
+        "config_file": str(resolve_path(args.config_file)) if args.config_file else "",
         "ssh_private_key": str(private_key),
         "ssh_known_hosts": str(known_hosts_path(state_dir)),
         "insecure_ssh": args.insecure_ssh,
@@ -856,6 +885,17 @@ def save_metadata(
 
 def load_metadata(state_dir: Path) -> dict[str, Any]:
     return read_json(state_dir / "metadata.json")
+
+
+def master_host_from_inventory(inventory_path: Path) -> str:
+    for raw_line in inventory_path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line.startswith("spark_master "):
+            continue
+        for token in line.split()[1:]:
+            if token.startswith("ansible_host="):
+                return token.split("=", 1)[1]
+    raise SystemExit(f"Could not find spark_master ansible_host in {inventory_path}")
 
 
 def validate_access_cidrs(args: argparse.Namespace) -> None:
@@ -910,13 +950,24 @@ def handle_deploy(args: argparse.Namespace) -> None:
     )
     run_ansible(inventory_path, private_key, known_hosts, args.insecure_ssh)
 
+    deploy_metadata = load_metadata(state_dir)
+    deploy_config_file = config_file_from_args_or_metadata(
+        args.config_file,
+        deploy_metadata,
+    )
     upload_config_if_requested(
-        resolve_path(args.config_file),
+        deploy_config_file,
         migration_type=args.migration_type,
         master_public_ip=outputs["master"]["public_ip"],
         private_key=private_key,
         known_hosts=known_hosts,
         insecure=args.insecure_ssh,
+    )
+    remember_config_file(
+        state_dir,
+        deploy_metadata,
+        config_file=deploy_config_file,
+        migration_type=args.migration_type,
     )
 
     if not args.skip_start:
@@ -987,13 +1038,20 @@ def handle_run(args: argparse.Namespace) -> None:
     ensure_spark_running(outputs, private_key, known_hosts, insecure)
 
     migration_type = args.migration_type or metadata.get("migration_type") or "cql"
+    run_config_file = config_file_from_args_or_metadata(args.config_file, metadata)
     upload_config_if_requested(
-        resolve_path(args.config_file),
+        run_config_file,
         migration_type=migration_type,
         master_public_ip=outputs["master"]["public_ip"],
         private_key=private_key,
         known_hosts=known_hosts,
         insecure=insecure,
+    )
+    remember_config_file(
+        state_dir,
+        metadata,
+        config_file=run_config_file,
+        migration_type=migration_type,
     )
 
     submit_script = submit_script_name(migration_type, args.validator)
@@ -1008,7 +1066,7 @@ def handle_run(args: argparse.Namespace) -> None:
 
 def handle_redeploy(args: argparse.Namespace) -> None:
     state_dir = resolve_state_dir(args.state_dir)
-    require_commands(["ansible-playbook", "ssh"])
+    require_commands(["ansible-playbook", "ssh", "scp"])
     metadata = load_metadata(state_dir)
 
     inventory_path = state_dir / "inventory.ini"
@@ -1024,8 +1082,24 @@ def handle_redeploy(args: argparse.Namespace) -> None:
 
     known_hosts = resolve_path(metadata.get("ssh_known_hosts")) or known_hosts_path(state_dir)
     insecure = args.insecure_ssh or bool(metadata.get("insecure_ssh", False))
+    migration_type = args.migration_type or metadata.get("migration_type") or "cql"
+    redeploy_config_file = config_file_from_args_or_metadata(args.config_file, metadata)
 
     run_ansible(inventory_path, private_key, known_hosts, insecure)
+    upload_config_if_requested(
+        redeploy_config_file,
+        migration_type=migration_type,
+        master_public_ip=master_host_from_inventory(inventory_path),
+        private_key=private_key,
+        known_hosts=known_hosts,
+        insecure=insecure,
+    )
+    remember_config_file(
+        state_dir,
+        metadata,
+        config_file=redeploy_config_file,
+        migration_type=migration_type,
+    )
 
 
 def handle_destroy(args: argparse.Namespace) -> None:
@@ -1158,6 +1232,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Rerun Ansible on the current nodes in the generated inventory.",
     )
     redeploy.add_argument("--ssh-private-key", default=None)
+    redeploy.add_argument("--migration-type", choices=["cql", "alternator"], default=None)
+    redeploy.add_argument(
+        "--config-file",
+        default=None,
+        help=(
+            "Optional Migrator config to upload after rerunning Ansible. "
+            "Defaults to the config file saved in deployment metadata."
+        ),
+    )
     redeploy.add_argument(
         "--insecure-ssh",
         action="store_true",

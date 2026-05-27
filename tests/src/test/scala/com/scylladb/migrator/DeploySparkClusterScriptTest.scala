@@ -131,6 +131,8 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertEquals(result.exitCode, 0, result.output)
     assertOutputContains(result.output, "Rerun Ansible")
     assertOutputContains(result.output, "--ssh-private-key")
+    assertOutputContains(result.output, "--migration-type")
+    assertOutputContains(result.output, "--config-file")
     assertOutputContains(result.output, "--insecure-ssh")
   }
 
