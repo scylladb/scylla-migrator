@@ -40,7 +40,7 @@
     - name: Set JAVA_HOME
       ansible.builtin.lineinfile:
         path: "{{ home_dir }}/.profile"
-        regexp: '^JAVA_HOME='
+        regexp: '^export JAVA_HOME='
         line: "export JAVA_HOME={{ java_home }}"
 
     - name: install cqlsh in a virtualenv
@@ -119,25 +119,25 @@
     - name: Add JAVA_HOME to PATH
       ansible.builtin.lineinfile:
         path: "{{ home_dir }}/.profile"
-        regexp: '^:$JAVA_HOME'
-        line: export PATH=$PATH:$JAVA_HOME
+        regexp: '^export PATH=\$PATH:\$JAVA_HOME/bin$'
+        line: export PATH=$PATH:$JAVA_HOME/bin
 
     - name: Set SPARK_HOME
       ansible.builtin.lineinfile:
         path: "{{ home_dir }}/.profile"
-        regexp: '^:SPARK_HOME'
+        regexp: '^export SPARK_HOME='
         line: "export SPARK_HOME={{ spark_home }}"
 
     - name: Add SPARK_HOME/bin to path
       ansible.builtin.lineinfile:
         path: "{{ home_dir }}/.profile"
-        regexp: '^:$SPARK_HOME/bin'
+        regexp: '^export PATH=\$PATH:\$SPARK_HOME/bin$'
         line: export PATH=$PATH:$SPARK_HOME/bin
 
     - name: Add SPARK_HOME/sbin to path
       ansible.builtin.lineinfile:
         path: "{{ home_dir }}/.profile"
-        regexp: '^:$SPARK_HOME/sbin'
+        regexp: '^export PATH=\$PATH:\$SPARK_HOME/sbin$'
         line: export PATH=$PATH:$SPARK_HOME/sbin
 
     - name: Make sure slaves file exists
@@ -184,7 +184,7 @@
   environment:
     JAVA_HOME: "{{ master_java_home }}"
     SPARK_HOME: /opt/spark
-    PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/ubuntu/.local/share/coursier/bin:{{ master_java_home }}:/opt/spark/bin:/opt/spark/sbin"
+    PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/ubuntu/.local/share/coursier/bin:{{ master_java_home }}/bin:/opt/spark/bin:/opt/spark/sbin"
 
   tasks:
     - name: Create scylla-migrator directory
