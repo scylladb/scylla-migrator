@@ -97,7 +97,15 @@ The deployment creates an AWS key pair from the local public key. The EC2 instan
 
    The output includes the VPC, subnet, security group, EC2 instance IDs, Spark master URL, Spark UI, application UI, and history server UI.
 
-5. Run the migration job:
+5. Rerun the Ansible configuration when you need to apply local playbook or script changes to the current nodes:
+
+   ```bash
+   ./deploy_spark_cluster.py redeploy
+   ```
+
+   This uses the generated inventory in `.deploy_spark_cluster/inventory.ini` and does not run Terraform.
+
+6. Run the migration job:
 
    ```bash
    ./deploy_spark_cluster.py run
@@ -117,9 +125,9 @@ The deployment creates an AWS key pair from the local public key. The EC2 instan
    ./deploy_spark_cluster.py run --validator
    ```
 
-6. Monitor progress in the Spark UI printed by `show` or by the `deploy` command.
+7. Monitor progress in the Spark UI printed by `show` or by the `deploy` command.
 
-7. Destroy the cluster when the migration is complete:
+8. Destroy the cluster when the migration is complete:
 
    ```bash
    ./deploy_spark_cluster.py destroy --yes
@@ -201,6 +209,15 @@ Arguments:
 - `--migration-type`: Override the saved migration type. Allowed values are `cql` and `alternator`.
 - `--config-file`: Upload a local config file to the Spark master before running.
 - `--validator`: Run the validator entrypoint instead of the migrator entrypoint.
+- `--insecure-ssh`: Disable SSH host key verification. Use only in trusted test environments.
+
+#### `redeploy`
+
+Reruns the Ansible playbook against the current nodes in the generated inventory. This is useful after changing files under `ansible/` and does not run Terraform.
+
+Arguments:
+
+- `--ssh-private-key`: SSH private key to use. Defaults to the key saved in deployment metadata.
 - `--insecure-ssh`: Disable SSH host key verification. Use only in trusted test environments.
 
 #### `destroy`

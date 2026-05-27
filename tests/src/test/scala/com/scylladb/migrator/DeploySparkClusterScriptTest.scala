@@ -23,7 +23,11 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     val result = runScript("--help")
 
     assertEquals(result.exitCode, 0, result.output)
-    assertOutputContains(result.output, "{deploy,show,run,destroy}")
+    assertOutputContains(result.output, "deploy")
+    assertOutputContains(result.output, "show")
+    assertOutputContains(result.output, "run")
+    assertOutputContains(result.output, "redeploy")
+    assertOutputContains(result.output, "destroy")
     assertOutputContains(result.output, "Deploy and operate a Spark cluster")
   }
 
@@ -118,6 +122,15 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertEquals(result.exitCode, 0, result.output)
     assertOutputContains(result.output, "--migration-type")
     assertOutputContains(result.output, "--validator")
+    assertOutputContains(result.output, "--insecure-ssh")
+  }
+
+  test("redeploy help documents inventory rerun and SSH safety options") {
+    val result = runScript("redeploy", "--help")
+
+    assertEquals(result.exitCode, 0, result.output)
+    assertOutputContains(result.output, "Rerun Ansible")
+    assertOutputContains(result.output, "--ssh-private-key")
     assertOutputContains(result.output, "--insecure-ssh")
   }
 

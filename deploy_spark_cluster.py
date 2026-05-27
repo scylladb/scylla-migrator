@@ -1006,6 +1006,28 @@ def handle_run(args: argparse.Namespace) -> None:
     )
 
 
+def handle_redeploy(args: argparse.Namespace) -> None:
+    state_dir = resolve_state_dir(args.state_dir)
+    require_commands(["ansible-playbook", "ssh"])
+    metadata = load_metadata(state_dir)
+
+    inventory_path = state_dir / "inventory.ini"
+    if not inventory_path.exists():
+        raise SystemExit(
+            f"Inventory not found at {inventory_path}. Run deploy first, or pass "
+            "the state directory containing the generated inventory."
+        )
+
+    private_key = resolve_path(args.ssh_private_key or metadata.get("ssh_private_key"))
+    if private_key is None or not private_key.exists():
+        raise SystemExit("Could not find SSH private key. Pass --ssh-private-key.")
+
+    known_hosts = resolve_path(metadata.get("ssh_known_hosts")) or known_hosts_path(state_dir)
+    insecure = args.insecure_ssh or bool(metadata.get("insecure_ssh", False))
+
+    run_ansible(inventory_path, private_key, known_hosts, insecure)
+
+
 def handle_destroy(args: argparse.Namespace) -> None:
     state_dir = resolve_state_dir(args.state_dir)
     require_commands(["terraform"])
@@ -1127,6 +1149,24 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     run.set_defaults(func=handle_run)
+
+    redeploy = subparsers.add_parser(
+        "redeploy",
+        parents=[common],
+        description="Rerun Ansible on the current nodes in the generated inventory.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        help="Rerun Ansible on the current nodes in the generated inventory.",
+    )
+    redeploy.add_argument("--ssh-private-key", default=None)
+    redeploy.add_argument(
+        "--insecure-ssh",
+        action="store_true",
+        help=(
+            "Disable SSH host key verification. This should only be used in "
+            "trusted test environments."
+        ),
+    )
+    redeploy.set_defaults(func=handle_redeploy)
 
     destroy = subparsers.add_parser(
         "destroy",
