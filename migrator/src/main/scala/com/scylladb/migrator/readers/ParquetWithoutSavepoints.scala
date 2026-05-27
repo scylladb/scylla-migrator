@@ -16,6 +16,11 @@ object ParquetWithoutSavepoints {
     val df = spark.read.parquet(source.path)
     log.info(s"Loaded Parquet DataFrame with ${df.rdd.getNumPartitions} partitions")
 
+    // This path is selected by `savepoints.enableParquetFileTracking = false`. Even though
+    // `SourceSettings.Parquet.supportsSavepoints == true`, the user has explicitly opted out of
+    // file-level tracking for this run, so the DataFrame is marked unsupported to keep
+    // `ScyllaMigratorBase.createSavepointsManager` from spinning up a CQL manager that has no
+    // accumulator to consume Parquet progress.
     if (TimestampColumns.hasPerColumnMetaInParquet(df.schema)) {
       log.info(
         "Detected per-column CQL timestamp metadata in Parquet schema. " +

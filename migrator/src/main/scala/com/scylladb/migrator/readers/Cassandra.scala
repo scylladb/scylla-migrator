@@ -20,7 +20,7 @@ import org.apache.spark.sql.types.{
   StructType,
   TimestampType
 }
-import org.apache.spark.sql.{ DataFrame, Encoders, Row, SparkSession }
+import org.apache.spark.sql.{ DataFrame, Row, SparkSession }
 import org.apache.spark.unsafe.types.UTF8String
 import com.scylladb.migrator.ConsistencyLevelUtils
 import com.scylladb.migrator.scylla.SourceDataFrame
@@ -398,11 +398,11 @@ object Cassandra {
     val rawDataframe = spark.createDataFrame(rdd, selection.schema)
 
     if (skipExplosion) {
-      SourceDataFrame(rawDataframe, selection.timestampColumns, true)
+      SourceDataFrame(rawDataframe, selection.timestampColumns, source.supportsSavepoints)
     } else {
       selection.timestampColumns match {
         case None =>
-          SourceDataFrame(rawDataframe, selection.timestampColumns, true)
+          SourceDataFrame(rawDataframe, selection.timestampColumns, source.supportsSavepoints)
         case Some(TimestampColumns(ttl, writeTime)) =>
           val (primaryKeyOrdinals, regularKeyOrdinals) = indexFields(
             rawDataframe.schema.fields.map(_.name).toList,
@@ -433,7 +433,7 @@ object Cassandra {
           SourceDataFrame(
             rawDataframe,
             selection.timestampColumns,
-            true,
+            source.supportsSavepoints,
             Some((explodedRdd, finalSchema))
           )
       }
