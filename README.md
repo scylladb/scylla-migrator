@@ -103,6 +103,8 @@ The deployment creates an AWS key pair from the local public key. The EC2 instan
    ./deploy_spark_cluster.py run
    ```
 
+   The `run` command checks that the Spark master is reachable on port `7077`. If it is not reachable, the script starts Spark and waits for the master before submitting the job.
+
    To upload a revised config before running, pass `--config-file`:
 
    ```bash

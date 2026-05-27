@@ -534,6 +534,28 @@ def ssh_command(
     )
 
 
+def ssh_command_succeeds(
+    host: str,
+    remote_command: str,
+    *,
+    private_key: Path,
+    known_hosts: Path,
+    insecure: bool,
+    user: str = DEFAULT_USER,
+) -> bool:
+    completed = subprocess.run(
+        [
+            "ssh",
+            *ssh_options(private_key, known_hosts, insecure),
+            f"{user}@{host}",
+            remote_command,
+        ],
+        text=True,
+        capture_output=True,
+    )
+    return completed.returncode == 0
+
+
 def scp_to_host(
     source: Path,
     host: str,
@@ -755,6 +777,57 @@ def start_spark(
         )
 
 
+def spark_master_is_reachable(
+    outputs: dict[str, Any],
+    private_key: Path,
+    known_hosts: Path,
+    insecure: bool,
+) -> bool:
+    master_public_ip = outputs["master"]["public_ip"]
+    private_ip = outputs["master"]["private_ip"]
+    return ssh_command_succeeds(
+        master_public_ip,
+        (
+            "python3 -c "
+            + shlex.quote(
+                "import socket, sys; "
+                f"s=socket.create_connection(('{private_ip}', 7077), 2); s.close()"
+            )
+        ),
+        private_key=private_key,
+        known_hosts=known_hosts,
+        insecure=insecure,
+    )
+
+
+def wait_for_spark_master(
+    outputs: dict[str, Any],
+    private_key: Path,
+    known_hosts: Path,
+    insecure: bool,
+) -> None:
+    for _attempt in range(1, 25):
+        if spark_master_is_reachable(outputs, private_key, known_hosts, insecure):
+            return
+        time.sleep(5)
+    master_url = outputs.get("spark_master_url", "spark://<master>:7077")
+    raise SystemExit(f"Timed out waiting for Spark master at {master_url}")
+
+
+def ensure_spark_running(
+    outputs: dict[str, Any],
+    private_key: Path,
+    known_hosts: Path,
+    insecure: bool,
+) -> None:
+    if spark_master_is_reachable(outputs, private_key, known_hosts, insecure):
+        return
+
+    print("Spark master is not reachable on port 7077; starting Spark...")
+    start_spark(outputs, private_key, known_hosts, insecure)
+    wait_for_spark_master(outputs, private_key, known_hosts, insecure)
+
+
 def save_metadata(
     args: argparse.Namespace,
     *,
@@ -848,6 +921,7 @@ def handle_deploy(args: argparse.Namespace) -> None:
 
     if not args.skip_start:
         start_spark(outputs, private_key, known_hosts, args.insecure_ssh)
+        wait_for_spark_master(outputs, private_key, known_hosts, args.insecure_ssh)
 
     print_cluster_details(outputs, metadata=load_metadata(state_dir))
 
@@ -909,6 +983,8 @@ def handle_run(args: argparse.Namespace) -> None:
         raise SystemExit("Could not find SSH private key. Pass --ssh-private-key.")
     known_hosts = resolve_path(metadata.get("ssh_known_hosts")) or known_hosts_path(state_dir)
     insecure = args.insecure_ssh or bool(metadata.get("insecure_ssh", False))
+
+    ensure_spark_running(outputs, private_key, known_hosts, insecure)
 
     migration_type = args.migration_type or metadata.get("migration_type") or "cql"
     upload_config_if_requested(
