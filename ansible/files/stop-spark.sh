@@ -7,7 +7,11 @@ source spark-env
 
 cd $SPARK_HOME/sbin
 
-./stop-mesos-shuffle-service.sh
+if [[ -x ./stop-mesos-shuffle-service.sh ]]; then
+  ./stop-mesos-shuffle-service.sh
+else
+  echo "Mesos shuffle service is not available in this Spark distribution; skipping."
+fi
 
 ./stop-history-server.sh
 
