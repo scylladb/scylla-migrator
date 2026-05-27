@@ -1,7 +1,5 @@
 package com.scylladb.migrator.scylla
 
-import com.datastax.spark.connector.rdd.partitioner.{ CassandraPartition, CqlTokenRange }
-import com.datastax.spark.connector.rdd.partitioner.dht.Token
 import com.datastax.spark.connector.writer.TokenRangeAccumulator
 import com.scylladb.migrator.SavepointsManager
 import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
@@ -48,34 +46,10 @@ trait ScyllaMigratorBase {
       "We need to transfer: " + sourceDF.dataFrame.rdd.getNumPartitions + " partitions in total"
     )
 
-    if (migratorConfig.source.isInstanceOf[SourceSettings.Cassandra]) {
-      val partitions = sourceDF.dataFrame.rdd.partitions
-      val cassandraPartitions = partitions.map(p => p.asInstanceOf[CassandraPartition[_, _]])
-      val allTokenRangesBuilder = Set.newBuilder[(Token[_], Token[_])]
-      cassandraPartitions.foreach(p =>
-        p.tokenRanges
-          .asInstanceOf[Vector[CqlTokenRange[_, _]]]
-          .foreach { tr =>
-            val range: (Token[_], Token[_]) =
-              (tr.range.start.asInstanceOf[Token[_]], tr.range.end.asInstanceOf[Token[_]])
-            allTokenRangesBuilder += range
-          }
-      )
-      val allTokenRanges = allTokenRangesBuilder.result()
-
-      log.info("All token ranges extracted from partitions size:" + allTokenRanges.size)
-
-      if (migratorConfig.skipTokenRanges.isDefined) {
-        log.info(
-          "Savepoints array defined, size of the array: " + migratorConfig.skipTokenRanges.size
-        )
-
-        val diff = allTokenRanges.diff(migratorConfig.getSkipTokenRangesOrEmptySet)
-        log.info("Diff ... total diff of full ranges to savepoints is: " + diff.size)
-        log.debug("Dump of the missing tokens: ")
-        log.debug(diff)
-      }
-    }
+    // Cassandra-specific token-range diff logging lives inside `CqlSavepointsManager` (invoked
+    // from `savepointsManagerForSource`) so this central `migrate` method has zero
+    // `isInstanceOf[SourceSettings.*]` checks. New source types do not need to be aware of, or
+    // edit, this method.
 
     log.info("Starting write...")
 
@@ -133,7 +107,13 @@ object ScyllaMigrator extends ScyllaMigratorBase {
     else {
       val tokenRangeAccumulator = TokenRangeAccumulator.empty
       spark.sparkContext.register(tokenRangeAccumulator, "Token ranges copied")
-      Some(CqlSavepointsManager(migratorConfig, tokenRangeAccumulator))
+      val manager = CqlSavepointsManager(migratorConfig, tokenRangeAccumulator)
+      // Cassandra-only diagnostic: was previously emitted from `ScyllaMigratorBase.migrate`
+      // gated by `isInstanceOf[SourceSettings.Cassandra]`. Moved here so the cast lives
+      // alongside the CQL-specific manager that owns the partition shape. Non-Cassandra
+      // DataFrame sources never construct this manager and never invoke this log call.
+      manager.logTokenRangeCoverage(sourceDF, migratorConfig.skipTokenRanges)
+      Some(manager)
     }
 
   protected override def createSavepointsManager(

@@ -88,6 +88,12 @@ object Parquet {
           val renamed = TimestampColumns.renameFromParquet(df)
           val (explodedDf, timestampColumns) =
             Cassandra.explodeDataframeFromPerColumnMeta(spark, renamed)
+          // `savepointsSupported = false` is hardcoded here on purpose: although Parquet sources
+          // *do* support savepoints (`SourceSettings.Parquet.supportsSavepoints == true`), the
+          // resume mechanism is the external `ParquetSavepointsManager` injected via
+          // `ScyllaParquetMigrator.externalSavepointsManager`. Marking the DataFrame as
+          // unsupported tells `ScyllaMigratorBase.createSavepointsManager` not to spin up an
+          // internal CQL manager that would race with the external one.
           SourceDataFrame(explodedDf, Some(timestampColumns), savepointsSupported = false)
         } else {
           SourceDataFrame(df, None, savepointsSupported = false)
