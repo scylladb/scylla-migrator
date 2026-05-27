@@ -4,6 +4,7 @@
 build.sbt_back
 
 config.yaml
+config.dynamodb.yml
 config.dynamodb.yaml
 
 # sbt specific

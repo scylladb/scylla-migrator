@@ -9,6 +9,7 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
 
   private val repoRoot = findRepoRoot()
   private val script = repoRoot.resolve("deploy_spark_cluster.py")
+  private val ansiblePlaybook = repoRoot.resolve("ansible/scylla-migrator.yml")
   private val python = sys.env.getOrElse("PYTHON", "python3")
   private val missingPrivateKey =
     repoRoot.resolve("target/deploy-script-test/nonexistent-key")
@@ -134,6 +135,17 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(result.output, "--migration-type")
     assertOutputContains(result.output, "--config-file")
     assertOutputContains(result.output, "--insecure-ssh")
+  }
+
+  test("Ansible installs every submit script supported by run") {
+    val playbook = Files.readString(ansiblePlaybook)
+
+    Seq(
+      "submit-cql-job.sh",
+      "submit-cql-job-validator.sh",
+      "submit-alternator-job.sh",
+      "submit-alternator-validator.sh"
+    ).foreach(scriptName => assertOutputContains(playbook, s"- $scriptName"))
   }
 
   private def runScript(args: String*): CommandResult =
