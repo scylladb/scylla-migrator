@@ -7,6 +7,7 @@
     spark_home: /opt/spark
     spark_version: "4.0.2"
     spark_package: "spark-{{ spark_version }}-bin-hadoop3"
+    cqlsh_venv: "{{ home_dir }}/.venvs/scylla-cqlsh"
   tasks: 
     - name: add universe repository
       become: true
@@ -25,6 +26,7 @@
         - openjdk-17-jdk
         - unzip
         - python3-pip
+        - python3-venv
 
     - name: Discover JAVA_HOME
       shell: dirname $(dirname $(readlink -f $(which java)))
@@ -41,10 +43,20 @@
         regexp: '^JAVA_HOME='
         line: "export JAVA_HOME={{ java_home }}"
 
-    - name: install cqlsh
+    - name: install cqlsh in a virtualenv
       ansible.builtin.pip:
         name: scylla-cqlsh
         state: present
+        virtualenv: "{{ cqlsh_venv }}"
+        virtualenv_command: python3 -m venv
+
+    - name: expose cqlsh on PATH
+      become: true
+      ansible.builtin.file:
+        src: "{{ cqlsh_venv }}/bin/cqlsh"
+        dest: /usr/local/bin/cqlsh
+        state: link
+        force: true
 
     - name: Check that awscliv2.zip exists
       stat:
