@@ -5,6 +5,7 @@ build.sbt_back
 
 config.yaml
 config.dynamodb.yaml
+config.dynamodb.yml
 
 # sbt specific
 dist/*

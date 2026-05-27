@@ -136,6 +136,20 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(result.output, "--insecure-ssh")
   }
 
+  test("Ansible installs the Alternator validator submit script") {
+    val playbook = Files.readString(repoRoot.resolve("ansible/scylla-migrator.yml"))
+
+    assertOutputContains(playbook, "submit-alternator-validator.sh")
+  }
+
+  test("recommended local Migrator config filenames are ignored") {
+    val gitignore = Files.readString(repoRoot.resolve(".gitignore"))
+
+    assertOutputContains(gitignore, "config.yaml")
+    assertOutputContains(gitignore, "config.dynamodb.yaml")
+    assertOutputContains(gitignore, "config.dynamodb.yml")
+  }
+
   private def runScript(args: String*): CommandResult =
     runPython((script.toString +: args): _*)
 

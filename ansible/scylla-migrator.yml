@@ -212,6 +212,7 @@
       with_items:
         - spark-env-master-sample
         - submit-alternator-job.sh
+        - submit-alternator-validator.sh
         - submit-cql-job.sh
         - submit-cql-job-validator.sh
 

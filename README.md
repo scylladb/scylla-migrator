@@ -41,7 +41,7 @@ The script uses Terraform for AWS infrastructure and Ansible for Spark/Migrator 
 
 Install and configure the following on the machine where you run the script:
 
-- Python 3.
+- Python 3.10 or later.
 - Terraform.
 - Ansible.
 - `ssh` and `scp`.
