@@ -78,6 +78,11 @@ object NumericComparison {
     }
   }
 
+  /** Integral pairs (both normalize to BigInt) use strict equality — tolerance is not applied. When
+    * at least one side is floating-point or decimal, tolerance is applied via
+    * [[areNumericalValuesDifferent]]. This asymmetry is intentional: integral values have exact
+    * representations, so tolerance-based comparison would mask genuine differences.
+    */
   def areNumbersDifferent(left: Number, right: Number, tolerance: Double): Boolean = {
     val leftSpecial = floatingPointSpecial(left)
     val rightSpecial = floatingPointSpecial(right)
@@ -87,20 +92,13 @@ object NumericComparison {
       case (Some(InfinityValue(lSign)), Some(InfinityValue(rSign))) => lSign != rSign
       case (Some(_), _) | (_, Some(_))                              => true
       case (None, None) =>
-        if (tolerance > 0) {
-          (normalizedDecimalValue(left), normalizedDecimalValue(right)) match {
-            case (Some(l), Some(r)) => areNumericalValuesDifferent(l, r, tolerance)
-            case _                  => left != right
-          }
-        } else {
-          (normalizedIntegralValue(left), normalizedIntegralValue(right)) match {
-            case (Some(l), Some(r)) => l != r
-            case _ =>
-              (normalizedDecimalValue(left), normalizedDecimalValue(right)) match {
-                case (Some(l), Some(r)) => areNumericalValuesDifferent(l, r, tolerance)
-                case _                  => left != right
-              }
-          }
+        (normalizedIntegralValue(left), normalizedIntegralValue(right)) match {
+          case (Some(l), Some(r)) => l != r
+          case _ =>
+            (normalizedDecimalValue(left), normalizedDecimalValue(right)) match {
+              case (Some(l), Some(r)) => areNumericalValuesDifferent(l, r, tolerance)
+              case _                  => left != right
+            }
         }
     }
   }

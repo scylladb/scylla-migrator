@@ -88,6 +88,17 @@ object ContentHashJoiner {
         None
     }.toList
 
+  /** Compare fields split into direct and hash-backed groups. Direct columns are compared first via
+    * [[RowComparisonFailure.areDifferent]], which delegates to
+    * [[NumericComparison.compareWithPolicy]] for Number pairs — so StrictType/DetectWiden type
+    * mismatches (e.g. Float(1.5f) vs Double(1.5d)) are caught at this stage. Hash-backed columns
+    * skip per-value comparison when content hashes match. Because the hash is computed over
+    * string-cast values, it is type-erasing and cannot detect per-value numeric type mismatches.
+    * This gap is addressed in [[com.scylladb.migrator.scylla.MySQLToScyllaValidator]]: under
+    * DetectWiden, Float/Double and cross-category (numeric vs non-numeric) hash-backed columns are
+    * promoted to direct comparison so per-value checks run; under StrictType, schema-level type
+    * mismatches on remaining hash-backed columns are reported as errors.
+    */
   def compareFieldsBySchemaForRow(
     joinedRow: Row,
     directFieldIndices: Seq[(String, Int, Int)],

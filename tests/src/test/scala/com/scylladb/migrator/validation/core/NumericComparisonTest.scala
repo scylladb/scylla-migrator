@@ -34,9 +34,10 @@ class NumericComparisonTest extends FunSuite {
   }
 
   test("DetectWiden flags Float and Double with precision/widening loss as TypeMismatch") {
-    val left = java.lang.Float.valueOf(0.1f) // Float representation is lossy
-    val right = java.lang.Double.valueOf(0.1) // Double representation
-    // Although numerically close enough for tolerance, their exact bit representations differ.
+    val left = java.lang.Float.valueOf(0.1f)
+    val right = java.lang.Double.valueOf(0.1)
+    // Tolerance covers the value difference, but DetectWiden still flags the lossy widening.
+    // Use Lenient if tolerance should override type-mismatch detection.
     val result =
       NumericComparison.compareWithPolicy(left, right, 0.01, NumericTypePolicy.DetectWiden)
     assert(result.isInstanceOf[TypeMismatch])
@@ -114,18 +115,20 @@ class NumericComparisonTest extends FunSuite {
     )
   }
 
-  test("Tolerance consistency: Int vs Long with tolerance > 0 uses decimal path") {
-    // With tolerance=1.5, Int(5) vs Long(6) should be Equal (difference=1 < 1.5)
+  test("Integrals use exact equality regardless of tolerance") {
     val left = java.lang.Integer.valueOf(5)
     val right = java.lang.Long.valueOf(6L)
-    val isDifferent = NumericComparison.areNumbersDifferent(left, right, 1.5)
-    assertEquals(isDifferent, false)
+    // Both normalize to integral — strict != even when tolerance would cover the gap
+    assertEquals(NumericComparison.areNumbersDifferent(left, right, 1.5), true)
+    assertEquals(NumericComparison.areNumbersDifferent(left, right, 0.0), true)
   }
 
-  test("Tolerance zero: Int vs Long exact equality required") {
+  test("Mixed Int vs Double applies tolerance via decimal fallthrough") {
     val left = java.lang.Integer.valueOf(5)
-    val right = java.lang.Long.valueOf(6L)
-    val isDifferent = NumericComparison.areNumbersDifferent(left, right, 0.0)
-    assertEquals(isDifferent, true)
+    val right = java.lang.Double.valueOf(6.0)
+    // Int is integral, Double is not → falls to decimal path → |5 - 6| = 1 < 1.5
+    assertEquals(NumericComparison.areNumbersDifferent(left, right, 1.5), false)
+    // With zero tolerance, |5 - 6| = 1 > 0
+    assertEquals(NumericComparison.areNumbersDifferent(left, right, 0.0), true)
   }
 }

@@ -16,7 +16,7 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.cassandra.{ CassandraSQLRow, DataTypeConverter }
 import org.apache.spark.sql.{ Column, DataFrame, Row, SparkSession }
 import org.apache.spark.sql.functions._
-import org.apache.spark.sql.types.{ BinaryType, StringType, StructType }
+import org.apache.spark.sql.types._
 import org.apache.spark.storage.StorageLevel
 
 import java.sql.DatabaseMetaData
@@ -315,6 +315,48 @@ object MySQLToScyllaValidator {
     targetColumns: Seq[String]
   ): Seq[String] =
     SchemaResolver.columnsOnlyIn(targetColumns, sourceColumns)
+
+  private def isNumericType(dt: DataType): Boolean = dt match {
+    case FloatType | DoubleType | ByteType | ShortType | IntegerType | LongType | _: DecimalType =>
+      true
+    case _ => false
+  }
+
+  private[scylla] def detectSchemaTypeMismatches(
+    sourceSchema: StructType,
+    targetSchema: StructType,
+    columns: Seq[String],
+    policy: NumericTypePolicy
+  ): List[(String, String, String)] = {
+    if (policy == NumericTypePolicy.Lenient) return Nil
+
+    columns.flatMap { col =>
+      val srcField = sourceSchema.fields.find(_.name.equalsIgnoreCase(col))
+      val tgtField = targetSchema.fields.find(_.name.equalsIgnoreCase(col))
+      (srcField, tgtField) match {
+        case (Some(sf), Some(tf)) if sf.dataType != tf.dataType =>
+          // Guard uses && so cross-category mismatches (one numeric, one not) fall through
+          // to the policy-specific handling below.
+          if (!isNumericType(sf.dataType) && !isNumericType(tf.dataType)) None
+          else
+            policy match {
+              case NumericTypePolicy.StrictType =>
+                Some((col, sf.dataType.simpleString, tf.dataType.simpleString))
+              case NumericTypePolicy.DetectWiden =>
+                val isFloatDouble =
+                  (sf.dataType == FloatType && tf.dataType == DoubleType) ||
+                    (sf.dataType == DoubleType && tf.dataType == FloatType)
+                val isCrossCategory =
+                  isNumericType(sf.dataType) != isNumericType(tf.dataType)
+                if (isFloatDouble || isCrossCategory)
+                  Some((col, sf.dataType.simpleString, tf.dataType.simpleString))
+                else None
+              case NumericTypePolicy.Lenient => None
+            }
+        case _ => None
+      }
+    }.toList
+  }
 
   private[scylla] def normalizePrimaryKeyComponent(value: Any): Any = value match {
     case bytes: Array[Byte] => bytes.toIndexedSeq
@@ -665,16 +707,38 @@ object MySQLToScyllaValidator {
           targetColumns        = targetColumnNames
         )
 
+        val promotedToDirectCols =
+          if (validationConfig.numericTypePolicy == NumericTypePolicy.DetectWiden) {
+            val promoted = detectSchemaTypeMismatches(
+              rawSourceDF.schema,
+              rawTargetDF.schema,
+              renamedCols,
+              NumericTypePolicy.DetectWiden
+            ).map(_._1)
+            if (promoted.nonEmpty)
+              log.info(
+                s"Promoting hash-backed columns to direct comparison for DetectWiden: " +
+                  s"${promoted.mkString(", ")}"
+              )
+            promoted.map(_.toLowerCase(Locale.ROOT)).toSet
+          } else Set.empty[String]
+
+        val effectiveHashCols =
+          renamedCols.filterNot(c => promotedToDirectCols.contains(c.toLowerCase(Locale.ROOT)))
         val hashedSource =
-          addContentHash(rawSourceDF, renamedCols, renamedPK, dropHashedColumns = true)
+          if (effectiveHashCols.nonEmpty)
+            addContentHash(rawSourceDF, effectiveHashCols, renamedPK, dropHashedColumns = true)
+          else rawSourceDF
         val hashedTarget =
-          addContentHash(rawTargetDF, renamedCols, renamedPK, dropHashedColumns = true)
-        val hashBackedColumnsLower = renamedCols.map(_.toLowerCase(Locale.ROOT)).toSet
+          if (effectiveHashCols.nonEmpty)
+            addContentHash(rawTargetDF, effectiveHashCols, renamedPK, dropHashedColumns = true)
+          else rawTargetDF
+        val hashBackedColumnsLower = effectiveHashCols.map(_.toLowerCase(Locale.ROOT)).toSet
         val directCols = hashedSource.columns
           .filter(c => !renamedPKLower.contains(c.toLowerCase(Locale.ROOT)))
           .filter(_ != MySQL.ContentHashColumn)
           .filterNot(c => hashBackedColumnsLower.contains(c.toLowerCase(Locale.ROOT)))
-        (hashedSource, hashedTarget, directCols, renamedCols)
+        (hashedSource, hashedTarget, directCols, effectiveHashCols)
 
       case None =>
         val nonPKCols =
@@ -684,7 +748,7 @@ object MySQLToScyllaValidator {
 
     val targetColumnsLower = targetDF.columns.map(_.toLowerCase(Locale.ROOT)).toSet
     val droppedColumns =
-      (directComparableColumns ++ (if (hashColumns.isDefined) Seq(MySQL.ContentHashColumn)
+      (directComparableColumns ++ (if (hashBackedColumns.nonEmpty) Seq(MySQL.ContentHashColumn)
                                    else Nil))
         .filterNot(c => targetColumnsLower.contains(c.toLowerCase(Locale.ROOT)))
     if (droppedColumns.nonEmpty)
@@ -698,6 +762,32 @@ object MySQLToScyllaValidator {
     log.info(
       s"Comparable columns: ${(finalDirectComparableColumns ++ finalHashBackedColumns).mkString(", ")}"
     )
+
+    val numericPolicy = validationConfig.numericTypePolicy
+    val schemaTypeMismatchFields =
+      if (numericPolicy == NumericTypePolicy.StrictType && finalHashBackedColumns.nonEmpty)
+        detectSchemaTypeMismatches(
+          rawSourceDF.schema,
+          rawTargetDF.schema,
+          finalHashBackedColumns,
+          numericPolicy
+        )
+      else Nil
+    val schemaTypeMismatches: List[RowComparisonFailure] =
+      if (schemaTypeMismatchFields.isEmpty) Nil
+      else {
+        val desc = schemaTypeMismatchFields
+          .map { case (col, src, tgt) => s"$col ($src vs $tgt)" }
+          .mkString(", ")
+        log.error(s"Schema-level numeric type mismatches on hash-backed columns: $desc")
+        List(
+          RowComparisonFailure(
+            "[schema-level type mismatch]",
+            None,
+            List(RowComparisonFailure.Item.NumericTypeMismatch(schemaTypeMismatchFields))
+          )
+        )
+      }
 
     val sourcePrefixed = prefixColumns(sourceDF, "src_")
     val targetPrefixed = prefixColumns(targetDF, "tgt_")
@@ -723,7 +813,6 @@ object MySQLToScyllaValidator {
     val joinedSchemaFields = joined.schema.fieldNames
     val floatTol = validationConfig.floatingPointTolerance
     val tsTol = validationConfig.timestampMsTolerance
-    val numericPolicy = validationConfig.numericTypePolicy
 
     // Pre-compute field indices to avoid repeated case-insensitive lookups on every row.
     // For wide tables (100+ columns) × millions of rows, this provides significant speedup.
@@ -733,7 +822,7 @@ object MySQLToScyllaValidator {
       (colName, joinedSchemaFields.indexOf(srcFieldName), joinedSchemaFields.indexOf(tgtFieldName))
     }
     val contentHashFieldIndices =
-      if (hashColumns.isDefined) {
+      if (finalHashBackedColumns.nonEmpty) {
         val srcFieldName = resolveFieldName(joinedSchemaFields, s"src_${MySQL.ContentHashColumn}")
         val tgtFieldName = resolveFieldName(joinedSchemaFields, s"tgt_${MySQL.ContentHashColumn}")
         Some((joinedSchemaFields.indexOf(srcFieldName), joinedSchemaFields.indexOf(tgtFieldName)))
@@ -854,13 +943,14 @@ object MySQLToScyllaValidator {
           renamedPK,
           validationConfig.failuresToFetch - sourceSideFailures.size
         )
+    val allFailures = schemaTypeMismatches ++ failures
     log.info(
       s"Validation complete for ${sourceSettings.database}.${sourceSettings.table} -> " +
         s"${targetSettings.keyspace}.${targetSettings.table}. " +
-        s"Collected ${failures.size} failure(s) in sample."
+        s"Collected ${allFailures.size} failure(s) in sample."
     )
 
-    failures
+    allFailures
   }
 
   private[scylla] def resolveHashBackedDifferences(

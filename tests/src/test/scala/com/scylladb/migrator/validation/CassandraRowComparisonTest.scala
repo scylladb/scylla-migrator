@@ -175,4 +175,48 @@ class CassandraRowComparisonTest extends munit.FunSuite {
     )
   }
 
+  test("Direct areDifferent flags Float(1.5f) vs Double(1.5d) before hash comparison") {
+    val floatVal: Option[Any] = Some(java.lang.Float.valueOf(1.5f))
+    val doubleVal: Option[Any] = Some(java.lang.Double.valueOf(1.5))
+
+    // StrictType: flags type mismatch even though values are numerically equal
+    assertEquals(
+      RowComparisonFailure
+        .areDifferent(floatVal, doubleVal, 0L, 0.01, NumericTypePolicy.StrictType),
+      true
+    )
+
+    // DetectWiden: 1.5f widens losslessly to 1.5d, so NOT flagged
+    assertEquals(
+      RowComparisonFailure.areDifferent(
+        floatVal,
+        doubleVal,
+        0L,
+        0.01,
+        NumericTypePolicy.DetectWiden
+      ),
+      false
+    )
+
+    // DetectWiden with lossy widening (0.1f → 0.1d loses precision): flagged even with tolerance
+    val lossyFloat: Option[Any] = Some(java.lang.Float.valueOf(0.1f))
+    val lossyDouble: Option[Any] = Some(java.lang.Double.valueOf(0.1))
+    assertEquals(
+      RowComparisonFailure.areDifferent(
+        lossyFloat,
+        lossyDouble,
+        0L,
+        0.01,
+        NumericTypePolicy.DetectWiden
+      ),
+      true
+    )
+
+    // Lenient: never flags type differences
+    assertEquals(
+      RowComparisonFailure.areDifferent(floatVal, doubleVal, 0L, 0.01, NumericTypePolicy.Lenient),
+      false
+    )
+  }
+
 }
