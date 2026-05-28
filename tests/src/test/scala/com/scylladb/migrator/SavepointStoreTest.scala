@@ -67,6 +67,74 @@ class SavepointStoreTest extends munit.FunSuite {
     assertEquals(warnings.toSeq, Seq((SavepointsManager.MaxReasonableSeedValue, 1L)))
   }
 
+  test("target store newestValidConfig skips rows from different config identities") {
+    val requested = config(sourcePath = "s3a://bucket/requested", skipFiles = Set("requested"))
+    val unrelated = config(sourcePath = "s3a://bucket/unrelated", skipFiles = Set("unrelated"))
+    val requestedSha = SavepointStore.configIdentitySha256(requested)
+    val unrelatedSha = SavepointStore.configIdentitySha256(unrelated)
+
+    val selected = ScyllaTargetSavepointStore.newestValidConfig(
+      rows = Seq(
+        ScyllaTargetSavepointStore.StoredSavepoint(
+          3000L,
+          1L,
+          unrelated.render,
+          Some(requestedSha)
+        ),
+        ScyllaTargetSavepointStore.StoredSavepoint(
+          2000L,
+          1L,
+          unrelated.render,
+          Some(unrelatedSha)
+        ),
+        ScyllaTargetSavepointStore.StoredSavepoint(
+          1000L,
+          1L,
+          requested.render,
+          Some(requestedSha)
+        )
+      ),
+      expectedConfigSha256 = requestedSha,
+      warnInvalidRow       = (_, _) => ()
+    )
+
+    assertEquals(
+      selected.map(SavepointStore.configIdentitySha256),
+      Some(SavepointStore.configIdentitySha256(requested)),
+      "target-backed resume must not use a newer row that belongs to a different migration identity"
+    )
+  }
+
+  test("target store newestCoordinates skips rows from different config identities") {
+    val requested = config(sourcePath = "s3a://bucket/requested", skipFiles = Set("requested"))
+    val unrelated = config(sourcePath = "s3a://bucket/unrelated", skipFiles = Set("unrelated"))
+    val requestedSha = SavepointStore.configIdentitySha256(requested)
+    val unrelatedSha = SavepointStore.configIdentitySha256(unrelated)
+
+    val selected = ScyllaTargetSavepointStore.newestCoordinates(
+      rows = Seq(
+        ScyllaTargetSavepointStore.StoredSavepointCoordinates(
+          epochMillis  = 3000L,
+          sequence     = 1L,
+          configSha256 = Some(unrelatedSha)
+        ),
+        ScyllaTargetSavepointStore.StoredSavepointCoordinates(
+          epochMillis  = 2000L,
+          sequence     = 1L,
+          configSha256 = Some(requestedSha)
+        )
+      ),
+      expectedConfigSha256 = Some(requestedSha),
+      warnInvalidRow       = (_, _) => ()
+    )
+
+    assertEquals(
+      selected,
+      Some(SavepointCoordinates(2000L, 1L)),
+      "target-backed seed state must ignore coordinates from another migration identity"
+    )
+  }
+
   test("file store latestConfig ignores hostile future coordinates even with newer mtime") {
     val dir = Files.createTempDirectory("savepoint-store-latest-hostile")
     try {
@@ -102,10 +170,13 @@ class SavepointStoreTest extends munit.FunSuite {
         .forEach(Files.delete)
   }
 
-  private def config(skipFiles: Set[String]): MigratorConfig =
+  private def config(
+    skipFiles: Set[String],
+    sourcePath: String = "s3a://bucket/data"
+  ): MigratorConfig =
     MigratorConfig(
       source = SourceSettings.Parquet(
-        path        = "s3a://bucket/data",
+        path        = sourcePath,
         credentials = None,
         region      = None,
         endpoint    = None
