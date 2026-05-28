@@ -112,10 +112,9 @@ object ScyllaMigrator extends ScyllaMigratorBase {
     else {
       val tokenRangeAccumulator = TokenRangeAccumulator.empty
       spark.sparkContext.register(tokenRangeAccumulator, "Token ranges copied")
-      val manager = new CqlSavepointsManager(
+      val manager = CqlSavepointsManager(
         migratorConfig,
         tokenRangeAccumulator,
-        Some(spark.sparkContext.hadoopConfiguration),
         SparkSecretRedaction.redactionRegex(spark)
       )
       // Cassandra-only diagnostic: was previously emitted from `ScyllaMigratorBase.migrate`

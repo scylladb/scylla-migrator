@@ -45,7 +45,8 @@ object DynamoDbSavepointsManager {
   def apply(
     migratorConfig: MigratorConfig,
     sourceRDD: RDD[(Text, DynamoDBItemWritable)],
-    spark: SparkContext
+    spark: SparkContext,
+    redactionRegex: Option[String] = None
   ): DynamoDbSavepointsManager = {
     val segmentsAccumulator =
       IntSetAccumulator(migratorConfig.skipSegments.getOrElse(Set.empty))
@@ -73,7 +74,7 @@ object DynamoDbSavepointsManager {
       segmentsAccumulator,
       sparkTaskEndListener,
       spark,
-      Some(SavepointStore.forConfig(migratorConfig, Some(spark)))
+      Some(SavepointStore.forConfig(migratorConfig, Some(spark), redactionRegex))
     )
   }
 

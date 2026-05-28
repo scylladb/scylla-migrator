@@ -90,11 +90,12 @@ class CqlSavepointsManager(
 object CqlSavepointsManager {
   def apply(
     migratorConfig: MigratorConfig,
-    accumulator: TokenRangeAccumulator
+    accumulator: TokenRangeAccumulator,
+    redactionRegex: Option[String] = None
   )(implicit spark: SparkSession): CqlSavepointsManager =
     new CqlSavepointsManager(
       migratorConfig,
       accumulator,
-      Some(SavepointStore.forConfig(migratorConfig, Some(spark.sparkContext)))
+      Some(SavepointStore.forConfig(migratorConfig, Some(spark.sparkContext), redactionRegex))
     )
 }

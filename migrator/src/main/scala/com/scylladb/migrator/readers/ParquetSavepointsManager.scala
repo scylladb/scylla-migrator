@@ -27,7 +27,11 @@ class ParquetSavepointsManager(
 
 object ParquetSavepointsManager {
 
-  def apply(migratorConfig: MigratorConfig, spark: SparkContext): ParquetSavepointsManager = {
+  def apply(
+    migratorConfig: MigratorConfig,
+    spark: SparkContext,
+    redactionRegex: Option[String] = None
+  ): ParquetSavepointsManager = {
     val filesAccumulator =
       StringSetAccumulator(migratorConfig.skipParquetFiles.getOrElse(Set.empty))
 
@@ -36,7 +40,7 @@ object ParquetSavepointsManager {
     new ParquetSavepointsManager(
       migratorConfig,
       filesAccumulator,
-      Some(SavepointStore.forConfig(migratorConfig, Some(spark)))
+      Some(SavepointStore.forConfig(migratorConfig, Some(spark), redactionRegex))
     )
   }
 }

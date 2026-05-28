@@ -1,6 +1,12 @@
 package com.scylladb.migrator
 
-import com.scylladb.migrator.config.{ MigratorConfig, Savepoints, SourceSettings, TargetSettings }
+import com.scylladb.migrator.config.{
+  MigratorConfig,
+  SavepointTarget,
+  Savepoints,
+  SourceSettings,
+  TargetSettings
+}
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{ Files, Path }
@@ -432,6 +438,33 @@ class SavepointsManagerConcurrencyTest extends munit.FunSuite {
         s"hostile epoch_millis was accepted: ${record.coordinates.epochMillis}"
       )
       assertEquals(record.coordinates.sequence, 1L)
+    } finally deleteRecursively(dir)
+  }
+
+  test("direct managers reject target-table configs without an explicit savepoint store") {
+    val dir = Files.createTempDirectory("savepoints-direct-target-table")
+    try {
+      val cfg = newConfig(dir, intervalSeconds = 3600).copy(
+        savepoints = Savepoints(
+          intervalSeconds = 3600,
+          path            = dir.toString,
+          target          = Some(SavepointTarget.TargetTable())
+        )
+      )
+
+      val thrown =
+        try {
+          val manager = new TestManager(cfg, processed = Set("alpha"))
+          manager.close()
+          None
+        } catch {
+          case e: IllegalArgumentException => Some(e)
+        }
+
+      assert(
+        thrown.exists(_.getMessage.contains("target-table")),
+        "a target-table savepoint config must not silently fall back to filesystem storage"
+      )
     } finally deleteRecursively(dir)
   }
 

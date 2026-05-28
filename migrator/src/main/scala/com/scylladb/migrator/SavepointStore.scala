@@ -38,7 +38,12 @@ private[migrator] trait SavepointStore {
 private[migrator] object SavepointStore {
   private val RedactedValue = "<redacted>"
 
-  def forConfig(config: MigratorConfig, sparkContext: Option[SparkContext]): SavepointStore =
+  def forConfig(
+    config: MigratorConfig,
+    sparkContext: Option[SparkContext],
+    redactionRegex: Option[String] = None,
+    hadoopConfiguration: Option[Configuration] = None
+  ): SavepointStore =
     config.savepoints.resolvedTarget match {
       case target: SavepointTarget.StoragePathTarget =>
         file(
@@ -47,8 +52,8 @@ private[migrator] object SavepointStore {
           Some(
             savepointHadoopConfiguration(
               config,
-              sparkContext.map(_.hadoopConfiguration),
-              sparkContext.flatMap(SparkSecretRedaction.redactionRegex)
+              sparkContext.map(_.hadoopConfiguration).orElse(hadoopConfiguration),
+              redactionRegex.orElse(sparkContext.flatMap(SparkSecretRedaction.redactionRegex))
             )
           )
         )
@@ -207,6 +212,9 @@ private[migrator] object SavepointStore {
         None
     }
   }
+
+  private[migrator] def savepointSortKey(path: java.nio.file.Path): Option[(Long, Long)] =
+    savepointSortKey(path.getFileName.toString)
 
   private def savepointHadoopConfiguration(
     config: MigratorConfig,
@@ -373,7 +381,10 @@ private[migrator] class FileSavepointStore(
   override def latestConfig(): MigratorConfig = {
     val candidates =
       if (!pathIO.exists(path)) Seq.empty
-      else pathIO.listFileNames(path).filter(name => name.startsWith("savepoint_") && name.endsWith(".yaml"))
+      else
+        pathIO
+          .listFileNames(path)
+          .filter(name => name.startsWith("savepoint_") && name.endsWith(".yaml"))
 
     candidates
       .flatMap { name =>

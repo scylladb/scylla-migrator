@@ -45,7 +45,8 @@ object CqlParquetSavepointsManager {
   def apply(
     migratorConfig: MigratorConfig,
     sourceDF: SourceDataFrame,
-    spark: SparkContext
+    spark: SparkContext,
+    redactionRegex: Option[String] = None
   ): CqlParquetSavepointsManager = {
     val cqlTokenRangeAccumulator =
       CqlTokenRangeAccumulator(migratorConfig.getSkipTokenRangesOrEmptySet)
@@ -91,7 +92,7 @@ object CqlParquetSavepointsManager {
       cqlTokenRangeAccumulator,
       sparkTaskEndListener,
       spark,
-      Some(SavepointStore.forConfig(migratorConfig, Some(spark)))
+      Some(SavepointStore.forConfig(migratorConfig, Some(spark), redactionRegex))
     )
   }
 

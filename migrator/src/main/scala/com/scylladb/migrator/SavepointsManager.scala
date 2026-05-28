@@ -1,6 +1,7 @@
 package com.scylladb.migrator
 
 import com.scylladb.migrator.config.MigratorConfig
+import org.apache.hadoop.conf.Configuration
 import org.apache.logging.log4j.LogManager
 import sun.misc.{ Signal, SignalHandler }
 
@@ -48,6 +49,23 @@ abstract class SavepointsManager(
   migratorConfig: MigratorConfig,
   maybeSavepointStore: Option[SavepointStore] = None
 ) extends AutoCloseable {
+
+  def this(
+    migratorConfig: MigratorConfig,
+    hadoopConfiguration: Option[Configuration],
+    redactionRegex: Option[String]
+  ) =
+    this(
+      migratorConfig,
+      Some(
+        SavepointStore.forConfig(
+          migratorConfig,
+          sparkContext        = None,
+          redactionRegex      = redactionRegex,
+          hadoopConfiguration = hadoopConfiguration
+        )
+      )
+    )
 
   import SavepointsManager._
 

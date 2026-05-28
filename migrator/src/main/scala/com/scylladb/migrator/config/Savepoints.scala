@@ -98,9 +98,7 @@ object SavepointTarget {
             }
 
         keyfile.flatMap { value =>
-          nonEmpty(value, "serviceAccountJsonKeyfile", cursor).map(_ =>
-            GCSCredentials(value.trim)
-          )
+          nonEmpty(value, "serviceAccountJsonKeyfile", cursor).map(_ => GCSCredentials(value.trim))
         }
       }
 
