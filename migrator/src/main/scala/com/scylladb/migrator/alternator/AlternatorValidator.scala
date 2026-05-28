@@ -83,7 +83,8 @@ object AlternatorValidator {
           l,
           r,
           renamedColumn,
-          configValidation.floatingPointTolerance
+          configValidation.floatingPointTolerance,
+          configValidation.numericTypePolicy
         )
       }
       .take(configValidation.failuresToFetch)

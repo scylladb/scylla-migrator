@@ -136,7 +136,8 @@ object ScyllaValidator {
           validationConfig.timestampMsTolerance,
           validationConfig.ttlToleranceMillis,
           validationConfig.writetimeToleranceMillis,
-          validationConfig.compareTimestamps
+          validationConfig.compareTimestamps,
+          validationConfig.numericTypePolicy
         )
       }
       .take(validationConfig.failuresToFetch)

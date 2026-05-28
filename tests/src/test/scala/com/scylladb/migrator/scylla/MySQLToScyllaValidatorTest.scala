@@ -5,7 +5,7 @@ import com.scylladb.migrator.readers.MySQL
 import com.scylladb.migrator.validation.RowComparisonFailure
 import org.apache.spark.sql.{ Row, SparkSession }
 import org.apache.spark.sql.functions.col
-import org.apache.spark.sql.types.{ IntegerType, StringType, StructField, StructType }
+import org.apache.spark.sql.types._
 
 import java.lang.reflect.{ InvocationHandler, Method, Proxy }
 import java.sql.{ DatabaseMetaData, ResultSet }
@@ -919,5 +919,138 @@ class MySQLToScyllaValidatorTest extends munit.FunSuite {
     assertEquals(failures.map(_.rowRepr), List("id=2"))
     assert(sourceReads.value == 1L)
     assert(targetReads.value == 1L)
+  }
+
+  test("detectSchemaTypeMismatches under Lenient returns no mismatches") {
+    val src = StructType(Seq(StructField("price", FloatType), StructField("id", IntegerType)))
+    val tgt = StructType(Seq(StructField("price", DoubleType), StructField("id", IntegerType)))
+    val result = MySQLToScyllaValidator.detectSchemaTypeMismatches(
+      src,
+      tgt,
+      Seq("price"),
+      com.scylladb.migrator.validation.core.NumericTypePolicy.Lenient
+    )
+    assertEquals(result, Nil)
+  }
+
+  test("detectSchemaTypeMismatches under StrictType flags any numeric type difference") {
+    val src = StructType(
+      Seq(
+        StructField("price", FloatType),
+        StructField("count", IntegerType),
+        StructField("name", StringType)
+      )
+    )
+    val tgt = StructType(
+      Seq(
+        StructField("price", DoubleType),
+        StructField("count", LongType),
+        StructField("name", StringType)
+      )
+    )
+    val result = MySQLToScyllaValidator.detectSchemaTypeMismatches(
+      src,
+      tgt,
+      Seq("price", "count", "name"),
+      com.scylladb.migrator.validation.core.NumericTypePolicy.StrictType
+    )
+    assertEquals(result.map(_._1), List("price", "count"))
+    assertEquals(result.map(_._2), List("float", "int"))
+    assertEquals(result.map(_._3), List("double", "bigint"))
+  }
+
+  test("detectSchemaTypeMismatches under DetectWiden only flags Float vs Double") {
+    val src = StructType(
+      Seq(StructField("price", FloatType), StructField("count", IntegerType))
+    )
+    val tgt = StructType(
+      Seq(StructField("price", DoubleType), StructField("count", LongType))
+    )
+    val result = MySQLToScyllaValidator.detectSchemaTypeMismatches(
+      src,
+      tgt,
+      Seq("price", "count"),
+      com.scylladb.migrator.validation.core.NumericTypePolicy.DetectWiden
+    )
+    assertEquals(result.map(_._1), List("price"))
+  }
+
+  test("detectSchemaTypeMismatches ignores non-numeric type differences") {
+    val src = StructType(Seq(StructField("data", StringType)))
+    val tgt = StructType(Seq(StructField("data", BinaryType)))
+    val result = MySQLToScyllaValidator.detectSchemaTypeMismatches(
+      src,
+      tgt,
+      Seq("data"),
+      com.scylladb.migrator.validation.core.NumericTypePolicy.StrictType
+    )
+    assertEquals(result, Nil)
+  }
+
+  test("detectSchemaTypeMismatches under DetectWiden flags cross-category numeric vs non-numeric") {
+    val src = StructType(
+      Seq(StructField("score", IntegerType), StructField("label", StringType))
+    )
+    val tgt = StructType(
+      Seq(StructField("score", StringType), StructField("label", StringType))
+    )
+    val result = MySQLToScyllaValidator.detectSchemaTypeMismatches(
+      src,
+      tgt,
+      Seq("score", "label"),
+      com.scylladb.migrator.validation.core.NumericTypePolicy.DetectWiden
+    )
+    assertEquals(result.map(_._1), List("score"))
+    assertEquals(result.map(_._2), List("int"))
+    assertEquals(result.map(_._3), List("string"))
+  }
+
+  test("all hash columns promoted under DetectWiden produces no content hash column") {
+    import spark.implicits._
+    val source = Seq((1, 1.0f, 2.0f)).toDF("id", "price", "rate")
+    val target = Seq((1, 1.0d, 2.0d)).toDF("id", "price", "rate")
+
+    val hashCols = Seq("price", "rate")
+    val mismatches = MySQLToScyllaValidator.detectSchemaTypeMismatches(
+      source.schema,
+      target.schema,
+      hashCols,
+      com.scylladb.migrator.validation.core.NumericTypePolicy.DetectWiden
+    )
+    assertEquals(mismatches.map(_._1).sorted, List("price", "rate"))
+
+    val promoted = mismatches.map(_._1.toLowerCase(java.util.Locale.ROOT)).toSet
+    val effectiveHashCols =
+      hashCols.filterNot(c => promoted.contains(c.toLowerCase(java.util.Locale.ROOT)))
+    assert(effectiveHashCols.isEmpty)
+
+    assert(!source.columns.contains(MySQL.ContentHashColumn))
+    assert(!target.columns.contains(MySQL.ContentHashColumn))
+  }
+
+  test("compareFieldsBySchemaForRow works with no content hash indices (all promoted)") {
+    val row = Row(1.0f, 1.0d)
+    val result = MySQLToScyllaValidator.compareFieldsBySchemaForRow(
+      joinedRow               = row,
+      directFieldIndices      = Seq(("price", 0, 1)),
+      hashBackedFieldIndices  = Nil,
+      contentHashFieldIndices = None,
+      timestampMsTolerance    = 0L,
+      floatingPointTolerance  = 0.01
+    )
+    assertEquals(result, Nil)
+  }
+
+  test("detectSchemaTypeMismatches returns empty when types match") {
+    val schema = StructType(
+      Seq(StructField("price", DoubleType), StructField("count", LongType))
+    )
+    val result = MySQLToScyllaValidator.detectSchemaTypeMismatches(
+      schema,
+      schema,
+      Seq("price", "count"),
+      com.scylladb.migrator.validation.core.NumericTypePolicy.StrictType
+    )
+    assertEquals(result, Nil)
   }
 }

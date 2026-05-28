@@ -2,7 +2,12 @@ package com.scylladb.migrator.scylla
 
 import com.datastax.spark.connector.writer.TokenRangeAccumulator
 import com.scylladb.migrator.SavepointsManager
-import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
+import com.scylladb.migrator.config.{
+  MigratorConfig,
+  SourceSettings,
+  SparkSecretRedaction,
+  TargetSettings
+}
 import com.scylladb.migrator.readers.{ ParquetSavepointsManager, TimestampColumns }
 import com.scylladb.migrator.{ readers, writers }
 import org.apache.logging.log4j.LogManager
@@ -107,7 +112,12 @@ object ScyllaMigrator extends ScyllaMigratorBase {
     else {
       val tokenRangeAccumulator = TokenRangeAccumulator.empty
       spark.sparkContext.register(tokenRangeAccumulator, "Token ranges copied")
-      val manager = CqlSavepointsManager(migratorConfig, tokenRangeAccumulator)
+      val manager = new CqlSavepointsManager(
+        migratorConfig,
+        tokenRangeAccumulator,
+        Some(spark.sparkContext.hadoopConfiguration),
+        SparkSecretRedaction.redactionRegex(spark)
+      )
       // Cassandra-only diagnostic: was previously emitted from `ScyllaMigratorBase.migrate`
       // gated by `isInstanceOf[SourceSettings.Cassandra]`. Moved here so the cast lives
       // alongside the CQL-specific manager that owns the partition shape. Non-Cassandra
@@ -142,7 +152,12 @@ object ScyllaMigrator extends ScyllaMigratorBase {
       else
         sourceDF.dataFrame
     Using.resource(
-      CqlParquetSavepointsManager(migratorConfig, sourceDF, spark.sparkContext)
+      CqlParquetSavepointsManager(
+        migratorConfig,
+        sourceDF,
+        spark.sparkContext,
+        SparkSecretRedaction.redactionRegex(spark)
+      )
     ) { savepointsManager =>
       try
         writers.Parquet.writeDataframe(target, dfForParquet)

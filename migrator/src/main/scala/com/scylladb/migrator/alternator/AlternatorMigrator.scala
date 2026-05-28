@@ -4,6 +4,7 @@ import com.scylladb.migrator.{ readers, writers, DynamoUtils }
 import com.scylladb.migrator.config.{
   MigratorConfig,
   SourceSettings,
+  SparkSecretRedaction,
   StreamChangesSetting,
   TargetSettings
 }
@@ -59,18 +60,24 @@ object AlternatorMigrator {
   )(implicit spark: SparkSession): Unit = {
     val (sourceRDD, sourceTableDesc) =
       readers.DynamoDB.readRDD(spark, source, migratorConfig.skipSegments)
-    Using.resource(DynamoDbSavepointsManager(migratorConfig, sourceRDD, spark.sparkContext)) {
-      savepointsManager =>
-        try
-          writers.DynamoDBS3Export.writeRDD(target, sourceRDD, Some(sourceTableDesc))
-        catch {
-          case NonFatal(e) =>
-            log.error(
-              "Caught error while writing DynamoDB S3 Export. Will create a savepoint before exiting",
-              e
-            )
-        } finally
-          savepointsManager.dumpMigrationState("final")
+    Using.resource(
+      DynamoDbSavepointsManager(
+        migratorConfig,
+        sourceRDD,
+        spark.sparkContext,
+        SparkSecretRedaction.redactionRegex(spark)
+      )
+    ) { savepointsManager =>
+      try
+        writers.DynamoDBS3Export.writeRDD(target, sourceRDD, Some(sourceTableDesc))
+      catch {
+        case NonFatal(e) =>
+          log.error(
+            "Caught error while writing DynamoDB S3 Export. Will create a savepoint before exiting",
+            e
+          )
+      } finally
+        savepointsManager.dumpMigrationState("final")
     }
   }
 
@@ -255,7 +262,12 @@ object AlternatorMigrator {
         // warning from `Migrator.migrate` instead of a per-source `log.warn` here.
         if (source.supportsSavepoints) {
           Using.resource(
-            DynamoDbSavepointsManager(migratorConfig, sourceRDD, spark.sparkContext)
+            DynamoDbSavepointsManager(
+              migratorConfig,
+              sourceRDD,
+              spark.sparkContext,
+              SparkSecretRedaction.redactionRegex(spark)
+            )
           ) { _ =>
             log.info("Starting write...")
             writers.DynamoDB

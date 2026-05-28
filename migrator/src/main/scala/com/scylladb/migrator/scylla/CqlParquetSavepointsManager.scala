@@ -3,7 +3,7 @@ package com.scylladb.migrator.scylla
 import com.datastax.spark.connector.rdd.partitioner.{ CassandraPartition, CqlTokenRange }
 import com.datastax.spark.connector.rdd.partitioner.dht.Token
 import com.scylladb.migrator.SavepointsManager
-import com.scylladb.migrator.config.MigratorConfig
+import com.scylladb.migrator.config.{ MigratorConfig, SparkSecretRedaction }
 import org.apache.logging.log4j.LogManager
 import org.apache.spark.scheduler.{ SparkListener, SparkListenerTaskEnd }
 import org.apache.spark.{ SparkContext, Success => TaskEndSuccess }
@@ -19,8 +19,13 @@ class CqlParquetSavepointsManager(
   migratorConfig: MigratorConfig,
   cqlTokenRangeAccumulator: CqlTokenRangeAccumulator,
   sparkTaskEndListener: SparkListener,
-  spark: SparkContext
-) extends SavepointsManager(migratorConfig) {
+  spark: SparkContext,
+  redactionRegex: Option[String] = None
+) extends SavepointsManager(
+      migratorConfig,
+      Some(spark.hadoopConfiguration),
+      redactionRegex
+    ) {
 
   def describeMigrationState(): String =
     s"Token ranges accumulated: ${cqlTokenRangeAccumulator.value.size}"
@@ -44,7 +49,8 @@ object CqlParquetSavepointsManager {
   def apply(
     migratorConfig: MigratorConfig,
     sourceDF: SourceDataFrame,
-    spark: SparkContext
+    spark: SparkContext,
+    redactionRegex: Option[String] = None
   ): CqlParquetSavepointsManager = {
     val cqlTokenRangeAccumulator =
       CqlTokenRangeAccumulator(migratorConfig.getSkipTokenRangesOrEmptySet)
@@ -89,7 +95,8 @@ object CqlParquetSavepointsManager {
       migratorConfig,
       cqlTokenRangeAccumulator,
       sparkTaskEndListener,
-      spark
+      spark,
+      redactionRegex.orElse(SparkSecretRedaction.redactionRegex(spark))
     )
   }
 

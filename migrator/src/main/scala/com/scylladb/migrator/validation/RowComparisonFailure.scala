@@ -1,8 +1,12 @@
 package com.scylladb.migrator.validation
 
 import com.datastax.spark.connector.CassandraRow
-import com.google.common.math.DoubleMath
 import com.scylladb.migrator.alternator.DdbValue
+import com.scylladb.migrator.validation.core.{
+  ComparisonResult,
+  NumericComparison,
+  NumericTypePolicy
+}
 
 import java.time.temporal.ChronoUnit
 
@@ -61,6 +65,12 @@ object RowComparisonFailure {
               s"$fieldName ($writeTimeDiff millis)"
             }
             .mkString(", ")}")
+    case class NumericTypeMismatch(fields: List[(String, String, String)])
+        extends Item(s"Numeric type mismatches: ${fields
+            .map { case (fieldName, srcType, tgtType) =>
+              s"$fieldName (source type $srcType vs target type $tgtType)"
+            }
+            .mkString(", ")}")
   }
 
   def cassandraRowComparisonFailure(
@@ -77,7 +87,8 @@ object RowComparisonFailure {
     timestampMsTolerance: Long,
     ttlToleranceMillis: Long,
     writetimeToleranceMillis: Long,
-    compareTimestamps: Boolean
+    compareTimestamps: Boolean,
+    numericTypePolicy: NumericTypePolicy = NumericTypePolicy.Lenient
   ): Option[RowComparisonFailure] =
     right match {
       case None => Some(cassandraRowComparisonFailure(left, right, List(Item.MissingTargetRow)))
@@ -91,14 +102,45 @@ object RowComparisonFailure {
         val leftMap = left.toMap
         val rightMap = right.toMap
 
-        val differingFieldValues =
-          for {
-            name <- names
-            if !name.endsWith("_ttl") && !name.endsWith("_writetime")
-            leftValue  = leftMap.get(name)
-            rightValue = rightMap.get(name)
-            if areDifferent(leftValue, rightValue, timestampMsTolerance, floatingPointTolerance)
-          } yield name
+        val (differingFieldValues, numericTypeMismatches) =
+          names
+            .filterNot(name => name.endsWith("_ttl") || name.endsWith("_writetime"))
+            .foldLeft(
+              (List.empty[String], List.empty[(String, String, String)])
+            ) { case ((diffs, mismatches), name) =>
+              val leftValue = leftMap.get(name)
+              val rightValue = rightMap.get(name)
+
+              (leftValue, rightValue) match {
+                case (Some(l: Number), Some(r: Number)) =>
+                  NumericComparison.compareWithPolicy(
+                    l,
+                    r,
+                    floatingPointTolerance,
+                    numericTypePolicy
+                  ) match {
+                    case ComparisonResult.Different =>
+                      (name :: diffs, mismatches)
+                    case ComparisonResult.TypeMismatch(src, tgt) =>
+                      (diffs, (name, src, tgt) :: mismatches)
+                    case ComparisonResult.Equal =>
+                      (diffs, mismatches)
+                  }
+                case _ =>
+                  if (
+                    areDifferent(
+                      leftValue,
+                      rightValue,
+                      timestampMsTolerance,
+                      floatingPointTolerance,
+                      numericTypePolicy
+                    )
+                  )
+                    (name :: diffs, mismatches)
+                  else
+                    (diffs, mismatches)
+              }
+            }
 
         val differingTtls =
           if (!compareTimestamps) Nil
@@ -138,7 +180,9 @@ object RowComparisonFailure {
                         }
             } yield result
 
-        if (differingFieldValues.isEmpty && differingTtls.isEmpty && differingWritetimes.isEmpty)
+        if (
+          differingFieldValues.isEmpty && numericTypeMismatches.isEmpty && differingTtls.isEmpty && differingWritetimes.isEmpty
+        )
           None
         else
           Some(
@@ -146,8 +190,11 @@ object RowComparisonFailure {
               left,
               Some(right),
               (if (differingFieldValues.nonEmpty)
-                 List(Item.DifferingFieldValues(differingFieldValues.toList))
+                 List(Item.DifferingFieldValues(differingFieldValues.reverse))
                else Nil) ++
+                (if (numericTypeMismatches.nonEmpty)
+                   List(Item.NumericTypeMismatch(numericTypeMismatches.reverse))
+                 else Nil) ++
                 (if (differingTtls.nonEmpty) List(Item.DifferingTtls(differingTtls.toList))
                  else Nil) ++
                 (if (differingWritetimes.nonEmpty)
@@ -180,7 +227,8 @@ object RowComparisonFailure {
     left: collection.Map[String, DdbValue],
     maybeRight: Option[collection.Map[String, DdbValue]],
     renamedColumn: String => String,
-    floatingPointTolerance: Double
+    floatingPointTolerance: Double,
+    numericTypePolicy: NumericTypePolicy = NumericTypePolicy.Lenient
   ): Option[RowComparisonFailure] =
     maybeRight match {
       case None => Some(dynamoDBRowComparisonFailure(left, maybeRight, List(Item.MissingTargetRow)))
@@ -197,7 +245,8 @@ object RowComparisonFailure {
               Some(leftValue),
               rightValue,
               0L, // There is no Timestamp type in DynamoDB
-              floatingPointTolerance
+              floatingPointTolerance,
+              numericTypePolicy
             )
           } yield columnName
         if (differingFieldValues.isEmpty) None
@@ -226,7 +275,8 @@ object RowComparisonFailure {
     leftValue: Option[Any],
     rightValue: Option[Any],
     timestampMsTolerance: Long,
-    floatingPointTolerance: Double
+    floatingPointTolerance: Double,
+    numericTypePolicy: NumericTypePolicy = NumericTypePolicy.Lenient
   ): Boolean =
     (leftValue, rightValue) match {
       // All timestamp types need to be compared with a configured tolerance
@@ -238,13 +288,13 @@ object RowComparisonFailure {
         Math.abs(r.until(l, ChronoUnit.MILLIS)) > timestampMsTolerance
       case (Some(l: java.time.Instant), Some(r: java.time.Instant)) =>
         l != r
-      // All floating-point-like types need to be compared with a configured tolerance
-      case (Some(l: Float), Some(r: Float)) =>
-        !DoubleMath.fuzzyEquals(l, r, floatingPointTolerance)
-      case (Some(l: Double), Some(r: Double)) =>
-        !DoubleMath.fuzzyEquals(l, r, floatingPointTolerance)
-      case (Some(l: java.math.BigDecimal), Some(r: java.math.BigDecimal)) =>
-        areNumericalValuesDifferent(l, r, floatingPointTolerance)
+      case (Some(l: Number), Some(r: Number)) =>
+        NumericComparison.compareWithPolicy(
+          l,
+          r,
+          floatingPointTolerance,
+          numericTypePolicy
+        ) != ComparisonResult.Equal
 
       // CQL blobs get converted to byte buffers by the Java driver, and the
       // byte buffers are converted to byte arrays by the Spark connector.
@@ -257,20 +307,40 @@ object RowComparisonFailure {
 
       // Special cases for DynamoDB item values
       case (Some(DdbValue.N(l)), Some(DdbValue.N(r))) =>
-        areNumericalValuesDifferent(BigDecimal(l), BigDecimal(r), floatingPointTolerance)
+        NumericComparison.areNumericalValuesDifferent(
+          BigDecimal(l),
+          BigDecimal(r),
+          floatingPointTolerance
+        )
       case (Some(DdbValue.Ns(l)), Some(DdbValue.Ns(r))) =>
         val xs = l.toSeq.map(BigDecimal(_)).sorted
         val ys = r.toSeq.map(BigDecimal(_)).sorted
         xs.size != ys.size || xs.zip(ys).exists { case (x, y) =>
-          areNumericalValuesDifferent(x, y, floatingPointTolerance)
+          NumericComparison.areNumericalValuesDifferent(
+            x,
+            y,
+            floatingPointTolerance
+          )
         }
       case (Some(DdbValue.L(l)), Some(DdbValue.L(r))) =>
         l.size != r.size || l.zip(r).exists { case (lv, rv) =>
-          areDifferent(Some(lv), Some(rv), timestampMsTolerance, floatingPointTolerance)
+          areDifferent(
+            Some(lv),
+            Some(rv),
+            timestampMsTolerance,
+            floatingPointTolerance,
+            numericTypePolicy
+          )
         }
       case (Some(DdbValue.M(l)), Some(DdbValue.M(r))) =>
         l.size != r.size || l.keySet != r.keySet || l.exists { case (k, lv) =>
-          areDifferent(Some(lv), r.get(k), timestampMsTolerance, floatingPointTolerance)
+          areDifferent(
+            Some(lv),
+            r.get(k),
+            timestampMsTolerance,
+            floatingPointTolerance,
+            numericTypePolicy
+          )
         }
 
       // All remaining types get compared with standard equality
@@ -279,12 +349,4 @@ object RowComparisonFailure {
       case (None, Some(_))    => true
       case (None, None)       => false
     }
-
-  /** @return true iff the difference between `x` and `y` is greater than the `tolerance` */
-  private def areNumericalValuesDifferent(
-    x: BigDecimal,
-    y: BigDecimal,
-    tolerance: BigDecimal
-  ): Boolean =
-    (x - y).abs > tolerance
 }
