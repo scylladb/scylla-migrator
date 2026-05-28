@@ -2,6 +2,10 @@ package com.scylladb.migrator
 
 import com.scylladb.migrator.config.{ MigratorConfig, Savepoints, SourceSettings, TargetSettings }
 
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.attribute.FileTime
+
 class SavepointStoreTest extends munit.FunSuite {
 
   test("target store newestValidConfig returns newest valid savepoint") {
@@ -36,6 +40,40 @@ class SavepointStoreTest extends munit.FunSuite {
 
     assertEquals(selected.flatMap(_.skipParquetFiles), Some(Set("valid")))
     assertEquals(warnings.toSeq, Seq((3000L, 1L)))
+  }
+
+  test("file store latestConfig does not let hostile future coordinates beat a real savepoint") {
+    val dir = Files.createTempDirectory("savepoint-store-latest-hostile")
+    try {
+      val hostilePath =
+        dir.resolve(
+          f"savepoint_${SavepointsManager.MaxReasonableSeedValue}%013d_${1L}%010d.yaml"
+        )
+      val realPath =
+        dir.resolve(f"savepoint_${System.currentTimeMillis()}%013d_${2L}%010d.yaml")
+
+      Files.write(
+        hostilePath,
+        config(skipFiles = Set("hostile")).render.getBytes(StandardCharsets.UTF_8)
+      )
+      Files.setLastModifiedTime(hostilePath, FileTime.fromMillis(1L))
+      Files.write(
+        realPath,
+        config(skipFiles = Set("real")).render.getBytes(StandardCharsets.UTF_8)
+      )
+
+      val selected = SavepointStore.file(dir.toString).latestConfig()
+
+      assertEquals(
+        selected.skipParquetFiles,
+        Some(Set("real")),
+        "a savepoint with hostile coordinates must not dominate resumeFromLatest ordering"
+      )
+    } finally
+      Files
+        .walk(dir)
+        .sorted(java.util.Comparator.reverseOrder())
+        .forEach(Files.delete)
   }
 
   private def config(skipFiles: Set[String]): MigratorConfig =

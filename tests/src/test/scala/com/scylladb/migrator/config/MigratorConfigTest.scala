@@ -220,7 +220,9 @@ class MigratorConfigTest extends munit.FunSuite {
     )
   }
 
-  test("derived target savepoint job id ignores progress fields and tracks source/target identity") {
+  test(
+    "derived target savepoint job id ignores progress fields and tracks source/target identity"
+  ) {
     val base = parquetToScyllaConfig(
       sourcePath  = "s3a://bucket/source-a",
       targetTable = "table_a"

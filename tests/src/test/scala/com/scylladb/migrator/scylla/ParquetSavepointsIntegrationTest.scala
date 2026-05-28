@@ -69,74 +69,77 @@ class ParquetSavepointsIntegrationTest extends ParquetMigratorSuite {
     assertEquals(skipFiles, expectedProcessedFiles)
   }
 
-  FunFixture.map2(
-    withTable("targetsavepointstest"),
-    withParquetDir("target-savepoints")
-  ).test("Parquet target savepoints are written to Scylla and used for resume") {
-    case (tableName, parquetRoot) =>
-      targetScylla().execute(s"DROP TABLE IF EXISTS ${keyspace}.${targetSavepointsTable}")
-
-      try {
-        val parquetDir = parquetRoot.resolve("target-savepoints")
-        Files.createDirectories(parquetDir)
-
-        writeParquetTestFile(
-          parquetDir.resolve("batch.parquet"),
-          List(
-            TestRecord("1", "alpha", 10),
-            TestRecord("2", "beta", 20)
-          )
-        )
-
-        val expectedProcessedFiles = listDataFiles(parquetDir).map(toContainerParquetUri)
-
-        successfullyPerformMigration(targetConfigFileName)
-
-        val rows = targetScylla()
-          .execute(
-            s"SELECT epoch_millis, sequence, schema_version, reason, migrator_version, config_sha256, config_yaml FROM ${keyspace}.${targetSavepointsTable} WHERE job_id = '${targetSavepointsJobId}'"
-          )
-          .all()
-          .asScala
-
-        assert(rows.nonEmpty, "target-backed savepoint row was not inserted")
-        assert(
-          rows.forall(_.getInt("schema_version") == 1),
-          "all target-backed savepoints should use schema_version 1"
-        )
-        assert(
-          rows.exists(_.getString("reason") == "completed"),
-          "target-backed savepoints should include the completed terminal snapshot"
-        )
-        assert(
-          rows.forall(row =>
-            Option(row.getString("migrator_version")).exists(_.nonEmpty) &&
-              Option(row.getString("config_sha256")).exists(_.matches("[0-9a-f]{64}"))
-          ),
-          "target-backed savepoints should include migrator version and config SHA-256 metadata"
-        )
-
-        val savedConfigs = rows.map(row => MigratorConfig.loadFromString(row.getString("config_yaml")))
-        assert(
-          savedConfigs.exists(_.skipParquetFiles.contains(expectedProcessedFiles)),
-          s"no target savepoint contained expected processed files: ${expectedProcessedFiles}"
-        )
-
-        targetScylla().execute(s"TRUNCATE ${keyspace}.${tableName}")
-        successfullyPerformMigration(targetResumeConfigFileName)
-
-        val rowCountAfterResume = targetScylla()
-          .execute(s"SELECT id FROM ${keyspace}.${tableName}")
-          .all()
-          .size()
-
-        assertEquals(
-          rowCountAfterResume,
-          0,
-          "resumeFromLatest should load DB progress and skip the already processed Parquet file"
-        )
-      } finally
+  FunFixture
+    .map2(
+      withTable("targetsavepointstest"),
+      withParquetDir("target-savepoints")
+    )
+    .test("Parquet target savepoints are written to Scylla and used for resume") {
+      case (tableName, parquetRoot) =>
         targetScylla().execute(s"DROP TABLE IF EXISTS ${keyspace}.${targetSavepointsTable}")
-  }
+
+        try {
+          val parquetDir = parquetRoot.resolve("target-savepoints")
+          Files.createDirectories(parquetDir)
+
+          writeParquetTestFile(
+            parquetDir.resolve("batch.parquet"),
+            List(
+              TestRecord("1", "alpha", 10),
+              TestRecord("2", "beta", 20)
+            )
+          )
+
+          val expectedProcessedFiles = listDataFiles(parquetDir).map(toContainerParquetUri)
+
+          successfullyPerformMigration(targetConfigFileName)
+
+          val rows = targetScylla()
+            .execute(
+              s"SELECT epoch_millis, sequence, schema_version, reason, migrator_version, config_sha256, config_yaml FROM ${keyspace}.${targetSavepointsTable} WHERE job_id = '${targetSavepointsJobId}'"
+            )
+            .all()
+            .asScala
+
+          assert(rows.nonEmpty, "target-backed savepoint row was not inserted")
+          assert(
+            rows.forall(_.getInt("schema_version") == 1),
+            "all target-backed savepoints should use schema_version 1"
+          )
+          assert(
+            rows.exists(_.getString("reason") == "completed"),
+            "target-backed savepoints should include the completed terminal snapshot"
+          )
+          assert(
+            rows.forall(row =>
+              Option(row.getString("migrator_version")).exists(_.nonEmpty) &&
+                Option(row.getString("config_sha256")).exists(_.matches("[0-9a-f]{64}"))
+            ),
+            "target-backed savepoints should include migrator version and config SHA-256 metadata"
+          )
+
+          val savedConfigs =
+            rows.map(row => MigratorConfig.loadFromString(row.getString("config_yaml")))
+          assert(
+            savedConfigs.exists(_.skipParquetFiles.contains(expectedProcessedFiles)),
+            s"no target savepoint contained expected processed files: ${expectedProcessedFiles}"
+          )
+
+          targetScylla().execute(s"TRUNCATE ${keyspace}.${tableName}")
+          successfullyPerformMigration(targetResumeConfigFileName)
+
+          val rowCountAfterResume = targetScylla()
+            .execute(s"SELECT id FROM ${keyspace}.${tableName}")
+            .all()
+            .size()
+
+          assertEquals(
+            rowCountAfterResume,
+            0,
+            "resumeFromLatest should load DB progress and skip the already processed Parquet file"
+          )
+        } finally
+          targetScylla().execute(s"DROP TABLE IF EXISTS ${keyspace}.${targetSavepointsTable}")
+    }
 
 }
