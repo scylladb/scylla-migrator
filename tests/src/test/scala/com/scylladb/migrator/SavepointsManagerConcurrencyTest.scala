@@ -384,6 +384,33 @@ class SavepointsManagerConcurrencyTest extends munit.FunSuite {
     } finally deleteRecursively(dir)
   }
 
+  test("seed ignores max counter when rolling over would create an unresumable timestamp") {
+    val dir = Files.createTempDirectory("savepoints-seed-counter-rollover-boundary")
+    try {
+      val seedMillis = SavepointsManager.MaxReasonableSeedValue - 1L
+      val maxCounter = SavepointsManager.MaxSavepointSequenceValue
+      val planted =
+        dir.resolve(f"savepoint_${seedMillis}%013d_${maxCounter}%010d.yaml")
+      Files.write(planted, Array.emptyByteArray)
+
+      val cfg = newConfig(dir, intervalSeconds = 3600)
+      val manager = new TestManager(cfg, processed = Set("bounded"))
+      try manager.dumpMigrationState("after-boundary-counter-rollover-seed")
+      finally manager.close()
+
+      val produced =
+        listSavepoints(dir).filter(_.getFileName.toString != planted.getFileName.toString)
+      assertEquals(produced.size, 1)
+      assert(
+        SavepointStore.savepointSortKey(produced.head).isDefined,
+        s"manager wrote an unresumable savepoint coordinate: ${produced.head.getFileName}"
+      )
+
+      val resumed = SavepointStore.file(dir.toString).latestConfig()
+      assertEquals(resumed.skipParquetFiles.getOrElse(Set.empty), Set("bounded"))
+    } finally deleteRecursively(dir)
+  }
+
   test("seed rejects hostile coordinates returned by savepoint stores") {
     val dir = Files.createTempDirectory("savepoints-hostile-store-seed")
     val store = new RecordingStore(
