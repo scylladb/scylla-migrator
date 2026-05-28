@@ -3,9 +3,9 @@ package com.scylladb.migrator.scylla
 import com.datastax.spark.connector.rdd.partitioner.{ CassandraPartition, CqlTokenRange }
 import com.datastax.spark.connector.rdd.partitioner.dht.Token
 import com.datastax.spark.connector.writer.TokenRangeAccumulator
-import com.scylladb.migrator.SavepointsManager
+import com.scylladb.migrator.{ SavepointStore, SavepointsManager }
 import com.scylladb.migrator.config.MigratorConfig
-import org.apache.hadoop.conf.Configuration
+import org.apache.spark.sql.SparkSession
 
 import scala.util.control.NonFatal
 
@@ -14,9 +14,8 @@ import scala.util.control.NonFatal
 class CqlSavepointsManager(
   migratorConfig: MigratorConfig,
   val accumulator: TokenRangeAccumulator,
-  hadoopConfiguration: Option[Configuration] = None,
-  redactionRegex: Option[String] = None
-) extends SavepointsManager(migratorConfig, hadoopConfiguration, redactionRegex) {
+  savepointStore: Option[SavepointStore] = None
+) extends SavepointsManager(migratorConfig, savepointStore) {
   def describeMigrationState(): String =
     s"Ranges added: ${tokenRanges(accumulator)}"
 
@@ -92,6 +91,10 @@ object CqlSavepointsManager {
   def apply(
     migratorConfig: MigratorConfig,
     accumulator: TokenRangeAccumulator
-  ): CqlSavepointsManager =
-    new CqlSavepointsManager(migratorConfig, accumulator)
+  )(implicit spark: SparkSession): CqlSavepointsManager =
+    new CqlSavepointsManager(
+      migratorConfig,
+      accumulator,
+      Some(SavepointStore.forConfig(migratorConfig, Some(spark.sparkContext)))
+    )
 }

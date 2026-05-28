@@ -1,6 +1,7 @@
 package com.scylladb.migrator.config
 
 import com.datastax.spark.connector.rdd.partitioner.dht.{ BigIntToken, LongToken }
+import com.scylladb.migrator.SavepointStore
 import io.circe.yaml
 
 class MigratorConfigTest extends munit.FunSuite {
@@ -41,6 +42,207 @@ class MigratorConfigTest extends munit.FunSuite {
 
   private def parquetConfig(target: String, savepoints: String): String =
     s"""${parquetSource}${target}${savepoints}"""
+
+  test("existing file savepoints config decodes as filesystem target") {
+    val config =
+      """source:
+        |  type: parquet
+        |  path: s3a://bucket/data
+        |target:
+        |  type: scylla
+        |  host: scylla.example.com
+        |  port: 9042
+        |  keyspace: ks
+        |  table: tbl
+        |  stripTrailingZerosForDecimals: false
+        |  consistencyLevel: LOCAL_QUORUM
+        |savepoints:
+        |  path: /tmp/savepoints
+        |  intervalSeconds: 300
+        |""".stripMargin
+
+    val result = yaml.parser.parse(config).flatMap(_.as[MigratorConfig])
+
+    assert(result.isRight, s"Expected valid config but got: ${result}")
+    val savepoints = result.toOption.get.savepoints
+    assertEquals(savepoints.resolvedTarget, SavepointTarget.Filesystem("/tmp/savepoints"))
+    assertEquals(savepoints.path, "/tmp/savepoints")
+    assertEquals(savepoints.intervalSeconds, 300)
+    assertEquals(savepoints.resumeFromLatest, false)
+  }
+
+  test("filesystem savepoints target decodes") {
+    val config =
+      """source:
+        |  type: parquet
+        |  path: s3a://bucket/data
+        |target:
+        |  type: scylla
+        |  host: scylla.example.com
+        |  port: 9042
+        |  keyspace: ks
+        |  table: tbl
+        |  stripTrailingZerosForDecimals: false
+        |  consistencyLevel: LOCAL_QUORUM
+        |savepoints:
+        |  intervalSeconds: 60
+        |  target:
+        |    type: filesystem
+        |    path: /nested/savepoints
+        |""".stripMargin
+
+    val result = yaml.parser.parse(config).flatMap(_.as[MigratorConfig])
+
+    assert(result.isRight, s"Expected valid config but got: ${result}")
+    val savepoints = result.toOption.get.savepoints
+    assertEquals(savepoints.resolvedTarget, SavepointTarget.Filesystem("/nested/savepoints"))
+    assertEquals(savepoints.filesystemPath, "/nested/savepoints")
+    assertEquals(savepoints.intervalSeconds, 60)
+  }
+
+  test("filesystem savepoints target inherits top-level path when target path is omitted") {
+    val config =
+      """source:
+        |  type: parquet
+        |  path: s3a://bucket/data
+        |target:
+        |  type: scylla
+        |  host: scylla.example.com
+        |  port: 9042
+        |  keyspace: ks
+        |  table: tbl
+        |  stripTrailingZerosForDecimals: false
+        |  consistencyLevel: LOCAL_QUORUM
+        |savepoints:
+        |  path: /custom/savepoints
+        |  intervalSeconds: 60
+        |  target:
+        |    type: filesystem
+        |""".stripMargin
+
+    val result = yaml.parser.parse(config).flatMap(_.as[MigratorConfig])
+
+    assert(result.isRight, s"Expected valid config but got: ${result}")
+    val savepoints = result.toOption.get.savepoints
+    assertEquals(savepoints.resolvedTarget, SavepointTarget.Filesystem("/custom/savepoints"))
+    assertEquals(savepoints.filesystemPath, "/custom/savepoints")
+  }
+
+  test("target-table savepoints config decodes with defaults") {
+    val config =
+      """source:
+        |  type: parquet
+        |  path: s3a://bucket/data
+        |target:
+        |  type: scylla
+        |  host: scylla.example.com
+        |  port: 9042
+        |  keyspace: ks
+        |  table: tbl
+        |  stripTrailingZerosForDecimals: false
+        |  consistencyLevel: LOCAL_QUORUM
+        |savepoints:
+        |  intervalSeconds: 60
+        |  target:
+        |    type: target-table
+        |""".stripMargin
+
+    val result = yaml.parser.parse(config).flatMap(_.as[MigratorConfig])
+
+    assert(result.isRight, s"Expected valid config but got: ${result}")
+    val savepoints = result.toOption.get.savepoints
+    assertEquals(savepoints.path, Savepoints.Default.path)
+    assertEquals(
+      savepoints.resolvedTarget,
+      SavepointTarget.TargetTable(
+        keyspace = None,
+        table    = "scylla_migrator_savepoints",
+        jobId    = None
+      )
+    )
+  }
+
+  test("target-table savepoints config decodes explicit keyspace and table") {
+    val config =
+      """source:
+        |  type: parquet
+        |  path: s3a://bucket/data
+        |target:
+        |  type: scylla
+        |  host: scylla.example.com
+        |  port: 9042
+        |  keyspace: ks
+        |  table: tbl
+        |  stripTrailingZerosForDecimals: false
+        |  consistencyLevel: LOCAL_QUORUM
+        |savepoints:
+        |  intervalSeconds: 300
+        |  target:
+        |    type: target-table
+        |    keyspace: my-keyspace
+        |    table: my-table
+        |""".stripMargin
+
+    val result = yaml.parser.parse(config).flatMap(_.as[MigratorConfig])
+
+    assert(result.isRight, s"Expected valid config but got: ${result}")
+    assertEquals(
+      result.toOption.get.savepoints.resolvedTarget,
+      SavepointTarget.TargetTable(
+        keyspace = Some("my-keyspace"),
+        table    = "my-table",
+        jobId    = None
+      )
+    )
+  }
+
+  test("target-table savepoints config rejects non-Scylla targets") {
+    val config =
+      """source:
+        |  type: dynamodb
+        |  table: Src
+        |target:
+        |  type: dynamodb
+        |  table: Dst
+        |  streamChanges: false
+        |savepoints:
+        |  intervalSeconds: 300
+        |  target:
+        |    type: target-table
+        |""".stripMargin
+
+    val result = yaml.parser.parse(config).flatMap(_.as[MigratorConfig])
+
+    assert(result.isLeft, s"Expected decoding failure but got: ${result}")
+    assert(
+      result.left.exists(_.getMessage.contains("target-table")),
+      s"Expected Scylla-only error, got: ${result.left.map(_.getMessage)}"
+    )
+  }
+
+  test("derived target savepoint job id ignores progress fields and tracks source/target identity") {
+    val base = parquetToScyllaConfig(
+      sourcePath  = "s3a://bucket/source-a",
+      targetTable = "table_a"
+    )
+    val withProgress = base.copy(skipParquetFiles = Some(Set("file-a.parquet")))
+    val differentTarget = parquetToScyllaConfig(
+      sourcePath  = "s3a://bucket/source-a",
+      targetTable = "table_b"
+    )
+    val differentSource = parquetToScyllaConfig(
+      sourcePath  = "s3a://bucket/source-b",
+      targetTable = "table_a"
+    )
+
+    val jobId = SavepointStore.targetJobId(base)
+
+    assert(jobId.startsWith("auto-"), s"Expected auto-derived job id, got: ${jobId}")
+    assertEquals(jobId.length, "auto-".length + 32)
+    assertEquals(SavepointStore.targetJobId(withProgress), jobId)
+    assertNotEquals(SavepointStore.targetJobId(differentTarget), jobId)
+    assertNotEquals(SavepointStore.targetJobId(differentSource), jobId)
+  }
 
   test("full MigratorConfig with Alternator types round-trips through YAML") {
     val config = MigratorConfig(
@@ -702,4 +904,40 @@ class MigratorConfigTest extends munit.FunSuite {
     assertEquals(roundTripped.skipTokenRanges, config.skipTokenRanges)
     assertEquals(roundTripped.skipSegments, config.skipSegments)
   }
+
+  private def parquetToScyllaConfig(
+    sourcePath: String,
+    targetTable: String
+  ): MigratorConfig =
+    MigratorConfig(
+      source = SourceSettings.Parquet(
+        path        = sourcePath,
+        credentials = None,
+        region      = None,
+        endpoint    = None
+      ),
+      target = TargetSettings.Scylla(
+        host                          = "scylla.example.com",
+        port                          = 9042,
+        localDC                       = Some("dc1"),
+        credentials                   = None,
+        sslOptions                    = None,
+        keyspace                      = "ks",
+        table                         = targetTable,
+        connections                   = None,
+        stripTrailingZerosForDecimals = false,
+        writeTTLInS                   = None,
+        writeWritetimestampInuS       = None,
+        consistencyLevel              = "LOCAL_QUORUM"
+      ),
+      renames = None,
+      savepoints = Savepoints(
+        intervalSeconds = 300,
+        target          = Some(SavepointTarget.TargetTable())
+      ),
+      skipTokenRanges  = None,
+      skipSegments     = None,
+      skipParquetFiles = None,
+      validation       = None
+    )
 }
