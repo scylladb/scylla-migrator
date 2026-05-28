@@ -18,6 +18,8 @@ import org.apache.spark.sql.cassandra.DataTypeConverter
 import org.apache.spark.sql.types.{ IntegerType, LongType, StructField, StructType }
 import org.apache.spark.storage.StorageLevel
 
+import scala.collection.immutable.ArraySeq
+
 /** The C* to Scylla migration validator */
 object ScyllaValidator {
 
@@ -222,10 +224,24 @@ object ScyllaValidator {
           if (includePerColumnMetadata) {
             val (repairRdd, writeRepairSchema, timestampColumns) =
               readers.Cassandra.explodeRowsFromPerColumnMeta(spark, rawRepairDf)
+            // Use current coordinator time for repair writes so they beat any
+            // tombstones on the target (LWW semantics). Without this, a delete
+            // with a newer timestamp silently shadows the repair write.
+            val writetimeIdx = writeRepairSchema.fieldIndex(timestampColumns.writeTime)
+            val repairTimeMicros = System.currentTimeMillis() * 1000L
+            val repairRddWithCurrentTime = repairRdd.map { row =>
+              val values = row.toSeq.toArray
+              values(writetimeIdx) match {
+                case com.datastax.spark.connector.types.CassandraOption.Unset =>
+                case _ =>
+                  values(writetimeIdx) = java.lang.Long.valueOf(repairTimeMicros)
+              }
+              Row(ArraySeq.unsafeWrapArray(values): _*)
+            }
             writers.Scylla.writeRowRDD(
               targetSettings,
               Nil,
-              repairRdd,
+              repairRddWithCurrentTime,
               writeRepairSchema,
               Some(timestampColumns),
               None,

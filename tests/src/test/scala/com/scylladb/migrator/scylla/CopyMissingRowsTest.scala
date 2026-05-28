@@ -33,7 +33,8 @@ abstract class CopyMissingRowsTest(version: CassandraVersion) extends MigratorSu
     expectedFoo: String,
     expectedBar: Int,
     expectedTtlSeconds: Int,
-    expectedWritetimeMicros: Long
+    expectedWritetimeMicros: Long = 0L,
+    minWritetimeMicros: Long = 0L
   ): Unit = {
     val rows = targetScylla()
       .execute(
@@ -49,7 +50,14 @@ abstract class CopyMissingRowsTest(version: CassandraVersion) extends MigratorSu
     assertEquals(row.getString("id"), rowId)
     assertEquals(row.getString("foo"), expectedFoo)
     assertEquals(row.getInt("bar"), expectedBar)
-    assertEquals(row.getLong("foo_writetime"), expectedWritetimeMicros)
+
+    if (expectedWritetimeMicros != 0L)
+      assertEquals(row.getLong("foo_writetime"), expectedWritetimeMicros)
+    if (minWritetimeMicros != 0L)
+      assert(
+        row.getLong("foo_writetime") >= minWritetimeMicros,
+        s"writetime should be >= ${minWritetimeMicros}, got ${row.getLong("foo_writetime")}"
+      )
 
     val rowTtl = row.getInt("foo_ttl")
     assert(rowTtl > 0, s"TTL should be > 0, got ${rowTtl}")
@@ -57,7 +65,7 @@ abstract class CopyMissingRowsTest(version: CassandraVersion) extends MigratorSu
   }
 
   withTable("BasicTest").test(
-    s"Cassandra ${version.label}: copyMissingRows preserves source TTL and writetime"
+    s"Cassandra ${version.label}: copyMissingRows preserves source TTL and beats tombstones"
   ) { tableName =>
     sourceCassandra().execute(
       s"INSERT INTO ${keyspace}.${tableName} (id, foo, bar) VALUES ('11111', 'keep', 7) " +
@@ -71,26 +79,24 @@ abstract class CopyMissingRowsTest(version: CassandraVersion) extends MigratorSu
     successfullyPerformMigration(basicConfigFile)
     assertEquals(performValidation(basicConfigFile), 0, "Initial validation failed")
 
-    // Recreate the target and restore only one row so the other is genuinely missing
-    // without creating a newer tombstone that would block an older repaired writetime.
-    dropAndRecreateTable(targetScylla(), keyspace, tableName, identity)
+    // Delete the row from the target (creating a tombstone with a timestamp newer than
+    // the source writetime). The repair must use coordinator time to beat the tombstone.
     targetScylla().execute(
-      s"INSERT INTO ${keyspace}.${tableName} (id, foo, bar) VALUES ('11111', 'keep', 7) " +
-        s"USING TTL ${sourceInsertTtlSeconds} AND TIMESTAMP ${sourceInsertWritetimeMicros}"
+      s"DELETE FROM ${keyspace}.${tableName} WHERE id = '12345'"
     )
+
+    val repairStartTimeMicros = System.currentTimeMillis() * 1000L
 
     assertEquals(performValidation(copyMissingConfigFile), 1, "Should detect missing row")
 
     assertTargetRowMetadata(
       tableName,
-      rowId                   = "12345",
-      expectedFoo             = "bar",
-      expectedBar             = 42,
-      expectedTtlSeconds      = sourceInsertTtlSeconds,
-      expectedWritetimeMicros = sourceInsertWritetimeMicros
+      rowId              = "12345",
+      expectedFoo        = "bar",
+      expectedBar        = 42,
+      expectedTtlSeconds = sourceInsertTtlSeconds,
+      minWritetimeMicros = repairStartTimeMicros
     )
-
-    assertEquals(performValidation(basicConfigFile), 0, "Row should have been copied to target")
   }
 
   withTable("BasicTest").test(
