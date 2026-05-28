@@ -42,6 +42,31 @@ class SavepointStoreTest extends munit.FunSuite {
     assertEquals(warnings.toSeq, Seq((3000L, 1L)))
   }
 
+  test("target store newestValidConfig ignores hostile future coordinates") {
+    val warnings = scala.collection.mutable.ArrayBuffer.empty[(Long, Long)]
+    val real = config(skipFiles = Set("real")).render
+    val hostile = config(skipFiles = Set("hostile")).render
+
+    val selected = ScyllaTargetSavepointStore.newestValidConfig(
+      rows = Seq(
+        ScyllaTargetSavepointStore.StoredSavepoint(1000L, 1L, real),
+        ScyllaTargetSavepointStore.StoredSavepoint(
+          SavepointsManager.MaxReasonableSeedValue,
+          1L,
+          hostile
+        )
+      ),
+      warnInvalidRow = (row, _) => warnings += ((row.epochMillis, row.sequence))
+    )
+
+    assertEquals(
+      selected.flatMap(_.skipParquetFiles),
+      Some(Set("real")),
+      "target-backed resume must not let an unreasonable future row dominate ordering"
+    )
+    assertEquals(warnings.toSeq, Seq((SavepointsManager.MaxReasonableSeedValue, 1L)))
+  }
+
   test("file store latestConfig does not let hostile future coordinates beat a real savepoint") {
     val dir = Files.createTempDirectory("savepoint-store-latest-hostile")
     try {
