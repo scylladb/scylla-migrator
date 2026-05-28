@@ -128,6 +128,33 @@ class MigratorConfigTest extends munit.FunSuite {
     assertEquals(savepoints.filesystemPath, "/custom/savepoints")
   }
 
+  test("null savepoints target decodes as an omitted target") {
+    val config =
+      """source:
+        |  type: parquet
+        |  path: s3a://bucket/data
+        |target:
+        |  type: scylla
+        |  host: scylla.example.com
+        |  port: 9042
+        |  keyspace: ks
+        |  table: tbl
+        |  stripTrailingZerosForDecimals: false
+        |  consistencyLevel: LOCAL_QUORUM
+        |savepoints:
+        |  path: /custom/savepoints
+        |  intervalSeconds: 60
+        |  target: null
+        |""".stripMargin
+
+    val result = yaml.parser.parse(config).flatMap(_.as[MigratorConfig])
+
+    assert(result.isRight, s"Expected valid config but got: ${result}")
+    val savepoints = result.toOption.get.savepoints
+    assertEquals(savepoints.target, None)
+    assertEquals(savepoints.resolvedTarget, SavepointTarget.Filesystem("/custom/savepoints"))
+  }
+
   test("target-table savepoints config decodes with defaults") {
     val config =
       """source:

@@ -304,7 +304,7 @@ object Savepoints {
                         .decoderWithFilesystemDefault(path)
                         .apply(cursor)
                         .map(Some(_))
-                    case None => Right(None)
+                    case _ => Right(None)
                   }
         resolvedPath = target match {
                          case Some(target: SavepointTarget.StoragePathTarget) =>
