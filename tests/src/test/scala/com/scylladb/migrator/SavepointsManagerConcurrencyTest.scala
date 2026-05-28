@@ -59,8 +59,9 @@ class SavepointsManagerConcurrencyTest extends munit.FunSuite {
     cfg: MigratorConfig,
     processed: => Set[String],
     snapshotDelayMillis: Long = 0L,
-    onSnapshotStarted: () => Unit = () => ()
-  ) extends SavepointsManager(cfg) {
+    onSnapshotStarted: () => Unit = () => (),
+    savepointStore: Option[SavepointStore] = None
+  ) extends SavepointsManager(cfg, savepointStore) {
     def describeMigrationState(): String = s"Processed: ${processed.size}"
     def updateConfigWithMigrationState(): MigratorConfig = {
       onSnapshotStarted()
@@ -355,6 +356,30 @@ class SavepointsManagerConcurrencyTest extends munit.FunSuite {
     } finally deleteRecursively(dir)
   }
 
+  test("seed rejects hostile coordinates returned by savepoint stores") {
+    val dir = Files.createTempDirectory("savepoints-hostile-store-seed")
+    val store = new RecordingStore(
+      Some(SavepointCoordinates(java.lang.Long.MAX_VALUE, java.lang.Long.MAX_VALUE))
+    )
+    try {
+      val cfg = newConfig(dir, intervalSeconds = 3600)
+      val manager = new TestManager(
+        cfg,
+        processed      = Set("alpha"),
+        savepointStore = Some(store)
+      )
+      try manager.dumpMigrationState("after-hostile-store-seed")
+      finally manager.close()
+
+      val record = store.records.headOption.getOrElse(fail("manager wrote no savepoint"))
+      assert(
+        record.coordinates.epochMillis < SavepointsManager.MaxReasonableSeedValue,
+        s"hostile epoch_millis was accepted: ${record.coordinates.epochMillis}"
+      )
+      assertEquals(record.coordinates.sequence, 1L)
+    } finally deleteRecursively(dir)
+  }
+
   test("hostile filenames do not crash sort / findLatest") {
     // An attacker (or a buggy external tool) could drop a savepoint-looking file whose numeric
     // fields overflow `Long`.  `parseLong` then throws `NumberFormatException`; an un-guarded
@@ -488,5 +513,23 @@ class SavepointsManagerConcurrencyTest extends munit.FunSuite {
         s"latest savepoint ${winner.getFileName} did not contain the completed terminal snapshot"
       )
     } finally deleteRecursively(dir)
+  }
+
+  private class RecordingStore(seed: Option[SavepointCoordinates]) extends SavepointStore {
+    private val saved = scala.collection.mutable.ArrayBuffer.empty[SavepointRecord]
+
+    def records: Seq[SavepointRecord] = saved.toSeq
+
+    override def prepare(): Unit = ()
+
+    override def seedState(): Option[SavepointCoordinates] = seed
+
+    override def save(record: SavepointRecord): String = {
+      saved += record
+      s"record-${saved.size}"
+    }
+
+    override def latestConfig(): MigratorConfig =
+      throw new UnsupportedOperationException("latestConfig is not used by this test store")
   }
 }
