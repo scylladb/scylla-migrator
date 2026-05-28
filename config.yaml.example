@@ -491,8 +491,31 @@ savepoints:
   #   # credentials:
   #   #   accessKey: ...
   #   #   secretKey: ...
+
   # Interval in which savepoints will be created
   intervalSeconds: 300
+
+  # Optional, enabled by default. Merge saved progress into this launch configuration.
+  # Set false to start without saved progress. Credentials always come from this configuration.
+  autoResume: true
+
+  # Optional target-table savepoints for CQL targets (type: scylla or cassandra):
+  # Remove the active path above before enabling this target block.
+  # The metadata table is created automatically. The keyspace must already exist.
+  # The config_yaml column stores redacted savepoint YAML. Resume restores progress only.
+  # target:
+  #   type: target-table
+  #   # Default: target.keyspace, preserving its exact case.
+  #   keyspace: null
+  #   # Explicit keyspace/table names use CQL rules: MyKs becomes myks;
+  #   # use the YAML value '"MyKs"' to preserve case.
+  #   # Default metadata table name
+  #   table: scylla_migrator_savepoints
+  #   # Optional stable job id override. Matching configuration identity is still required.
+  #   # If omitted, the migrator derives one from the
+  #   # redacted configuration identity, including renames but excluding progress,
+  #   # savepoints, and validation.
+  #   jobId: null
 
   # Optional - enables file-level savepoint tracking for parquet migrations.
   # When enabled (default), the migrator tracks which parquet files have been fully migrated

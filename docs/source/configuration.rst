@@ -521,18 +521,10 @@ writes so that re-running the migration is safe.
     path: /app/savepoints
     # Interval at which savepoints will be created
     intervalSeconds: 300
-    # Optional. When true (the default), the migrator scans this location on startup and resumes
-    # from the most recent savepoint automatically. Set to false to always start from the
-    # configuration as written.
+    # Optional, enabled by default. Merge saved progress into the launch configuration.
     autoResume: true
 
-Savepoint files are written with credentials redacted (secrets are replaced with
-``<redacted>``), so they are safe to keep in shared or long-lived storage. Because of this,
-a savepoint file cannot be used directly as a standalone configuration file; rely on
-``autoResume`` to continue an interrupted migration. See
-:doc:`resume an interrupted migration </resume-interrupted-migration>`.
-
-The legacy ``path`` field is shorthand for an explicit local filesystem target:
+For local paths, the top-level ``path`` is a shorthand for an explicit filesystem target:
 
 .. code-block:: yaml
 
@@ -541,6 +533,69 @@ The legacy ``path`` field is shorthand for an explicit local filesystem target:
     target:
       type: filesystem
       path: /app/savepoints
+
+Specify either ``savepoints.path`` or ``savepoints.target``, never both. A structured
+``filesystem`` target requires its own nonempty ``target.path``.
+
+For CQL targets (``target.type: scylla`` or its ``cassandra`` alias), savepoints can also be stored in the target database:
+
+.. code-block:: yaml
+
+  savepoints:
+    intervalSeconds: 300
+    autoResume: true
+    target:
+      type: target-table
+      # Optional. Default: target.keyspace. The keyspace must already exist.
+      keyspace: null
+      # Optional. Created automatically if it does not exist.
+      table: scylla_migrator_savepoints
+      # Optional. If omitted, the migrator derives a stable job id from the
+      # redacted configuration identity, including renames but excluding progress,
+      # savepoints, and validation.
+      # Explicit IDs select rows but still require matching configuration identity.
+      jobId: null
+
+Explicit ``savepoints.target.keyspace`` and ``savepoints.target.table`` values use
+CQL identifier rules: an unquoted simple name such as ``MyKs`` becomes ``myks``.
+To preserve case, include the CQL double quotes inside the YAML string:
+
+.. code-block:: yaml
+
+  savepoints:
+    target:
+      type: target-table
+      keyspace: '"MyKs"'
+      table: '"MySavepoints"'
+
+When ``savepoints.target.keyspace`` is omitted, the migrator inherits the exact
+case of ``target.keyspace`` as used by the data connector.
+
+The ``target-table`` backend supports migration ``target.type: scylla`` and its
+``cassandra`` alias.
+The migrator creates the metadata table automatically, but it does not create the keyspace. Each
+savepoint is stored as an append-only version in this table:
+
+.. code-block:: cql
+
+  CREATE TABLE IF NOT EXISTS <keyspace>.<table> (
+    job_id text,
+    epoch_millis bigint,
+    sequence bigint,
+    schema_version int,
+    reason text,
+    migrator_version text,
+    config_sha256 text,
+    config_yaml text,
+    PRIMARY KEY ((job_id), epoch_millis, sequence)
+  ) WITH CLUSTERING ORDER BY (epoch_millis DESC, sequence DESC);
+
+The ``config_yaml`` column contains redacted savepoint YAML, matching file-backed
+savepoints. Automatic resume is enabled by default for every backend. Only progress is merged
+into the launch configuration; credentials and other settings come from that live configuration.
+Missing or failed lookups warn and continue from the launch configuration. Set
+``savepoints.autoResume: false`` to disable lookup. Table payloads retain a SHA-256 digest
+of any source WHERE filter to verify dataset identity without storing the cleartext filter.
 
 The structured ``filesystem`` target accepts only local filesystem paths, including
 ``file://`` paths. For Hadoop filesystem URIs, use the legacy ``path`` field directly.
