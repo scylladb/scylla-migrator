@@ -220,13 +220,13 @@ object ScyllaValidator {
           )
 
           if (includePerColumnMetadata) {
-            val (repairRdd, repairSchema, timestampColumns) =
+            val (repairRdd, writeRepairSchema, timestampColumns) =
               readers.Cassandra.explodeRowsFromPerColumnMeta(spark, rawRepairDf)
             writers.Scylla.writeRowRDD(
               targetSettings,
               Nil,
               repairRdd,
-              repairSchema,
+              writeRepairSchema,
               Some(timestampColumns),
               None,
               sourceSettings

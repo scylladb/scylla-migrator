@@ -161,6 +161,7 @@ abstract class CopyMissingRowsTest(version: CassandraVersion) extends MigratorSu
 class Cassandra2CopyMissingRowsTest extends CopyMissingRowsTest(CassandraVersion.V2)
 @Category(Array(classOf[Integration], classOf[CassandraCompat]))
 class Cassandra3CopyMissingRowsTest extends CopyMissingRowsTest(CassandraVersion.V3)
+@Category(Array(classOf[Integration], classOf[CassandraCompat]))
 class Cassandra4CopyMissingRowsTest extends CopyMissingRowsTest(CassandraVersion.V4)
 @Category(Array(classOf[Integration], classOf[CassandraCompat]))
 class Cassandra5CopyMissingRowsTest extends CopyMissingRowsTest(CassandraVersion.V5)
