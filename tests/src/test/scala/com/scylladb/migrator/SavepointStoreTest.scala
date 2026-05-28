@@ -67,6 +67,75 @@ class SavepointStoreTest extends munit.FunSuite {
     assertEquals(warnings.toSeq, Seq((SavepointsManager.MaxReasonableSeedValue, 1L)))
   }
 
+  test("target store newestValidConfig skips max-counter boundary rows") {
+    val warnings = scala.collection.mutable.ArrayBuffer.empty[(Long, Long)]
+    val real = config(skipFiles = Set("real")).render
+    val boundary = config(skipFiles = Set("boundary")).render
+
+    val selected = ScyllaTargetSavepointStore.newestValidConfig(
+      rows = Seq(
+        ScyllaTargetSavepointStore.StoredSavepoint(1000L, 1L, real),
+        ScyllaTargetSavepointStore.StoredSavepoint(
+          SavepointsManager.MaxReasonableSeedValue - 1L,
+          SavepointsManager.MaxSavepointSequenceValue,
+          boundary
+        )
+      ),
+      warnInvalidRow = (row, _) => warnings += ((row.epochMillis, row.sequence))
+    )
+
+    assertEquals(
+      selected.flatMap(_.skipParquetFiles),
+      Some(Set("real")),
+      "target-backed resume must not select a row whose next savepoint would roll over to an unresumable coordinate"
+    )
+    assertEquals(
+      warnings.toSeq,
+      Seq(
+        (
+          SavepointsManager.MaxReasonableSeedValue - 1L,
+          SavepointsManager.MaxSavepointSequenceValue
+        )
+      )
+    )
+  }
+
+  test("target store newestCoordinates skips max-counter boundary seeds") {
+    val warnings = scala.collection.mutable.ArrayBuffer.empty[(Long, Long)]
+
+    val selected = ScyllaTargetSavepointStore.newestCoordinates(
+      rows = Seq(
+        ScyllaTargetSavepointStore.StoredSavepointCoordinates(
+          epochMillis  = 1000L,
+          sequence     = 1L,
+          configSha256 = None
+        ),
+        ScyllaTargetSavepointStore.StoredSavepointCoordinates(
+          epochMillis  = SavepointsManager.MaxReasonableSeedValue - 1L,
+          sequence     = SavepointsManager.MaxSavepointSequenceValue,
+          configSha256 = None
+        )
+      ),
+      expectedConfigSha256 = None,
+      warnInvalidRow       = (row, _) => warnings += ((row.epochMillis, row.sequence))
+    )
+
+    assertEquals(
+      selected,
+      Some(SavepointCoordinates(1000L, 1L)),
+      "target-backed seed state must ignore a coordinate whose rollover would be rejected by resume lookup"
+    )
+    assertEquals(
+      warnings.toSeq,
+      Seq(
+        (
+          SavepointsManager.MaxReasonableSeedValue - 1L,
+          SavepointsManager.MaxSavepointSequenceValue
+        )
+      )
+    )
+  }
+
   test("target store newestValidConfig skips rows from different config identities") {
     val requested = config(sourcePath = "s3a://bucket/requested", skipFiles = Set("requested"))
     val unrelated = config(sourcePath = "s3a://bucket/unrelated", skipFiles = Set("unrelated"))
@@ -162,6 +231,39 @@ class SavepointStoreTest extends munit.FunSuite {
         selected.skipParquetFiles,
         Some(Set("real")),
         "a savepoint with hostile coordinates must not dominate resumeFromLatest ordering"
+      )
+    } finally
+      Files
+        .walk(dir)
+        .sorted(java.util.Comparator.reverseOrder())
+        .forEach(Files.delete)
+  }
+
+  test("file store latestConfig skips max-counter boundary savepoints") {
+    val dir = Files.createTempDirectory("savepoint-store-latest-boundary")
+    try {
+      val realPath =
+        dir.resolve(f"savepoint_${1000L}%013d_${1L}%010d.yaml")
+      val boundaryPath =
+        dir.resolve(
+          f"savepoint_${SavepointsManager.MaxReasonableSeedValue - 1L}%013d_${SavepointsManager.MaxSavepointSequenceValue}%010d.yaml"
+        )
+
+      Files.write(
+        realPath,
+        config(skipFiles = Set("real")).render.getBytes(StandardCharsets.UTF_8)
+      )
+      Files.write(
+        boundaryPath,
+        config(skipFiles = Set("boundary")).render.getBytes(StandardCharsets.UTF_8)
+      )
+
+      val selected = SavepointStore.file(dir.toString).latestConfig()
+
+      assertEquals(
+        selected.skipParquetFiles,
+        Some(Set("real")),
+        "resumeFromLatest must not pick a savepoint whose next dump would roll over to an unresumable coordinate"
       )
     } finally
       Files
