@@ -1,13 +1,17 @@
 package com.scylladb.migrator
 
+import com.datastax.spark.connector.rdd.partitioner.dht.{ LongToken, Token }
+import com.scylladb.migrator.alternator.{ DynamoDbSavepointsManager, IntSetAccumulator }
 import com.scylladb.migrator.config.{
   AWSCredentials => ConfigAWSCredentials,
   MigratorConfig,
+  SavepointTarget,
   Savepoints,
   SavepointsTarget,
   SourceSettings,
   TargetSettings
 }
+import com.scylladb.migrator.scylla.{ CqlParquetSavepointsManager, CqlTokenRangeAccumulator }
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.permission.FsPermission
 import org.apache.hadoop.fs.{
@@ -19,6 +23,8 @@ import org.apache.hadoop.fs.{
   RawLocalFileSystem
 }
 import org.apache.hadoop.util.Progressable
+import org.apache.spark.scheduler.SparkListener
+import org.apache.spark.sql.SparkSession
 
 import java.io.IOException
 import java.net.URI
@@ -108,6 +114,117 @@ class GcsSavepointsTest extends munit.FunSuite {
         .sorted(java.util.Comparator.reverseOrder())
         .forEach(Files.delete)
     }
+
+  private val tokenRanges = Set[(Token[_], Token[_])]((LongToken(0), LongToken(10)))
+
+  private def withSparkSession(f: SparkSession => Unit): Unit = {
+    val existing = SparkSession.getActiveSession
+      .orElse(SparkSession.getDefaultSession)
+      .filterNot(_.sparkContext.isStopped)
+    val session = existing.getOrElse {
+      SparkSession
+        .builder()
+        .master("local[1]")
+        .appName("savepoint-constructor-tests")
+        .config("spark.driver.host", "localhost")
+        .getOrCreate()
+    }
+    try f(session)
+    finally if (existing.isEmpty) session.stop()
+  }
+
+  Seq("DynamoDB", "CQL-to-Parquet").foreach { managerName =>
+    test(s"direct $managerName manager preserves Spark Hadoop configuration") {
+      val root = Files.createTempDirectory("savepoints-direct-spark")
+      try
+        withSparkSession { session =>
+          val spark = session.sparkContext
+          val conf = spark.hadoopConfiguration
+          val overrides = Map(
+            "fs.testgs.impl"                                -> classOf[LocalGsFileSystem].getName,
+            "fs.testgs.impl.disable.cache"                  -> "true",
+            LocalGsFileSystem.RootConfigKey                 -> root.toString,
+            "fs.gs.project.id"                              -> "spark-project",
+            LocalGsFileSystem.ExpectedGcsProjectIdConfigKey -> "spark-project"
+          )
+          val originals = overrides.keys.map(key => key -> Option(conf.get(key))).toMap
+          try {
+            overrides.foreach { case (key, value) => conf.set(key, value) }
+            val cfg = newConfig("testgs://bucket-a/migrator/savepoints")
+            val listener = new SparkListener {}
+            val manager =
+              if (managerName == "DynamoDB")
+                new DynamoDbSavepointsManager(cfg, IntSetAccumulator(Set(2, 4)), listener, spark)
+              else
+                new CqlParquetSavepointsManager(
+                  cfg,
+                  CqlTokenRangeAccumulator(tokenRanges),
+                  listener,
+                  spark
+                )
+            try manager.dumpMigrationState("direct-constructor")
+            finally manager.close()
+
+            val directory = root.resolve("bucket-a/migrator/savepoints")
+            val files = Using.resource(Files.list(directory))(_.toArray.map(_.asInstanceOf[Path]))
+            assertEquals(files.length, 1)
+            val resumed = MigratorConfig.loadFrom(files.head.toString)
+            if (managerName == "DynamoDB") assertEquals(resumed.skipSegments, Some(Set(2, 4)))
+            else assertEquals(resumed.skipTokenRanges, Some(tokenRanges))
+          } finally
+            originals.foreach {
+              case (key, Some(value)) => conf.set(key, value)
+              case (key, None)        => conf.unset(key)
+            }
+        }
+      finally deleteRecursively(root)
+    }
+
+    test(s"direct $managerName manager retains an explicitly injected store") {
+      withSparkSession { session =>
+        val cfg = newConfig("unused").copy(
+          savepoints = Savepoints(
+            intervalSeconds = 3600,
+            path            = "unused",
+            target          = Some(SavepointTarget.TargetTable())
+          )
+        )
+        var prepared = false
+        var saved = Vector.empty[SavepointRecord]
+        val store = new SavepointStore {
+          override def prepare(): Unit = prepared = true
+          override def seedState(): Option[SavepointCoordinates] = None
+          override def save(record: SavepointRecord): String = {
+            saved :+= record
+            "injected-store"
+          }
+        }
+        val spark = session.sparkContext
+        val listener = new SparkListener {}
+        val manager =
+          if (managerName == "DynamoDB")
+            new DynamoDbSavepointsManager(
+              cfg,
+              IntSetAccumulator(Set(2, 4)),
+              listener,
+              spark,
+              Some(store)
+            )
+          else
+            new CqlParquetSavepointsManager(
+              cfg,
+              CqlTokenRangeAccumulator(tokenRanges),
+              listener,
+              spark,
+              Some(store)
+            )
+        try manager.dumpMigrationState("injected-store")
+        finally manager.close()
+        assert(prepared)
+        assertEquals(saved.map(_.reason), Vector("injected-store"))
+      }
+    }
+  }
 
   test("savepoints can be written to and resumed from a gs:// Hadoop filesystem") {
     val root = Files.createTempDirectory("savepoints-gs")

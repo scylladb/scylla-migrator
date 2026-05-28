@@ -1,6 +1,6 @@
 package com.scylladb.migrator.readers
 
-import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings }
+import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
 import org.apache.spark.scheduler.{ SparkListenerTaskEnd, TaskInfo }
 import org.apache.spark.{ Success, TaskEndReason }
 import org.apache.spark.sql.SparkSession
@@ -56,7 +56,7 @@ class FileCompletionListenerTest extends munit.FunSuite {
     try {
       val config = MigratorConfig(
         source           = SourceSettings.Parquet("dummy", None, None, None),
-        target           = null,
+        target           = testTarget,
         renames          = None,
         savepoints       = com.scylladb.migrator.config.Savepoints(300, tempDir.toString),
         skipTokenRanges  = None,
@@ -118,7 +118,7 @@ class FileCompletionListenerTest extends munit.FunSuite {
     try {
       val config = MigratorConfig(
         source           = SourceSettings.Parquet("dummy", None, None, None),
-        target           = null,
+        target           = testTarget,
         renames          = None,
         savepoints       = com.scylladb.migrator.config.Savepoints(300, tempDir.toString),
         skipTokenRanges  = None,
@@ -182,7 +182,7 @@ class FileCompletionListenerTest extends munit.FunSuite {
     try {
       val config = MigratorConfig(
         source           = SourceSettings.Parquet("dummy", None, None, None),
-        target           = null,
+        target           = testTarget,
         renames          = None,
         savepoints       = com.scylladb.migrator.config.Savepoints(300, tempDir.toString),
         skipTokenRanges  = None,
@@ -234,7 +234,7 @@ class FileCompletionListenerTest extends munit.FunSuite {
     try {
       val config = MigratorConfig(
         source           = SourceSettings.Parquet("dummy", None, None, None),
-        target           = null,
+        target           = testTarget,
         renames          = None,
         savepoints       = com.scylladb.migrator.config.Savepoints(300, tempDir.toString),
         skipTokenRanges  = None,
@@ -277,7 +277,7 @@ class FileCompletionListenerTest extends munit.FunSuite {
     try {
       val config = MigratorConfig(
         source           = SourceSettings.Parquet("dummy", None, None, None),
-        target           = null,
+        target           = testTarget,
         renames          = None,
         savepoints       = com.scylladb.migrator.config.Savepoints(300, tempDir.toString),
         skipTokenRanges  = None,
@@ -333,7 +333,7 @@ class FileCompletionListenerTest extends munit.FunSuite {
     try {
       val config = MigratorConfig(
         source           = SourceSettings.Parquet("dummy", None, None, None),
-        target           = null,
+        target           = testTarget,
         renames          = None,
         savepoints       = com.scylladb.migrator.config.Savepoints(300, tempDir.toString),
         skipTokenRanges  = None,
@@ -369,4 +369,20 @@ class FileCompletionListenerTest extends munit.FunSuite {
         .sorted(java.util.Comparator.reverseOrder())
         .forEach(Files.delete)
   }
+
+  private val testTarget: TargetSettings.Scylla =
+    TargetSettings.Scylla(
+      host                          = "localhost",
+      port                          = 9042,
+      localDC                       = None,
+      credentials                   = None,
+      sslOptions                    = None,
+      keyspace                      = "ks",
+      table                         = "tbl",
+      connections                   = None,
+      stripTrailingZerosForDecimals = false,
+      writeTTLInS                   = None,
+      writeWritetimestampInuS       = None,
+      consistencyLevel              = "LOCAL_QUORUM"
+    )
 }
