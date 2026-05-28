@@ -170,9 +170,51 @@ class SavepointStoreTest extends munit.FunSuite {
         .forEach(Files.delete)
   }
 
+  test("file store latestConfig skips savepoints from different config identities when scoped") {
+    val dir = Files.createTempDirectory("savepoint-store-latest-identity")
+    try {
+      val requested = config(
+        sourcePath     = "s3a://bucket/requested",
+        skipFiles      = Set("requested"),
+        savepointsPath = dir.toString
+      )
+      val unrelated = config(
+        sourcePath     = "s3a://bucket/unrelated",
+        skipFiles      = Set("unrelated"),
+        savepointsPath = dir.toString
+      )
+
+      Files.write(
+        dir.resolve(f"savepoint_${1000L}%013d_${1L}%010d.yaml"),
+        requested.render.getBytes(StandardCharsets.UTF_8)
+      )
+      Files.write(
+        dir.resolve(f"savepoint_${2000L}%013d_${1L}%010d.yaml"),
+        unrelated.render.getBytes(StandardCharsets.UTF_8)
+      )
+
+      val selected = SavepointStore.forConfig(requested, None).latestConfig()
+
+      assertEquals(
+        selected.skipParquetFiles,
+        Some(Set("requested")),
+        "resumeFromLatest must not use a newer file-backed savepoint from another migration"
+      )
+      assertEquals(
+        SavepointStore.configIdentitySha256(selected),
+        SavepointStore.configIdentitySha256(requested)
+      )
+    } finally
+      Files
+        .walk(dir)
+        .sorted(java.util.Comparator.reverseOrder())
+        .forEach(Files.delete)
+  }
+
   private def config(
     skipFiles: Set[String],
-    sourcePath: String = "s3a://bucket/data"
+    sourcePath: String = "s3a://bucket/data",
+    savepointsPath: String = "/tmp/savepoints"
   ): MigratorConfig =
     MigratorConfig(
       source = SourceSettings.Parquet(
@@ -196,7 +238,7 @@ class SavepointStoreTest extends munit.FunSuite {
         consistencyLevel              = "LOCAL_QUORUM"
       ),
       renames          = None,
-      savepoints       = Savepoints(intervalSeconds = 300, path = "/tmp/savepoints"),
+      savepoints       = Savepoints(intervalSeconds = 300, path = savepointsPath),
       skipTokenRanges  = None,
       skipSegments     = None,
       skipParquetFiles = Some(skipFiles),
