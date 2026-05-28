@@ -67,25 +67,26 @@ class SavepointStoreTest extends munit.FunSuite {
     assertEquals(warnings.toSeq, Seq((SavepointsManager.MaxReasonableSeedValue, 1L)))
   }
 
-  test("file store latestConfig does not let hostile future coordinates beat a real savepoint") {
+  test("file store latestConfig ignores hostile future coordinates even with newer mtime") {
     val dir = Files.createTempDirectory("savepoint-store-latest-hostile")
     try {
+      val realMillis = System.currentTimeMillis()
       val hostilePath =
         dir.resolve(
           f"savepoint_${SavepointsManager.MaxReasonableSeedValue}%013d_${1L}%010d.yaml"
         )
       val realPath =
-        dir.resolve(f"savepoint_${System.currentTimeMillis()}%013d_${2L}%010d.yaml")
+        dir.resolve(f"savepoint_${realMillis}%013d_${2L}%010d.yaml")
 
-      Files.write(
-        hostilePath,
-        config(skipFiles = Set("hostile")).render.getBytes(StandardCharsets.UTF_8)
-      )
-      Files.setLastModifiedTime(hostilePath, FileTime.fromMillis(1L))
       Files.write(
         realPath,
         config(skipFiles = Set("real")).render.getBytes(StandardCharsets.UTF_8)
       )
+      Files.write(
+        hostilePath,
+        config(skipFiles = Set("hostile")).render.getBytes(StandardCharsets.UTF_8)
+      )
+      Files.setLastModifiedTime(hostilePath, FileTime.fromMillis(realMillis + 10_000L))
 
       val selected = SavepointStore.file(dir.toString).latestConfig()
 
