@@ -240,6 +240,13 @@ object Savepoints {
         path <- maybeTarget match {
                   case Some(target: SavepointsTarget.StoragePathTarget) =>
                     Right(target.storagePath)
+                  case Some(other) =>
+                    Left(
+                      DecodingFailure(
+                        s"Savepoints target type '${other.targetType}' does not resolve to a storage path.",
+                        cursor.history
+                      )
+                    )
                   case None =>
                     maybePath
                       .filter(_.trim.nonEmpty)

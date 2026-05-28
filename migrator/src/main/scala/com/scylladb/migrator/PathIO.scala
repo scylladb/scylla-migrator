@@ -36,7 +36,6 @@ private[migrator] object PathIO {
       case Some("file") | None => LocalPathIO
       case Some(_) =>
         new HadoopPathIO(
-          path,
           hadoopConfiguration.map(new Configuration(_)).getOrElse(new Configuration())
         )
     }
@@ -118,55 +117,71 @@ private[migrator] object PathIO {
       }
   }
 
-  private class HadoopPathIO(initialPath: String, hadoopConfiguration: Configuration)
-      extends PathIO {
-    private val fs = fileSystemFor(initialPath)
+  private class HadoopPathIO(hadoopConfiguration: Configuration) extends PathIO {
 
     override def normalize(path: String): String = new HadoopPath(path).toString
 
-    override def exists(path: String): Boolean = fs.exists(toPath(path))
+    override def exists(path: String): Boolean = {
+      val hadoopPath = toPath(path)
+      withFileSystem(hadoopPath)(_.exists(hadoopPath))
+    }
 
     override def createDirectories(path: String): Unit = {
       val directory = toPath(path)
-      if (!fs.mkdirs(directory))
-        throw new IOException(s"Failed to create directory ${directory}")
+      withFileSystem(directory) { fs =>
+        if (!fs.mkdirs(directory))
+          throw new IOException(s"Failed to create directory ${directory}")
+      }
     }
 
-    override def listFileNames(path: String): Seq[String] =
-      fs.listStatus(toPath(path)).iterator.map(_.getPath.getName).toSeq
-
-    override def readUtf8(path: String): String =
-      Using.resource(fs.open(toPath(path))) { in =>
-        val out = new ByteArrayOutputStream()
-        val buffer = new Array[Byte](8192)
-        var read = in.read(buffer)
-        while (read != -1) {
-          out.write(buffer, 0, read)
-          read = in.read(buffer)
-        }
-        out.toString(StandardCharsets.UTF_8.name())
+    override def listFileNames(path: String): Seq[String] = {
+      val hadoopPath = toPath(path)
+      withFileSystem(hadoopPath) { fs =>
+        fs.listStatus(hadoopPath).iterator.map(_.getPath.getName).toSeq
       }
+    }
+
+    override def readUtf8(path: String): String = {
+      val hadoopPath = toPath(path)
+      withFileSystem(hadoopPath) { fs =>
+        Using.resource(fs.open(hadoopPath)) { in =>
+          val out = new ByteArrayOutputStream()
+          val buffer = new Array[Byte](8192)
+          var read = in.read(buffer)
+          while (read != -1) {
+            out.write(buffer, 0, read)
+            read = in.read(buffer)
+          }
+          out.toString(StandardCharsets.UTF_8.name())
+        }
+      }
+    }
 
     override def writeUtf8Atomically(path: String, payload: Array[Byte]): Unit = {
       val finalPath = toPath(path)
       val tempPath = toPath(finalPath.toString + ".tmp")
 
-      var moved = false
-      try {
-        Using.resource(fs.create(tempPath, true))(_.write(payload))
-        moved = fs.rename(tempPath, finalPath)
-        if (!moved) throw new IOException(s"Failed to rename ${tempPath} to ${finalPath}")
-      } finally
-        if (!moved) deleteTemp(tempPath)
+      withFileSystem(finalPath) { fs =>
+        var moved = false
+        try {
+          Using.resource(fs.create(tempPath, true))(_.write(payload))
+          moved = fs.rename(tempPath, finalPath)
+          if (!moved) throw new IOException(s"Failed to rename ${tempPath} to ${finalPath}")
+        } finally
+          if (!moved) deleteTemp(fs, tempPath)
+      }
     }
 
     private def toPath(path: String): HadoopPath = new HadoopPath(path)
 
-    private def fileSystemFor(path: String): FileSystem =
-      try toPath(path).getFileSystem(hadoopConfiguration)
+    private def withFileSystem[A](path: HadoopPath)(f: FileSystem => A): A =
+      Using.resource(fileSystemFor(path))(f)
+
+    private def fileSystemFor(path: HadoopPath): FileSystem =
+      try FileSystem.newInstance(path.toUri, hadoopConfiguration)
       catch {
         case e: UnsupportedFileSystemException =>
-          val pathScheme = Option(toPath(path).toUri.getScheme).getOrElse("<none>")
+          val pathScheme = Option(path.toUri.getScheme).getOrElse("<none>")
           throw new IllegalArgumentException(
             s"Path ${path} uses Hadoop filesystem scheme '${pathScheme}', but no implementation " +
               s"is configured. ${connectorGuidance(pathScheme)}",
@@ -187,7 +202,7 @@ private[migrator] object PathIO {
             "configure it via Spark/Hadoop configuration."
       }
 
-    private def deleteTemp(tempPath: HadoopPath): Unit =
+    private def deleteTemp(fs: FileSystem, tempPath: HadoopPath): Unit =
       try fs.delete(tempPath, false)
       catch {
         case cleanupErr: Throwable =>

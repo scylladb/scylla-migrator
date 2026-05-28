@@ -263,11 +263,38 @@ class GcsSavepointsTest extends munit.FunSuite {
     } finally deleteRecursively(root)
   }
 
+  test("Hadoop PathIO resolves the filesystem for each path authority") {
+    val root = Files.createTempDirectory("savepoints-gs-authority")
+    try {
+      val conf = hadoopConf(root)
+      conf.setBoolean(LocalGsFileSystem.RejectMismatchedAuthorityConfigKey, true)
+      val pathIO = PathIO.forPath("gs://bucket-a/migrator/savepoints", Some(conf))
+      val savepointPath = "gs://bucket-b/migrator/savepoints/savepoint-authority.yaml"
+
+      pathIO.writeUtf8Atomically(
+        savepointPath,
+        "savepoint".getBytes(java.nio.charset.StandardCharsets.UTF_8)
+      )
+
+      assert(
+        Files.exists(
+          root
+            .resolve("bucket-b")
+            .resolve("migrator")
+            .resolve("savepoints")
+            .resolve("savepoint-authority.yaml")
+        )
+      )
+    } finally deleteRecursively(root)
+  }
+
   test("unsupported s3a savepoint paths report S3A connector guidance") {
     val conf = new Configuration(false)
 
     val error = intercept[IllegalArgumentException] {
-      PathIO.forPath("s3a://bucket-a/migrator/savepoints", Some(conf))
+      PathIO
+        .forPath("s3a://bucket-a/migrator/savepoints", Some(conf))
+        .exists("s3a://bucket-a/migrator/savepoints")
     }
 
     assert(
@@ -402,6 +429,8 @@ object LocalGsFileSystem {
     "scylla.migrator.test.expected.fs.s3a.aws.credentials.provider"
   val ForbidSessionTokenConfigKey =
     "scylla.migrator.test.forbid.fs.s3a.session.token"
+  val RejectMismatchedAuthorityConfigKey =
+    "scylla.migrator.test.reject-mismatched-authority"
 }
 
 class LocalGsFileSystem extends FileSystem {
@@ -410,6 +439,7 @@ class LocalGsFileSystem extends FileSystem {
   private var fsUri: URI = _
   private var workingDirectory: HadoopPath = _
   private var failRename: Boolean = false
+  private var rejectMismatchedAuthority: Boolean = false
 
   override def initialize(name: URI, conf: Configuration): Unit = {
     super.initialize(name, conf)
@@ -437,6 +467,8 @@ class LocalGsFileSystem extends FileSystem {
     fsUri            = new URI(name.getScheme, name.getAuthority, null, null, null)
     workingDirectory = new HadoopPath(s"${fsUri.toString}/")
     failRename       = conf.getBoolean(LocalGsFileSystem.FailRenameConfigKey, false)
+    rejectMismatchedAuthority =
+      conf.getBoolean(LocalGsFileSystem.RejectMismatchedAuthorityConfigKey, false)
   }
 
   override def getUri: URI = fsUri
@@ -501,7 +533,13 @@ class LocalGsFileSystem extends FileSystem {
 
   private def toLocalNioPath(path: HadoopPath): Path = {
     val uri = path.toUri
-    val bucket = Option(uri.getAuthority).getOrElse(Option(fsUri.getAuthority).getOrElse("bucket"))
+    val pathAuthority = Option(uri.getAuthority)
+    val fsAuthority = Option(fsUri.getAuthority)
+    if (rejectMismatchedAuthority && pathAuthority.exists(_ != fsAuthority.orNull))
+      throw new IOException(
+        s"Path authority ${pathAuthority.orNull} does not match filesystem authority ${fsAuthority.orNull}"
+      )
+    val bucket = pathAuthority.getOrElse(fsAuthority.getOrElse("bucket"))
     val objectPath = Option(uri.getPath).getOrElse("").stripPrefix("/")
     root.resolve(bucket).resolve(objectPath)
   }
