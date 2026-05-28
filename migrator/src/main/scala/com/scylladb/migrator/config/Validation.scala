@@ -3,6 +3,7 @@ package com.scylladb.migrator.config
 import io.circe.{ Decoder, DecodingFailure, Encoder }
 import io.circe.generic.extras.Configuration
 import io.circe.generic.extras.semiauto._
+import com.scylladb.migrator.validation.core.NumericTypePolicy
 
 import java.util.Locale
 
@@ -37,7 +38,8 @@ case class Validation(
   floatingPointTolerance: Double,
   timestampMsTolerance: Long,
   copyMissingRows: Boolean = false,
-  hashColumns: Option[List[String]] = None
+  hashColumns: Option[List[String]] = None,
+  numericTypePolicy: NumericTypePolicy = NumericTypePolicy.Lenient
 )
 object Validation {
   private implicit val circeConfig: Configuration = Configuration.default.withDefaults

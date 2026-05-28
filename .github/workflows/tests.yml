@@ -91,9 +91,9 @@ jobs:
           restore-keys: |
             sbt-target-${{ runner.os }}-
       - name: Start services
-        run: make start-services-scylla
+        run: make start-services-scylla-gcs
       - name: Wait for services
-        run: make wait-for-services-scylla
+        run: make wait-for-services-scylla-gcs
       - name: Dump container logs on failure
         if: failure()
         run: make dump-logs-scylla

@@ -2,13 +2,14 @@ package com.scylladb.migrator.config
 
 import cats.implicits._
 import com.datastax.spark.connector.rdd.partitioner.dht.{ BigIntToken, LongToken, Token }
+import com.scylladb.migrator.PathIO
 import io.circe.generic.extras.Configuration
 import io.circe.generic.extras.semiauto.deriveConfiguredDecoder
 import io.circe.syntax._
 import io.circe.yaml.parser
 import io.circe.yaml.syntax._
 import io.circe.{ Decoder, DecodingFailure, Encoder, Error, Json, JsonObject }
-import scala.util.Using
+import org.apache.hadoop.conf.{ Configuration => HadoopConfiguration }
 
 case class MigratorConfig(
   source: SourceSettings,
@@ -104,6 +105,7 @@ object MigratorConfig {
         }
       }
     }
+
   implicit val migratorConfigEncoder: Encoder[MigratorConfig] =
     Encoder.instance { migratorConfig =>
       // Mirror of the decoder: sources that do not support savepoints omit the field on
@@ -150,8 +152,17 @@ object MigratorConfig {
         )
     )
 
-  def loadFrom(path: String): MigratorConfig = {
-    val configData = Using.resource(scala.io.Source.fromFile(path))(_.mkString)
+  def loadFrom(path: String): MigratorConfig =
+    loadFrom(path, None)
+
+  def loadFrom(path: String, hadoopConfiguration: HadoopConfiguration): MigratorConfig =
+    loadFrom(path, Some(hadoopConfiguration))
+
+  private def loadFrom(
+    path: String,
+    hadoopConfiguration: Option[HadoopConfiguration]
+  ): MigratorConfig = {
+    val configData = PathIO.forPath(path, hadoopConfiguration).readUtf8(path)
 
     parser
       .parse(configData)

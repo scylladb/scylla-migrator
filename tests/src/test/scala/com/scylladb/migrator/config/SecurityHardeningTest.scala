@@ -5,13 +5,15 @@ import org.apache.spark.SparkConf
 
 class SecurityHardeningTest extends munit.FunSuite {
 
-  test("SparkSecretRedaction covers S3A and DynamoDB secret option keys by default") {
+  test("SparkSecretRedaction covers S3A, GCS, and DynamoDB secret option keys by default") {
     SparkSecretRedaction.ensureKeysRedacted(
       None,
       Seq(
         "fs.s3a.access.key",
         "fs.s3a.secret.key",
         "fs.s3a.session.token",
+        "fs.gs.auth.service.account.json.keyfile",
+        "serviceAccountJsonKeyfile",
         "dynamodb.awsAccessKeyId",
         "dynamodb.awsSecretAccessKey",
         "dynamodb.awsSessionToken",
@@ -77,6 +79,34 @@ class SecurityHardeningTest extends munit.FunSuite {
     }
 
     assertEquals(sparkConf.get(SparkSecretRedaction.RedactionRegexConfKey), "(?i)token")
+  }
+
+  test("renderRedacted hides structured GCS savepoint keyfile") {
+    val config = parseConfig(
+      """source:
+        |  type: parquet
+        |  path: /tmp/in
+        |target:
+        |  type: scylla
+        |  host: localhost
+        |  port: 9042
+        |  keyspace: ks
+        |  table: tbl
+        |  stripTrailingZerosForDecimals: false
+        |  consistencyLevel: LOCAL_QUORUM
+        |savepoints:
+        |  intervalSeconds: 300
+        |  target:
+        |    type: gcs
+        |    bucket: savepoint-bucket
+        |    credentials:
+        |      serviceAccountJsonKeyfile: /etc/gcp/key.json
+        |""".stripMargin
+    ).fold(error => fail(s"Expected config to parse, got: ${error}"), identity)
+
+    val rendered = config.renderRedacted
+    assert(rendered.contains("<redacted>"), "rendered YAML should contain redacted marker")
+    assert(!rendered.contains("/etc/gcp/key.json"), "rendered YAML should not include keyfile")
   }
 
   test("Cassandra source host validation rejects URL metacharacters") {

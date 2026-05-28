@@ -88,3 +88,11 @@ services:
       --memory 2048M
       --alternator-port 8000
       --alternator-write-isolation only_rmw_uses_lwt
+
+  gcs:
+    image: fsouza/fake-gcs-server:1.52
+    command: ["-scheme", "http", "-data", "/data", "-external-url", "http://localhost:4443"]
+    ports:
+      - "127.0.0.1:4443:4443"
+    volumes:
+      - "./tests/docker/gcs:/data"

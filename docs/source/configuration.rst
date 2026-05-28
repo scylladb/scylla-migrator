@@ -522,6 +522,101 @@ writes so that re-running the migration is safe.
     # Interval at which savepoints will be created
     intervalSeconds: 300
 
+The legacy ``path`` field is shorthand for an explicit local filesystem target:
+
+.. code-block:: yaml
+
+  savepoints:
+    intervalSeconds: 300
+    target:
+      type: filesystem
+      path: /app/savepoints
+
+The structured ``filesystem`` target accepts only local filesystem paths, including
+``file://`` paths. For Hadoop filesystem URIs, use the legacy ``path`` field directly.
+For example, Google Cloud Storage and AWS S3 savepoint locations can be written as raw
+Hadoop filesystem URIs:
+
+.. code-block:: yaml
+
+  savepoints:
+    path: gs://my-bucket/scylla-migrator/savepoints
+    intervalSeconds: 300
+
+.. code-block:: yaml
+
+  savepoints:
+    path: s3a://my-bucket/scylla-migrator/savepoints
+    intervalSeconds: 300
+
+Google Cloud Storage savepoint locations can also be written as a structured GCS
+target. The structured form below resolves to
+``gs://my-bucket/scylla-migrator/savepoints``:
+
+.. code-block:: yaml
+
+  savepoints:
+    intervalSeconds: 300
+    target:
+      type: gcs
+      bucket: my-bucket
+      prefix: scylla-migrator/savepoints
+      projectId: my-gcp-project
+      credentials:
+        serviceAccountJsonKeyfile: /path/to/service-account.json
+
+The structured GCS target accepts optional ``projectId`` and ``credentials`` fields.
+When ``credentials.serviceAccountJsonKeyfile`` is provided, the migrator configures
+the Hadoop GCS connector to use ``SERVICE_ACCOUNT_JSON_KEYFILE`` authentication. If
+the configuration file itself is loaded from GCS, Spark/Hadoop runtime configuration
+must still contain credentials that can read that file before the migrator can parse
+these settings.
+
+AWS S3 savepoint locations can be written either as an ``s3a://`` filesystem URI or
+as a structured S3 target. The structured form below resolves to
+``s3a://my-bucket/scylla-migrator/savepoints``:
+
+.. code-block:: yaml
+
+  savepoints:
+    intervalSeconds: 300
+    target:
+      type: s3
+      bucket: my-bucket
+      prefix: scylla-migrator/savepoints
+      region: us-east-1
+
+The structured S3 target accepts the same optional ``region`` and ``credentials``
+fields used by other AWS-backed migrator settings and applies them to the Hadoop
+S3A filesystem used for writing savepoints. If the configuration file itself is
+loaded from S3, Spark/Hadoop runtime configuration must still contain credentials
+that can read that file before the migrator can parse these settings.
+
+For raw ``gs://`` paths, make sure the Spark runtime includes the Hadoop GCS connector.
+When GCS authentication is not configured in the migrator YAML file, provide it through
+Spark/Hadoop runtime configuration so it is available to the Spark driver when the
+migrator writes savepoints and when it later loads a savepoint file to resume.
+For example, when using a service account JSON keyfile with the GCS connector:
+
+.. code-block:: bash
+
+  spark-submit \
+    --conf spark.hadoop.fs.gs.impl=com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem \
+    --conf spark.hadoop.fs.gs.auth.type=SERVICE_ACCOUNT_JSON_KEYFILE \
+    --conf spark.hadoop.fs.gs.auth.service.account.json.keyfile=/path/to/key.json \
+    ...
+
+Other GCS connector authentication modes, such as Compute Engine service account
+credentials on Dataproc, should be configured the same way: as Spark/Hadoop runtime
+configuration, not as ``savepoints`` fields.
+
+Savepoint files are written to a temporary sibling path first and then renamed to the
+final ``savepoint_*.yaml`` name. On local filesystems this rename is atomic when the
+filesystem supports atomic moves. On object stores such as GCS, the exact rename
+semantics are provided by the Hadoop connector, so the operation may be implemented as
+a copy/delete, but the migrator still avoids writing partial YAML directly to the final
+savepoint name.
+
 ----------
 Validation
 ----------

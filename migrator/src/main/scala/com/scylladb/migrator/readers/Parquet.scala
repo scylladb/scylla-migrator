@@ -71,7 +71,13 @@ object Parquet {
       s"Discovered ${fileToPartitions.size} files with ${metadata.size} total partitions to process"
     )
 
-    Using.resource(ParquetSavepointsManager(config, spark.sparkContext)) { savepointsManager =>
+    Using.resource(
+      ParquetSavepointsManager(
+        config,
+        spark.sparkContext,
+        SparkSecretRedaction.redactionRegex(spark)
+      )
+    ) { savepointsManager =>
       val listener = new FileCompletionListener(
         partitionToFiles,
         fileToPartitions,
