@@ -479,6 +479,30 @@ class SavepointsManagerConcurrencyTest extends munit.FunSuite {
     } finally deleteRecursively(dir)
   }
 
+  test("dumped savepoint configs disable resumeFromLatest lookup") {
+    val dir = Files.createTempDirectory("savepoints-resume-flag")
+    try {
+      val cfg = newConfig(dir, intervalSeconds = 3600).copy(
+        savepoints = Savepoints(
+          intervalSeconds  = 3600,
+          path             = dir.toString,
+          resumeFromLatest = true
+        )
+      )
+      val manager = new TestManager(cfg, processed = Set("standalone"))
+      try manager.dumpMigrationState("manual")
+      finally manager.close()
+
+      val parsed = MigratorConfig.loadFrom(latest(dir).toString)
+      assertEquals(
+        parsed.savepoints.resumeFromLatest,
+        false,
+        "a generated savepoint should be directly runnable instead of recursively loading latest"
+      )
+      assertEquals(parsed.skipParquetFiles.getOrElse(Set.empty), Set("standalone"))
+    } finally deleteRecursively(dir)
+  }
+
   test("final/completed dumps before close still win over an in-flight scheduled dump") {
     // Mirror the production ordering in Parquet.scala / ScyllaMigrator.scala:
     // a scheduled dump may already be in flight, then the driver writes "final" / "completed",
