@@ -150,6 +150,32 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(gitignore, "config.dynamodb.yml")
   }
 
+  test("Ansible derives Spark resource settings from host facts") {
+    val playbook = Files.readString(repoRoot.resolve("ansible/scylla-migrator.yml"))
+
+    assertOutputContains(playbook, "Derive Spark hardware settings")
+    assertOutputContains(playbook, "spark_worker_cores")
+    assertOutputContains(playbook, "spark_worker_memory")
+    assertOutputContains(playbook, "spark_executor_cores")
+    assertOutputContains(playbook, "spark_executor_memory")
+  }
+
+  test("Spark env templates apply derived worker and executor settings") {
+    val masterTemplate =
+      Files.readString(repoRoot.resolve("ansible/templates/spark-env-master-sample"))
+    val workerTemplate =
+      Files.readString(repoRoot.resolve("ansible/templates/spark-env-worker-sample"))
+
+    assertOutputContains(masterTemplate, "EXECUTOR_CORES={{ master_executor_cores")
+    assertOutputContains(masterTemplate, "EXECUTOR_MEMORY={{ master_executor_memory")
+    assertOutputContains(masterTemplate, "SPARK_LOCAL_DIRS={{ master_spark_local_dirs")
+    assertOutputContains(workerTemplate, "SPARK_WORKER_CORES={{ spark_worker_cores }}")
+    assertOutputContains(workerTemplate, "SPARK_WORKER_MEMORY={{ spark_worker_memory }}")
+    assertOutputContains(workerTemplate, "SPARK_WORKER_DIR={{ spark_worker_dir }}")
+    assertOutputContains(workerTemplate, "--cores $SPARK_WORKER_CORES")
+    assertOutputContains(workerTemplate, "--memory $SPARK_WORKER_MEMORY")
+  }
+
   private def runScript(args: String*): CommandResult =
     runPython((script.toString +: args): _*)
 

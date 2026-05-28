@@ -87,7 +87,7 @@ The deployment creates an AWS key pair from the local public key. The EC2 instan
      --allowed-web-cidr "$MY_CIDR"
    ```
 
-   The default master instance type is `x2iedn.2xlarge`. The default worker instance type is `i8g.4xlarge`.
+   The default master instance type is `x2iedn.2xlarge`. The default worker instance type is `i8g.4xlarge`. During Ansible configuration, the role derives Spark worker cores, worker memory, executor cores, executor memory, and local directories from the instance hardware.
 
 4. Inspect the created infrastructure and Spark endpoints:
 

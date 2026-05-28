@@ -43,6 +43,44 @@
         regexp: '^export JAVA_HOME='
         line: "export JAVA_HOME={{ java_home }}"
 
+    - name: Derive Spark hardware settings
+      ansible.builtin.set_fact:
+        spark_worker_cores: "{{ [ansible_facts.get('processor_vcpus', ansible_facts.get('processor_nproc', 1)) | int, 1] | max }}"
+        spark_worker_memory_mb: "{{ [((ansible_facts['memtotal_mb'] | int) * 85 // 100), 1024] | max }}"
+        spark_local_base: "{{ '/mnt' if (ansible_facts['mounts'] | selectattr('mount', 'equalto', '/mnt') | list | length > 0) else '/tmp' }}"
+
+    - name: Derive Spark executor cores
+      ansible.builtin.set_fact:
+        spark_executor_cores: "{{ 10 if (spark_worker_cores | int) >= 10 and (spark_worker_cores | int) % 10 == 0 else 9 if (spark_worker_cores | int) >= 9 and (spark_worker_cores | int) % 9 == 0 else 8 if (spark_worker_cores | int) >= 8 and (spark_worker_cores | int) % 8 == 0 else 7 if (spark_worker_cores | int) >= 7 and (spark_worker_cores | int) % 7 == 0 else 6 if (spark_worker_cores | int) >= 6 and (spark_worker_cores | int) % 6 == 0 else 5 if (spark_worker_cores | int) >= 5 and (spark_worker_cores | int) % 5 == 0 else 4 if (spark_worker_cores | int) >= 4 and (spark_worker_cores | int) % 4 == 0 else 3 if (spark_worker_cores | int) >= 3 and (spark_worker_cores | int) % 3 == 0 else 2 if (spark_worker_cores | int) >= 2 and (spark_worker_cores | int) % 2 == 0 else 1 }}"
+
+    - name: Derive Spark memory and local directories
+      ansible.builtin.set_fact:
+        spark_executor_instances_per_worker: "{{ [((spark_worker_cores | int) // (spark_executor_cores | int)), 1] | max }}"
+        spark_executor_memory_mb: "{{ [(((spark_worker_memory_mb | int) // ([((spark_worker_cores | int) // (spark_executor_cores | int)), 1] | max)) * 90 // 100), 1024] | max }}"
+        spark_worker_memory: "{{ ((spark_worker_memory_mb | int) // 1024) | string }}G"
+        spark_local_dirs: "{{ spark_local_base }}/spark-local"
+        spark_worker_dir: "{{ spark_local_base }}/spark-work"
+
+    - name: Derive Spark executor memory
+      ansible.builtin.set_fact:
+        spark_executor_memory: "{{ ((spark_executor_memory_mb | int) // 1024) | string }}G"
+
+    - name: Create Spark local directories
+      become: true
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: "0775"
+      with_items:
+        - "{{ spark_local_dirs }}"
+        - "{{ spark_worker_dir }}"
+
+    - name: Show derived Spark settings
+      ansible.builtin.debug:
+        msg: "Spark settings: worker_cores={{ spark_worker_cores }}, worker_memory={{ spark_worker_memory }}, executor_cores={{ spark_executor_cores }}, executor_memory={{ spark_executor_memory }}, local_dirs={{ spark_local_dirs }}"
+
     - name: install cqlsh in a virtualenv
       ansible.builtin.pip:
         name: scylla-cqlsh
@@ -181,6 +219,10 @@
     java_home_arch: "{{ 'arm64' if ansible_facts['architecture'] in ['aarch64', 'arm64'] else 'amd64' }}"
     java_home_default: "{{ '/usr/lib/jvm/java-17-openjdk-' ~ java_home_arch }}"
     master_java_home: "{{ hostvars[inventory_hostname].java_home | default(java_home_default) }}"
+    spark_reference_worker: "{{ groups['worker'] | first | default(inventory_hostname) }}"
+    master_spark_local_dirs: "{{ hostvars[inventory_hostname].spark_local_dirs | default('/tmp/spark-local') }}"
+    master_executor_cores: "{{ hostvars[spark_reference_worker].spark_executor_cores | default(4) }}"
+    master_executor_memory: "{{ hostvars[spark_reference_worker].spark_executor_memory | default('8G') }}"
   environment:
     JAVA_HOME: "{{ master_java_home }}"
     SPARK_HOME: /opt/spark
