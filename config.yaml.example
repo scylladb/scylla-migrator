@@ -499,3 +499,10 @@ savepoints:
 #   # hashColumns:
 #   #   - large_text_column
 #   #   - blob_column
+#   # Optional - numeric cross-type comparison policy.
+#   # Lenient (default): Int==Long==BigInt==BigDecimal(scale<=0) treated as equal;
+#   #   Float/Double normalized to BigDecimal within floatingPointTolerance.
+#   # DetectWiden: same as Lenient, but flags Float->Double widening that loses bits
+#   #   (e.g. Float(0.1f) vs Double(0.1)) as NumericTypeMismatch.
+#   # StrictType: any Float vs Double pair flagged regardless of value.
+#   # numericTypePolicy: Lenient

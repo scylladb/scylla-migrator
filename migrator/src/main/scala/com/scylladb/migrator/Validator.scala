@@ -72,6 +72,9 @@ object Validator {
       val differingCount = failures.count(
         _.items.exists(_.isInstanceOf[RowComparisonFailure.Item.DifferingFieldValues])
       )
+      val numericTypeMismatchCount = failures.count(
+        _.items.exists(_.isInstanceOf[RowComparisonFailure.Item.NumericTypeMismatch])
+      )
       val mismatchedColumnCount =
         failures.count(_.items.contains(RowComparisonFailure.Item.MismatchedColumnCount))
       val mismatchedColumnNames =
@@ -81,6 +84,9 @@ object Validator {
         if (missingCount > 0) Some(s"$missingCount missing target row(s)") else None,
         if (extraCount > 0) Some(s"$extraCount extra target row(s)") else None,
         if (differingCount > 0) Some(s"$differingCount differing field value(s)") else None,
+        if (numericTypeMismatchCount > 0)
+          Some(s"$numericTypeMismatchCount numeric type mismatch(es)")
+        else None,
         if (mismatchedColumnCount > 0) Some(s"$mismatchedColumnCount mismatched column count(s)")
         else None,
         if (mismatchedColumnNames > 0) Some(s"$mismatchedColumnNames mismatched column name(s)")
