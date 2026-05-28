@@ -5,6 +5,7 @@ SHELL := bash
 .PHONY: help build docker-build-jar docker-image lint lint-fix \
         spark-image start-services stop-services wait-for-services \
         start-services-scylla wait-for-services-scylla \
+        start-services-scylla-gcs wait-for-services-scylla-gcs \
         start-services-cassandra wait-for-services-cassandra test-integration-cassandra \
         start-services-alternator wait-for-services-alternator \
         test test-unit test-integration test-integration-scylla \
@@ -152,7 +153,12 @@ start-services: ## Start all Docker Compose test services
 	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_GCS_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
 	docker compose -f $(COMPOSE_FILE) up -d mysql dynamodb cassandra cassandra2 cassandra3 cassandra5 scylla-source scylla s3 gcs
 
-start-services-scylla: ## Start services needed for Scylla integration tests
+start-services-scylla: ## Start services needed for Scylla integration tests without GCS savepoints
+	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla ./tests/docker/scylla-source
+	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla ./tests/docker/scylla-source
+	docker compose $(COMPOSE_SCYLLA_FILES) up -d mysql cassandra scylla-source scylla
+
+start-services-scylla-gcs: ## Start services needed for Scylla integration tests including GCS savepoints
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_GCS_BIND_DIRS) ./tests/docker/scylla ./tests/docker/scylla-source
 	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_GCS_BIND_DIRS) ./tests/docker/scylla ./tests/docker/scylla-source
 	docker compose $(COMPOSE_SCYLLA_FILES) up -d mysql cassandra scylla-source scylla gcs
@@ -181,6 +187,13 @@ wait-for-services: ## Wait for all test services to become ready
 	wait $$p1; wait $$p2; wait $$p3; wait $$p4; wait $$p5; wait $$p6; wait $$p7; wait $$p8
 
 wait-for-services-scylla: ## Wait for Scylla test services to become ready
+	$(Q)($(call wait-for-cql-compose,$(COMPOSE_SCYLLA_FILES),cassandra)) & p1=$$!
+	($(call wait-for-cql-compose,$(COMPOSE_SCYLLA_FILES),scylla-source)) & p2=$$!
+	($(call wait-for-cql-compose,$(COMPOSE_SCYLLA_FILES),scylla)) & p3=$$!
+	($(call wait-for-mysql-compose,$(COMPOSE_SCYLLA_FILES),mysql)) & p4=$$!
+	wait $$p1; wait $$p2; wait $$p3; wait $$p4
+
+wait-for-services-scylla-gcs: ## Wait for Scylla and GCS test services to become ready
 	$(Q)($(call wait-for-cql-compose,$(COMPOSE_SCYLLA_FILES),cassandra)) & p1=$$!
 	($(call wait-for-cql-compose,$(COMPOSE_SCYLLA_FILES),scylla-source)) & p2=$$!
 	($(call wait-for-cql-compose,$(COMPOSE_SCYLLA_FILES),scylla)) & p3=$$!
