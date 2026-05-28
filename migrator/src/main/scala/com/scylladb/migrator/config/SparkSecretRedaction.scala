@@ -1,6 +1,7 @@
 package com.scylladb.migrator.config
 
 import org.apache.spark.SparkConf
+import org.apache.spark.SparkContext
 import org.apache.spark.sql.SparkSession
 
 import java.util.regex.Pattern
@@ -53,6 +54,10 @@ object SparkSecretRedaction {
       configuredRedactionRegex(sparkConf.getOption(RedactionRegexConfKey))
         .getOrElse(installMigratorRedactionRegex(sparkConf))
     )
+
+  def redactionRegex(sparkContext: SparkContext): Option[String] =
+    configuredRedactionRegex(sparkContext.getConf.getOption(RedactionRegexConfKey))
+      .orElse(Some(SparkDefaultRedactionRegex))
 
   def sensitiveKeys(keys: Iterable[String]): Seq[String] =
     keys.toSeq.distinct.filter(SensitiveKeys.isSensitiveKey)

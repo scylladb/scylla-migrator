@@ -107,6 +107,14 @@ services:
       - "./tests/docker/s3:/var/lib/localstack"
       - "/var/run/docker.sock:/var/run/docker.sock"
 
+  gcs:
+    image: fsouza/fake-gcs-server:1.52
+    command: ["-scheme", "http", "-data", "/data", "-external-url", "http://localhost:4443"]
+    ports:
+      - "127.0.0.1:4443:4443"
+    volumes:
+      - "./tests/docker/gcs:/data"
+
   spark-master:
     image: ${SPARK_IMAGE:-spark-migrator}
     build: dockerfiles/spark

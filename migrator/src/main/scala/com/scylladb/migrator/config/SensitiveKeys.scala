@@ -4,10 +4,10 @@ import java.util.Locale
 
 object SensitiveKeys {
   val DefaultRedactionRegex: String =
-    "(?i)password|secret|token|credential|access[._-]?key|api[._-]?key|private[._-]?key"
+    "(?i)password|secret|token|credential|access[._-]?key|api[._-]?key|private[._-]?key|key[._-]?file"
 
   private val SensitiveKeyMarkers =
-    Seq("password", "secret", "token", "credential", "accesskey", "apikey", "privatekey")
+    Seq("password", "secret", "token", "credential", "accesskey", "apikey", "privatekey", "keyfile")
 
   private def normalize(key: String): String =
     key

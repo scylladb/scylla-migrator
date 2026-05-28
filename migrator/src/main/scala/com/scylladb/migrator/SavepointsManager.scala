@@ -1,25 +1,16 @@
 package com.scylladb.migrator
 
-import com.scylladb.migrator.config.MigratorConfig
+import com.scylladb.migrator.config.{ MigratorConfig, SavepointsTarget, SparkSecretRedaction }
+import org.apache.hadoop.conf.Configuration
 import org.apache.logging.log4j.LogManager
 import sun.misc.{ Signal, SignalHandler }
 
 import java.nio.charset.StandardCharsets
-import java.nio.file.{
-  AccessDeniedException,
-  AtomicMoveNotSupportedException,
-  Files,
-  Path,
-  Paths,
-  StandardCopyOption
-}
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
 import java.util.concurrent.{ ScheduledThreadPoolExecutor, TimeUnit }
-import scala.jdk.CollectionConverters._
-import scala.util.Using
 import scala.util.control.NonFatal
 
 /** A component that manages savepoints. Savepoints provide a way to resume an interrupted
@@ -41,7 +32,7 @@ import scala.util.control.NonFatal
   * `updateConfigWithMigrationState`.
   *
   * Concurrency and ordering guarantees:
-  *   - `dumpMigrationState` is serialized so that the accumulator snapshot and the on-disk write
+  *   - `dumpMigrationState` is serialized so that the accumulator snapshot and the storage write
   *     happen atomically with respect to other dumps. This prevents a scheduled dump from
   *     overwriting a later terminal dump with a stale snapshot.
   *   - Savepoint filenames embed a zero-padded millisecond timestamp and a zero-padded per-instance
@@ -59,11 +50,20 @@ import scala.util.control.NonFatal
   *     signal exits" over "first signal writes". A second signal acts as a force-quit escape hatch,
   *     so operators can terminate even if the first dump is stuck on slow or unhealthy storage.
   */
-abstract class SavepointsManager(migratorConfig: MigratorConfig) extends AutoCloseable {
+abstract class SavepointsManager(
+  migratorConfig: MigratorConfig,
+  hadoopConfiguration: Option[Configuration] = None,
+  redactionRegex: Option[String] = None
+) extends AutoCloseable {
 
   import SavepointsManager._
 
   val log = LogManager.getLogger(this.getClass.getName)
+  private val savepointsPath = migratorConfig.savepoints.storagePath
+  private val pathIO = PathIO.forPath(
+    savepointsPath,
+    Some(savepointHadoopConfiguration(hadoopConfiguration))
+  )
   private val scheduler = new ScheduledThreadPoolExecutor(1)
   private var oldUsr2Handler: SignalHandler = _
   private var oldTermHandler: SignalHandler = _
@@ -91,13 +91,66 @@ abstract class SavepointsManager(migratorConfig: MigratorConfig) extends AutoClo
   addUSR2Handler()
   startSavepointSchedule()
 
+  private def savepointHadoopConfiguration(
+    baseConfiguration: Option[Configuration]
+  ): Configuration = {
+    val conf = baseConfiguration.map(new Configuration(_)).getOrElse(new Configuration())
+
+    migratorConfig.savepoints.target.foreach {
+      case s3: SavepointsTarget.S3 =>
+        s3.region.foreach(conf.set("fs.s3a.endpoint.region", _))
+        s3.credentials.foreach { configuredCredentials =>
+          AwsUtils.computeFinalCredentials(Some(configuredCredentials), None, s3.region).foreach {
+            credentials =>
+              val credentialOptions =
+                Seq(
+                  "fs.s3a.access.key" -> credentials.accessKey,
+                  "fs.s3a.secret.key" -> credentials.secretKey
+                ) ++ credentials.maybeSessionToken.toSeq.map { sessionToken =>
+                  "fs.s3a.session.token" -> sessionToken
+                }
+
+              ensureHadoopKeysRedacted(credentialOptions.map(_._1))
+              credentialOptions.foreach { case (key, value) => conf.set(key, value) }
+              credentials.maybeSessionToken match {
+                case Some(_) =>
+                  conf.set("fs.s3a.aws.credentials.provider", S3ATemporaryCredentialsProvider)
+                case None =>
+                  conf.set("fs.s3a.aws.credentials.provider", S3ASimpleCredentialsProvider)
+                  conf.unset("fs.s3a.session.token")
+              }
+          }
+        }
+      case gcs: SavepointsTarget.GCS =>
+        gcs.projectId.foreach(conf.set("fs.gs.project.id", _))
+        gcs.credentials.foreach { credentials =>
+          ensureHadoopKeysRedacted(Seq("fs.gs.auth.service.account.json.keyfile"))
+          conf.set("fs.gs.auth.type", GcsServiceAccountJsonKeyfileAuthType)
+          conf.set(
+            "fs.gs.auth.service.account.json.keyfile",
+            credentials.serviceAccountJsonKeyfile
+          )
+        }
+      case _ => ()
+    }
+
+    conf
+  }
+
+  private def ensureHadoopKeysRedacted(keys: Iterable[String]): Unit =
+    SparkSecretRedaction.ensureKeysRedacted(
+      redactionRegex,
+      keys,
+      "savepoint Hadoop configuration"
+    )
+
   private def createSavepointsDirectory(): Unit = {
-    val savepointsDirectory = Paths.get(migratorConfig.savepoints.path)
-    if (!Files.exists(savepointsDirectory)) {
+    val savepointsDirectory = savepointsPath
+    if (!pathIO.exists(savepointsDirectory)) {
       log.debug(
-        s"Directory ${savepointsDirectory.normalize().toString} does not exist. Creating it..."
+        s"Directory ${pathIO.normalize(savepointsDirectory)} does not exist. Creating it..."
       )
-      Files.createDirectories(savepointsDirectory)
+      pathIO.createDirectories(savepointsDirectory)
     }
   }
 
@@ -113,56 +166,53 @@ abstract class SavepointsManager(migratorConfig: MigratorConfig) extends AutoClo
     * is not wiped.
     */
   private def seedStateFromExistingSavepoints(): Unit = {
-    val savepointsDirectory = Paths.get(migratorConfig.savepoints.path)
-    if (!Files.exists(savepointsDirectory)) return
+    val savepointsDirectory = savepointsPath
+    if (!pathIO.exists(savepointsDirectory)) return
 
     var maxMillis = 0L
     var maxSeq = 0L
     try
-      Using.resource(Files.list(savepointsDirectory)) { stream =>
-        stream.iterator().asScala.foreach { path =>
-          val name = path.getFileName.toString
-          name match {
-            case SavepointsManager.SavepointName(head, tailOrNull) =>
-              val millis =
-                try
-                  if (tailOrNull == null)
-                    // Legacy filenames carry epoch seconds; scale to millis but reject values
-                    // that would silently overflow `Long`. `multiplyExact` throws
-                    // `ArithmeticException` instead of wrapping around to a negative number,
-                    // so a hostile filename like `savepoint_99999999999999999.yaml` cannot
-                    // poison the seeded `lastSavepointMillis` with a bogus huge value.
-                    java.lang.Math.multiplyExact(java.lang.Long.parseLong(head), 1000L)
-                  else java.lang.Long.parseLong(head)
-                catch {
-                  case _: NumberFormatException | _: ArithmeticException => 0L
-                }
-              val seq =
-                if (tailOrNull == null) 0L
-                else
-                  try java.lang.Long.parseLong(tailOrNull)
-                  catch { case _: NumberFormatException => 0L }
-              // Reject hostile near-`Long.MAX_VALUE` values; a single planted file must not be
-              // allowed to push `savepointSequence` to within one `incrementAndGet` of overflow
-              // (which would emit a negative counter in the next filename and permanently break
-              // the `\d{10}` regex on resume).
-              if (millis >= MaxReasonableSeedValue || seq >= MaxReasonableSeedValue) {
-                log.warn(
-                  s"Ignoring hostile/corrupted savepoint filename ${name} during seed " +
-                    s"(millis=${millis}, seq=${seq} exceeds ${MaxReasonableSeedValue})."
-                )
-              } else if (millis > maxMillis || (millis == maxMillis && seq > maxSeq)) {
-                maxMillis = millis
-                maxSeq    = seq
+      pathIO.listFileNames(savepointsDirectory).foreach { name =>
+        name match {
+          case SavepointsManager.SavepointName(head, tailOrNull) =>
+            val millis =
+              try
+                if (tailOrNull == null)
+                  // Legacy filenames carry epoch seconds; scale to millis but reject values
+                  // that would silently overflow `Long`. `multiplyExact` throws
+                  // `ArithmeticException` instead of wrapping around to a negative number,
+                  // so a hostile filename like `savepoint_99999999999999999.yaml` cannot
+                  // poison the seeded `lastSavepointMillis` with a bogus huge value.
+                  java.lang.Math.multiplyExact(java.lang.Long.parseLong(head), 1000L)
+                else java.lang.Long.parseLong(head)
+              catch {
+                case _: NumberFormatException | _: ArithmeticException => 0L
               }
-            case _ => ()
-          }
+            val seq =
+              if (tailOrNull == null) 0L
+              else
+                try java.lang.Long.parseLong(tailOrNull)
+                catch { case _: NumberFormatException => 0L }
+            // Reject hostile near-`Long.MAX_VALUE` values; a single planted file must not be
+            // allowed to push `savepointSequence` to within one `incrementAndGet` of overflow
+            // (which would emit a negative counter in the next filename and permanently break
+            // the `\d{10}` regex on resume).
+            if (millis >= MaxReasonableSeedValue || seq >= MaxReasonableSeedValue) {
+              log.warn(
+                s"Ignoring hostile/corrupted savepoint filename ${name} during seed " +
+                  s"(millis=${millis}, seq=${seq} exceeds ${MaxReasonableSeedValue})."
+              )
+            } else if (millis > maxMillis || (millis == maxMillis && seq > maxSeq)) {
+              maxMillis = millis
+              maxSeq    = seq
+            }
+          case _ => ()
         }
       }
     catch {
       case NonFatal(e) =>
         log.warn(
-          s"Could not scan ${savepointsDirectory} to seed savepoint state; " +
+          s"Could not scan ${pathIO.normalize(savepointsDirectory)} to seed savepoint state; " +
             s"falling back to clock-only ordering: ${e.getMessage}"
         )
         return
@@ -274,11 +324,12 @@ abstract class SavepointsManager(migratorConfig: MigratorConfig) extends AutoClo
   /** Dump the current state of the migration into a configuration file that can be used to resume
     * the migration.
     *
-    * Snapshotting the current state and writing it to disk are performed under a lock so that
+    * Snapshotting the current state and writing it to storage are performed under a lock so that
     * concurrent callers (scheduler, driver, signal handler) cannot interleave and overwrite each
-    * other with stale snapshots. The file is first written to a temporary path and then atomically
-    * renamed, so readers never observe a truncated YAML file. The temp file is deleted if the
-    * rename does not succeed, so failures do not leak sibling `*.yaml.tmp` files on disk.
+    * other with stale snapshots. The file is first written to a temporary path and then renamed
+    * into place. Local filesystems use atomic rename when available; object stores depend on the
+    * Hadoop connector's rename semantics. The temp file is deleted if the rename does not succeed,
+    * so failures do not leak sibling `*.yaml.tmp` files.
     *
     * @param reason
     *   Human-readable, informal, event that caused the dump.
@@ -323,59 +374,17 @@ abstract class SavepointsManager(migratorConfig: MigratorConfig) extends AutoClo
 
   private def doDump(reason: String): Unit = {
     val finalPath =
-      Paths.get(savepointFilename(migratorConfig.savepoints.path)).normalize
-    val tempPath = Paths.get(finalPath.toString + ".tmp").normalize
+      savepointFilename(savepointsPath)
 
     val modifiedConfig = updateConfigWithMigrationState()
     val payload = modifiedConfig.render.getBytes(StandardCharsets.UTF_8)
 
-    var moved = false
-    try {
-      Files.write(tempPath, payload)
-      atomicReplace(tempPath, finalPath)
-      moved = true
-    } finally
-      if (!moved) {
-        // Best-effort cleanup so a failed rename does not leak `.yaml.tmp` siblings that would
-        // otherwise accumulate on a flaky filesystem.
-        try Files.deleteIfExists(tempPath)
-        catch {
-          case cleanupErr: Throwable =>
-            log.warn(s"Failed to clean up temp savepoint ${tempPath}: ${cleanupErr.getMessage}")
-        }
-      }
+    pathIO.writeUtf8Atomically(finalPath, payload)
 
     log.info(
-      s"Created a savepoint config at ${finalPath} due to ${reason}. ${describeMigrationState()}"
+      s"Created a savepoint config at ${pathIO.normalize(finalPath)} due to ${reason}. ${describeMigrationState()}"
     )
   }
-
-  private def atomicReplace(source: Path, target: Path): Unit =
-    try
-      Files.move(
-        source,
-        target,
-        StandardCopyOption.ATOMIC_MOVE,
-        StandardCopyOption.REPLACE_EXISTING
-      )
-    catch {
-      case _: AtomicMoveNotSupportedException =>
-        // Fallback for filesystems that do not support atomic rename (e.g. certain object-store
-        // mounts). Semantics degrade to "replace" but all other guarantees are preserved.
-        log.warn(
-          s"Atomic rename not supported on the filesystem backing ${target}; " +
-            s"falling back to non-atomic replace."
-        )
-        Files.move(source, target, StandardCopyOption.REPLACE_EXISTING)
-      case e: AccessDeniedException =>
-        // On Windows, ATOMIC_MOVE can throw AccessDeniedException if a reader holds the target
-        // file open. Fall back to a non-atomic replace rather than failing the dump.
-        log.warn(
-          s"Atomic rename denied on ${target} (likely a concurrent reader on Windows); " +
-            s"falling back to non-atomic replace: ${e.getMessage}"
-        )
-        Files.move(source, target, StandardCopyOption.REPLACE_EXISTING)
-    }
 
   /** Stop the periodic creation of savepoints and release the associated resources.
     *
@@ -435,6 +444,14 @@ object SavepointsManager {
   // 30 s before SIGKILL) so the JVM still has headroom to flush logs and run shutdown hooks
   // after the bounded wait, even if a scheduled dump is wedged on slow/unhealthy storage.
   private[migrator] val SignalDumpLockTimeoutMillis: Long = 5_000L
+
+  private val S3ASimpleCredentialsProvider =
+    "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider"
+
+  private val S3ATemporaryCredentialsProvider =
+    "org.apache.hadoop.fs.s3a.TemporaryAWSCredentialsProvider"
+
+  private val GcsServiceAccountJsonKeyfileAuthType = "SERVICE_ACCOUNT_JSON_KEYFILE"
 
   // Sanity ceiling for values read from filenames during seed. Any field at or above this
   // threshold is treated as hostile / corrupted: ignoring it keeps a single planted file from

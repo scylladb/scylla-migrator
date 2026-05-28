@@ -32,7 +32,10 @@ object Migrator {
     log.info(s"ScyllaDB Migrator ${BuildInfo.version}")
 
     val migratorConfig =
-      MigratorConfig.loadFrom(spark.conf.get("spark.scylla.config"))
+      MigratorConfig.loadFrom(
+        spark.conf.get("spark.scylla.config"),
+        spark.sparkContext.hadoopConfiguration
+      )
 
     log.info(s"Loaded config:\n${migratorConfig.renderRedacted}")
 
