@@ -491,8 +491,28 @@ savepoints:
   #   # credentials:
   #   #   accessKey: ...
   #   #   secretKey: ...
+
   # Interval in which savepoints will be created
   intervalSeconds: 300
+
+  # When true, load the newest valid savepoint from the configured target before migrating.
+  # For filesystem savepoints, you can also keep using the existing workflow of running the latest
+  # savepoint YAML file directly.
+  resumeFromLatest: false
+
+  # Optional target-table savepoints for ScyllaDB/CQL targets:
+  # The metadata table is created automatically. The keyspace must already exist.
+  # The config_yaml column stores the unredacted savepoint YAML and may include credentials;
+  # restrict access to this table.
+  # target:
+  #   type: target-table
+  #   # Default: target.keyspace
+  #   keyspace: null
+  #   # Default metadata table name
+  #   table: scylla_migrator_savepoints
+  #   # Optional stable job id override. If omitted, the migrator derives one from the
+  #   # redacted source/target config identity.
+  #   jobId: null
 
   # Optional - enables file-level savepoint tracking for parquet migrations.
   # When enabled (default), the migrator tracks which parquet files have been fully migrated
@@ -534,10 +554,3 @@ savepoints:
 #   # hashColumns:
 #   #   - large_text_column
 #   #   - blob_column
-#   # Optional - numeric cross-type comparison policy.
-#   # Lenient (default): Int==Long==BigInt==BigDecimal(scale<=0) treated as equal;
-#   #   Float/Double normalized to BigDecimal within floatingPointTolerance.
-#   # DetectWiden: same as Lenient, but flags Float->Double widening that loses bits
-#   #   (e.g. Float(0.1f) vs Double(0.1)) as NumericTypeMismatch.
-#   # StrictType: any Float vs Double pair flagged regardless of value.
-#   # numericTypePolicy: Lenient

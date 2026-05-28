@@ -7,6 +7,7 @@ import com.scylladb.migrator.config.{
   SourceSettings,
   TargetSettings
 }
+import com.scylladb.migrator.{ Migrator, SparkUtils }
 import org.apache.spark.sql.SparkSession
 
 import java.nio.file.Files
@@ -69,6 +70,69 @@ class MySQLSavepointsTest extends munit.FunSuite {
       manager.foreach(_.close())
       assertEquals(manager, None)
       assert(!Files.exists(savepointsDir), "savepoints directory should not be created for MySQL")
+    } finally {
+      if (Files.exists(savepointsDir))
+        Files
+          .walk(savepointsDir)
+          .sorted(java.util.Comparator.reverseOrder())
+          .forEach(Files.delete)
+      Files.deleteIfExists(tempDir)
+    }
+  }
+
+  test("resumeFromLatest is ignored for MySQL because the source has no savepoint support") {
+    val tempDir = Files.createTempDirectory("mysql-resume-savepoints-test")
+    val savepointsDir = tempDir.resolve("savepoints")
+
+    try {
+      val config = MigratorConfig(
+        source = SourceSettings.MySQL(
+          host                 = "mysql.example.com",
+          port                 = 3306,
+          database             = "mydb",
+          table                = "users",
+          credentials          = Credentials("mysql-user", "mysql-secret"),
+          primaryKey           = None,
+          partitionColumn      = None,
+          numPartitions        = None,
+          lowerBound           = None,
+          upperBound           = None,
+          zeroDateTimeBehavior = SourceSettings.MySQL.ZeroDateTimeBehavior.Exception,
+          fetchSize            = SourceSettings.MySQL.DefaultFetchSize,
+          where                = None,
+          connectionProperties = None
+        ),
+        target = TargetSettings.Scylla(
+          host                          = "scylla.example.com",
+          port                          = 9042,
+          localDC                       = Some("datacenter1"),
+          credentials                   = None,
+          sslOptions                    = None,
+          keyspace                      = "ks",
+          table                         = "users",
+          connections                   = Some(1),
+          stripTrailingZerosForDecimals = false,
+          writeTTLInS                   = None,
+          writeWritetimestampInuS       = None,
+          consistencyLevel              = "LOCAL_QUORUM"
+        ),
+        renames = None,
+        savepoints = Savepoints(
+          intervalSeconds  = 300,
+          path             = savepointsDir.toString,
+          resumeFromLatest = true
+        ),
+        skipTokenRanges  = None,
+        skipSegments     = None,
+        skipParquetFiles = None,
+        validation       = None
+      )
+
+      SparkUtils.withSparkSession() { implicit spark =>
+        val effectiveConfig = Migrator.resumeFromLatestIfRequested(config)
+        assertEquals(effectiveConfig, config)
+      }
+      assert(!Files.exists(savepointsDir), "resume lookup should not touch savepoints for MySQL")
     } finally {
       if (Files.exists(savepointsDir))
         Files
