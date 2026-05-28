@@ -3,10 +3,13 @@ package com.scylladb.migrator
 import com.scylladb.migrator.config.{
   DynamoDBEndpoint,
   MigratorConfig,
+  Savepoints,
+  SavepointsTarget,
   SourceSettings,
   TargetSettings
 }
 import com.scylladb.migrator.validation.RowComparisonFailure
+import org.apache.hadoop.conf.Configuration
 import org.apache.logging.log4j.Level
 import org.apache.logging.log4j.core.config.Configurator
 import org.apache.spark.sql.SparkSession
@@ -63,6 +66,22 @@ object SparkUtils {
     val session = spark.newSession()
     extraConfigs.foreach { case (key, value) => session.conf.set(key, value) }
     f(session)
+  }
+
+  /** Configure the shared local Spark session to route gs:// paths through fake-gcs-server. */
+  def configureLocalGcs(rootUrl: String = "http://localhost:4443"): Configuration = {
+    val hadoopConf = spark.sparkContext.hadoopConfiguration
+    hadoopConf.set("fs.gs.impl", "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem")
+    hadoopConf.set("fs.AbstractFileSystem.gs.impl", "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFS")
+    hadoopConf.set("fs.gs.storage.root.url", rootUrl)
+    hadoopConf.set("fs.gs.auth.type", "ACCESS_TOKEN_PROVIDER")
+    hadoopConf.set(
+      "fs.gs.auth.access.token.provider.impl",
+      "com.google.cloud.hadoop.util.testing.TestingAccessTokenProvider"
+    )
+    hadoopConf.set("fs.gs.project.id", "scylla-migrator-test")
+    hadoopConf.setBoolean("fs.gs.impl.disable.cache", true)
+    hadoopConf
   }
 
   /** Run a migration by loading the config, remapping for local execution, and running in-process.
@@ -189,8 +208,21 @@ object SparkUtils {
       case s: TargetSettings.DynamoDBS3Export =>
         s.copy(path = remapContainerPath(s.path))
     }
-    val newSavepoints = config.savepoints.copy(path = remapContainerPath(config.savepoints.path))
+    val newSavepoints = remapSavepoints(config.savepoints)
     config.copy(source = newSource, target = newTarget, savepoints = newSavepoints)
+  }
+
+  private def remapSavepoints(savepoints: Savepoints): Savepoints = {
+    val remappedTarget = savepoints.target.map {
+      case SavepointsTarget.Filesystem(path) =>
+        SavepointsTarget.Filesystem(remapContainerPath(path))
+      case other => other
+    }
+
+    savepoints.copy(
+      path   = remapContainerPath(savepoints.path),
+      target = remappedTarget
+    )
   }
 
   private def remapEndpoint(e: DynamoDBEndpoint): DynamoDBEndpoint =

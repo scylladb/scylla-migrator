@@ -4,6 +4,43 @@ import com.datastax.spark.connector.rdd.partitioner.dht.{ BigIntToken, LongToken
 import io.circe.yaml
 
 class MigratorConfigTest extends munit.FunSuite {
+  private def parseConfig(config: String): MigratorConfig =
+    yaml.parser
+      .parse(config)
+      .flatMap(_.as[MigratorConfig])
+      .fold(error => fail(s"Expected config to parse, got: ${error}"), identity)
+
+  private def parseConfigFailure(config: String): Throwable =
+    yaml.parser
+      .parse(config)
+      .flatMap(_.as[MigratorConfig])
+      .fold(identity, parsed => fail(s"Expected config parsing to fail, got: ${parsed.render}"))
+
+  private val parquetSource: String =
+    """source:
+      |  type: parquet
+      |  path: s3a://source-bucket/input
+      |""".stripMargin
+
+  private val scyllaTarget: String =
+    """target:
+      |  type: scylla
+      |  host: localhost
+      |  port: 9042
+      |  keyspace: ks
+      |  table: tbl
+      |  stripTrailingZerosForDecimals: false
+      |  consistencyLevel: LOCAL_QUORUM
+      |""".stripMargin
+
+  private val parquetTarget: String =
+    """target:
+      |  type: parquet
+      |  path: /tmp/output
+      |""".stripMargin
+
+  private def parquetConfig(target: String, savepoints: String): String =
+    s"""${parquetSource}${target}${savepoints}"""
 
   test("full MigratorConfig with Alternator types round-trips through YAML") {
     val config = MigratorConfig(
@@ -51,6 +88,166 @@ class MigratorConfigTest extends munit.FunSuite {
     assertEquals(roundTripped.target, config.target)
     assertEquals(roundTripped.renames, config.renames)
     assertEquals(roundTripped.savepoints, config.savepoints)
+  }
+
+  test("savepoints path preserves Hadoop URI storage path") {
+    val config = parseConfig(
+      parquetConfig(
+        scyllaTarget,
+        """savepoints:
+          |  intervalSeconds: 300
+          |  path: gs://savepoint-bucket/jobs/with spaces
+          |""".stripMargin
+      )
+    )
+
+    assertEquals(config.savepoints.path, "gs://savepoint-bucket/jobs/with spaces")
+    assertEquals(config.savepoints.storagePath, "gs://savepoint-bucket/jobs/with spaces")
+    assertEquals(
+      config.savepoints.effectiveTarget,
+      SavepointsTarget.Filesystem("gs://savepoint-bucket/jobs/with spaces")
+    )
+  }
+
+  Seq(
+    "gs://savepoint-bucket/jobs",
+    "gcp://savepoint-bucket/jobs",
+    "s3://savepoint-bucket/jobs",
+    "s3a://savepoint-bucket/jobs"
+  )
+    .foreach { remotePath =>
+      test(s"savepoints target filesystem rejects Hadoop URI storage path ${remotePath}") {
+        val error = parseConfigFailure(
+          parquetConfig(
+            scyllaTarget,
+            s"""savepoints:
+               |  intervalSeconds: 300
+               |  target:
+               |    type: filesystem
+               |    path: ${remotePath}
+               |""".stripMargin
+          )
+        )
+
+        assert(
+          error.getMessage.contains("filesystem") &&
+            error.getMessage.contains("local filesystem paths"),
+          s"Expected filesystem URI validation error, got: ${error.getMessage}"
+        )
+      }
+    }
+
+  test("savepoints target s3 builds a Hadoop s3a storage path") {
+    val config = parseConfig(
+      parquetConfig(
+        scyllaTarget,
+        """savepoints:
+          |  intervalSeconds: 120
+          |  target:
+          |    type: s3
+          |    bucket: savepoint-bucket
+          |    prefix: scylla-migrator/job-a
+          |""".stripMargin
+      )
+    )
+
+    assertEquals(config.savepoints.path, "s3a://savepoint-bucket/scylla-migrator/job-a")
+    assertEquals(config.savepoints.storagePath, "s3a://savepoint-bucket/scylla-migrator/job-a")
+    assertEquals(
+      config.savepoints.effectiveTarget,
+      SavepointsTarget.S3("savepoint-bucket", Some("scylla-migrator/job-a"))
+    )
+  }
+
+  test("savepoints target gcs builds a Hadoop gs storage path") {
+    val config = parseConfig(
+      parquetConfig(
+        scyllaTarget,
+        """savepoints:
+          |  intervalSeconds: 120
+          |  target:
+          |    type: gcs
+          |    bucket: savepoint-bucket
+          |    prefix: scylla-migrator/job-a
+          |    projectId: migrator-project
+          |    credentials:
+          |      serviceAccountJsonKeyfile: /etc/gcp/key.json
+          |""".stripMargin
+      )
+    )
+
+    assertEquals(config.savepoints.path, "gs://savepoint-bucket/scylla-migrator/job-a")
+    assertEquals(config.savepoints.storagePath, "gs://savepoint-bucket/scylla-migrator/job-a")
+    assertEquals(
+      config.savepoints.effectiveTarget,
+      SavepointsTarget.GCS(
+        "savepoint-bucket",
+        Some("scylla-migrator/job-a"),
+        Some("migrator-project"),
+        Some(SavepointsTarget.GCSCredentials("/etc/gcp/key.json"))
+      )
+    )
+  }
+
+  test("savepoints target table is rejected until a table-backed writer exists") {
+    val error = parseConfigFailure(
+      parquetConfig(
+        scyllaTarget,
+        """savepoints:
+          |  intervalSeconds: 300
+          |  target:
+          |    type: target-table
+          |    keyspace: ops
+          |    table: migrator_savepoints
+          |""".stripMargin
+      )
+    )
+
+    assert(
+      error.getMessage.contains("target-table") &&
+        error.getMessage.contains("not supported"),
+      s"Expected unsupported target-table validation error, got: ${error.getMessage}"
+    )
+  }
+
+  test("savepoints target table is rejected before migration-target validation") {
+    val error = parseConfigFailure(
+      parquetConfig(
+        parquetTarget,
+        """savepoints:
+          |  intervalSeconds: 300
+          |  target:
+          |    type: target-table
+          |    table: migrator_savepoints
+          |""".stripMargin
+      )
+    )
+
+    assert(
+      error.getMessage.contains("target-table") &&
+        error.getMessage.contains("not supported"),
+      s"Expected unsupported target-table validation error, got: ${error.getMessage}"
+    )
+  }
+
+  test("savepoints path and target are mutually exclusive") {
+    val error = parseConfigFailure(
+      parquetConfig(
+        scyllaTarget,
+        """savepoints:
+          |  intervalSeconds: 300
+          |  path: /tmp/savepoints
+          |  target:
+          |    type: filesystem
+          |    path: /tmp/target-savepoints
+          |""".stripMargin
+      )
+    )
+
+    assert(
+      error.getMessage.contains("only one of savepoints.path or savepoints.target"),
+      s"Expected path/target validation error, got: ${error.getMessage}"
+    )
   }
 
   test("alternator source with streamChanges true is rejected") {

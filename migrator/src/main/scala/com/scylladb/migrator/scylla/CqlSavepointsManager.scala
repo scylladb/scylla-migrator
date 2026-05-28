@@ -5,13 +5,18 @@ import com.datastax.spark.connector.rdd.partitioner.dht.Token
 import com.datastax.spark.connector.writer.TokenRangeAccumulator
 import com.scylladb.migrator.SavepointsManager
 import com.scylladb.migrator.config.MigratorConfig
+import org.apache.hadoop.conf.Configuration
 
 import scala.util.control.NonFatal
 
 /** Manage CQL-based migrations by tracking the migrated token ranges.
   */
-class CqlSavepointsManager(migratorConfig: MigratorConfig, val accumulator: TokenRangeAccumulator)
-    extends SavepointsManager(migratorConfig) {
+class CqlSavepointsManager(
+  migratorConfig: MigratorConfig,
+  val accumulator: TokenRangeAccumulator,
+  hadoopConfiguration: Option[Configuration] = None,
+  redactionRegex: Option[String] = None
+) extends SavepointsManager(migratorConfig, hadoopConfiguration, redactionRegex) {
   def describeMigrationState(): String =
     s"Ranges added: ${tokenRanges(accumulator)}"
 

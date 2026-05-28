@@ -1,7 +1,7 @@
 package com.scylladb.migrator.alternator
 
 import com.scylladb.migrator.SavepointsManager
-import com.scylladb.migrator.config.MigratorConfig
+import com.scylladb.migrator.config.{ MigratorConfig, SparkSecretRedaction }
 import org.apache.hadoop.dynamodb.DynamoDBItemWritable
 import org.apache.hadoop.dynamodb.split.DynamoDBSplit
 import org.apache.hadoop.io.Text
@@ -19,8 +19,13 @@ class DynamoDbSavepointsManager(
   migratorConfig: MigratorConfig,
   segmentsAccumulator: IntSetAccumulator,
   sparkTaskEndListener: SparkListener,
-  spark: SparkContext
-) extends SavepointsManager(migratorConfig) {
+  spark: SparkContext,
+  redactionRegex: Option[String] = None
+) extends SavepointsManager(
+      migratorConfig,
+      Some(spark.hadoopConfiguration),
+      redactionRegex
+    ) {
 
   def describeMigrationState(): String =
     s"Segments to skip: ${segmentsAccumulator.value}"
@@ -44,7 +49,8 @@ object DynamoDbSavepointsManager {
   def apply(
     migratorConfig: MigratorConfig,
     sourceRDD: RDD[(Text, DynamoDBItemWritable)],
-    spark: SparkContext
+    spark: SparkContext,
+    redactionRegex: Option[String] = None
   ): DynamoDbSavepointsManager = {
     val segmentsAccumulator =
       IntSetAccumulator(migratorConfig.skipSegments.getOrElse(Set.empty))
@@ -67,7 +73,13 @@ object DynamoDbSavepointsManager {
       }
     }
     spark.addSparkListener(sparkTaskEndListener)
-    new DynamoDbSavepointsManager(migratorConfig, segmentsAccumulator, sparkTaskEndListener, spark)
+    new DynamoDbSavepointsManager(
+      migratorConfig,
+      segmentsAccumulator,
+      sparkTaskEndListener,
+      spark,
+      redactionRegex.orElse(SparkSecretRedaction.redactionRegex(spark))
+    )
   }
 
   /** @return

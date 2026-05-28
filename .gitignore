@@ -195,3 +195,7 @@ tests/docker/spark-master/
 tests/docker/scylla-source/
 tests/docker/scylla/
 tests/docker/parquet/
+tests/docker/gcs/*
+!tests/docker/gcs/
+!tests/docker/gcs/migrator-savepoints/
+!tests/docker/gcs/migrator-savepoints/.gitkeep

@@ -57,7 +57,10 @@ object Validator {
     log.info(s"ScyllaDB Migrator Validator ${BuildInfo.version}")
 
     val migratorConfig =
-      MigratorConfig.loadFrom(spark.conf.get("spark.scylla.config"))
+      MigratorConfig.loadFrom(
+        spark.conf.get("spark.scylla.config"),
+        spark.sparkContext.hadoopConfiguration
+      )
 
     log.info(loadedConfigLogMessage(migratorConfig))
 
