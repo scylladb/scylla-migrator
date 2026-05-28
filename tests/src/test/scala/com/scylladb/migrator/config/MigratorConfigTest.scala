@@ -244,6 +244,18 @@ class MigratorConfigTest extends munit.FunSuite {
     assertNotEquals(SavepointStore.targetJobId(differentSource), jobId)
   }
 
+  test("derived target savepoint job id distinguishes Cassandra where filters") {
+    val activeTenant =
+      cassandraToScyllaConfig(where = Some("tenant_id = 'active'"))
+    val archivedTenant =
+      cassandraToScyllaConfig(where = Some("tenant_id = 'archived'"))
+
+    assertNotEquals(
+      SavepointStore.targetJobId(activeTenant),
+      SavepointStore.targetJobId(archivedTenant)
+    )
+  }
+
   test("full MigratorConfig with Alternator types round-trips through YAML") {
     val config = MigratorConfig(
       source = SourceSettings.Alternator(
@@ -924,6 +936,48 @@ class MigratorConfigTest extends munit.FunSuite {
         sslOptions                    = None,
         keyspace                      = "ks",
         table                         = targetTable,
+        connections                   = None,
+        stripTrailingZerosForDecimals = false,
+        writeTTLInS                   = None,
+        writeWritetimestampInuS       = None,
+        consistencyLevel              = "LOCAL_QUORUM"
+      ),
+      renames = None,
+      savepoints = Savepoints(
+        intervalSeconds = 300,
+        target          = Some(SavepointTarget.TargetTable())
+      ),
+      skipTokenRanges  = None,
+      skipSegments     = None,
+      skipParquetFiles = None,
+      validation       = None
+    )
+
+  private def cassandraToScyllaConfig(where: Option[String]): MigratorConfig =
+    MigratorConfig(
+      source = SourceSettings.Cassandra(
+        host               = "cassandra.example.com",
+        port               = 9042,
+        localDC            = Some("dc1"),
+        credentials        = None,
+        sslOptions         = None,
+        keyspace           = "source_ks",
+        table              = "source_tbl",
+        splitCount         = None,
+        connections        = None,
+        fetchSize          = 1000,
+        preserveTimestamps = false,
+        where              = where,
+        consistencyLevel   = "LOCAL_QUORUM"
+      ),
+      target = TargetSettings.Scylla(
+        host                          = "scylla.example.com",
+        port                          = 9042,
+        localDC                       = Some("dc1"),
+        credentials                   = None,
+        sslOptions                    = None,
+        keyspace                      = "ks",
+        table                         = "tbl",
         connections                   = None,
         stripTrailingZerosForDecimals = false,
         writeTTLInS                   = None,
