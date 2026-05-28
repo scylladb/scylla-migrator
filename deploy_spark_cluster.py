@@ -86,6 +86,16 @@ variable "public_subnet_cidr" {
   type = string
 }
 
+variable "existing_vpc_id" {
+  type    = string
+  default = ""
+}
+
+variable "existing_subnet_id" {
+  type    = string
+  default = ""
+}
+
 variable "allowed_ssh_cidr" {
   type = string
 }
@@ -110,6 +120,12 @@ variable "owner_tag" {
 
 data "aws_availability_zones" "available" {
   state = "available"
+}
+
+locals {
+  use_existing_network = var.existing_vpc_id != ""
+  vpc_id               = local.use_existing_network ? var.existing_vpc_id : aws_vpc.spark[0].id
+  subnet_id            = local.use_existing_network ? var.existing_subnet_id : aws_subnet.public[0].id
 }
 
 data "aws_ami" "ubuntu_master" {
@@ -172,6 +188,7 @@ resource "aws_key_pair" "spark" {
 }
 
 resource "aws_vpc" "spark" {
+  count                = local.use_existing_network ? 0 : 1
   cidr_block           = var.vpc_cidr
   enable_dns_hostnames = true
   enable_dns_support   = true
@@ -182,7 +199,8 @@ resource "aws_vpc" "spark" {
 }
 
 resource "aws_internet_gateway" "spark" {
-  vpc_id = aws_vpc.spark.id
+  count  = local.use_existing_network ? 0 : 1
+  vpc_id = aws_vpc.spark[0].id
 
   tags = {
     Name = "${var.name_prefix}-igw"
@@ -190,7 +208,8 @@ resource "aws_internet_gateway" "spark" {
 }
 
 resource "aws_subnet" "public" {
-  vpc_id                  = aws_vpc.spark.id
+  count                   = local.use_existing_network ? 0 : 1
+  vpc_id                  = aws_vpc.spark[0].id
   cidr_block              = var.public_subnet_cidr
   availability_zone       = data.aws_availability_zones.available.names[0]
   map_public_ip_on_launch = true
@@ -201,11 +220,12 @@ resource "aws_subnet" "public" {
 }
 
 resource "aws_route_table" "public" {
-  vpc_id = aws_vpc.spark.id
+  count  = local.use_existing_network ? 0 : 1
+  vpc_id = aws_vpc.spark[0].id
 
   route {
     cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.spark.id
+    gateway_id = aws_internet_gateway.spark[0].id
   }
 
   tags = {
@@ -214,14 +234,15 @@ resource "aws_route_table" "public" {
 }
 
 resource "aws_route_table_association" "public" {
-  subnet_id      = aws_subnet.public.id
-  route_table_id = aws_route_table.public.id
+  count          = local.use_existing_network ? 0 : 1
+  subnet_id      = aws_subnet.public[0].id
+  route_table_id = aws_route_table.public[0].id
 }
 
 resource "aws_security_group" "spark" {
   name        = "${var.name_prefix}-sg"
   description = "Spark cluster access for ScyllaDB Migrator"
-  vpc_id      = aws_vpc.spark.id
+  vpc_id      = local.vpc_id
 
   ingress {
     description = "SSH"
@@ -279,7 +300,7 @@ resource "aws_security_group" "spark" {
 resource "aws_instance" "spark_master" {
   ami                         = data.aws_ami.ubuntu_master.id
   instance_type               = var.master_instance_type
-  subnet_id                   = aws_subnet.public.id
+  subnet_id                   = local.subnet_id
   vpc_security_group_ids      = [aws_security_group.spark.id]
   key_name                    = aws_key_pair.spark.key_name
   associate_public_ip_address = true
@@ -307,7 +328,7 @@ resource "aws_instance" "spark_worker" {
   count                       = var.worker_count
   ami                         = data.aws_ami.ubuntu_worker.id
   instance_type               = var.worker_instance_type
-  subnet_id                   = aws_subnet.public.id
+  subnet_id                   = local.subnet_id
   vpc_security_group_ids      = [aws_security_group.spark.id]
   key_name                    = aws_key_pair.spark.key_name
   associate_public_ip_address = true
@@ -336,11 +357,11 @@ output "region" {
 }
 
 output "vpc_id" {
-  value = aws_vpc.spark.id
+  value = local.vpc_id
 }
 
 output "public_subnet_id" {
-  value = aws_subnet.public.id
+  value = local.subnet_id
 }
 
 output "security_group_id" {
@@ -701,6 +722,8 @@ def write_terraform_files(args: argparse.Namespace, state_dir: Path) -> None:
         "worker_ami_architecture": infer_aws_architecture(args.worker_instance_type),
         "vpc_cidr": args.vpc_cidr,
         "public_subnet_cidr": args.public_subnet_cidr,
+        "existing_vpc_id": args.vpc_id or "",
+        "existing_subnet_id": args.subnet_id or "",
         "allowed_ssh_cidr": args.allowed_ssh_cidr,
         "allowed_web_cidr": args.allowed_web_cidr,
         "root_volume_size_gb": args.root_volume_size_gb,
@@ -947,6 +970,8 @@ def save_metadata(
         "worker_instance_type": args.worker_instance_type,
         "workers": args.workers,
         "owner_tag": args.owner_tag or "",
+        "vpc_id": args.vpc_id or "",
+        "subnet_id": args.subnet_id or "",
         "migration_type": args.migration_type,
         "config_file": str(resolve_path(args.config_file)) if args.config_file else "",
         "ssh_private_key": str(private_key),
@@ -987,10 +1012,16 @@ def validate_access_cidrs(args: argparse.Namespace) -> None:
         )
 
 
+def validate_network_args(args: argparse.Namespace) -> None:
+    if bool(args.vpc_id) != bool(args.subnet_id):
+        raise SystemExit("--vpc-id and --subnet-id must be provided together.")
+
+
 def handle_deploy(args: argparse.Namespace) -> None:
     if args.cloud_provider != "aws":
         raise SystemExit("Only AWS is currently supported")
     validate_access_cidrs(args)
+    validate_network_args(args)
 
     state_dir = resolve_state_dir(args.state_dir)
     private_key = resolve_path(args.ssh_private_key)
@@ -1236,6 +1267,22 @@ def build_parser() -> argparse.ArgumentParser:
     deploy.add_argument("--workers", type=positive_int, default=1)
     deploy.add_argument("--vpc-cidr", default="10.42.0.0/16")
     deploy.add_argument("--public-subnet-cidr", default="10.42.1.0/24")
+    deploy.add_argument(
+        "--vpc-id",
+        default="",
+        help=(
+            "Existing AWS VPC ID to use instead of creating a new VPC. "
+            "Must be provided together with --subnet-id."
+        ),
+    )
+    deploy.add_argument(
+        "--subnet-id",
+        default="",
+        help=(
+            "Existing subnet ID for EC2 instances when --vpc-id is set. "
+            "The subnet must have outbound internet access for package downloads."
+        ),
+    )
     deploy.add_argument(
         "--allowed-ssh-cidr",
         type=ipv4_cidr,

@@ -38,6 +38,8 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(result.output, "--allowed-ssh-cidr")
     assertOutputContains(result.output, "--allowed-web-cidr")
     assertOutputContains(result.output, "--allow-public-access")
+    assertOutputContains(result.output, "--vpc-id")
+    assertOutputContains(result.output, "--subnet-id")
     assertOutputContains(result.output, "--owner-tag")
     assertOutputContains(result.output, "--insecure-ssh")
   }
@@ -94,6 +96,24 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
 
     assertNotEquals(result.exitCode, 0, result.output)
     assertOutputContains(result.output, "must be an IPv4 CIDR")
+  }
+
+  test("deploy requires existing VPC and subnet IDs together") {
+    val result = runScript(
+      "deploy",
+      "--skip-ansible",
+      "--allowed-ssh-cidr",
+      "203.0.113.10/32",
+      "--allowed-web-cidr",
+      "203.0.113.10/32",
+      "--vpc-id",
+      "vpc-0123456789abcdef0",
+      "--ssh-private-key",
+      missingPrivateKey.toString
+    )
+
+    assertNotEquals(result.exitCode, 0, result.output)
+    assertOutputContains(result.output, "--vpc-id and --subnet-id must be provided together")
   }
 
   test("allow-public-access gates the public CIDR guard") {
@@ -199,6 +219,16 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(deployScript, "sudo systemctl restart spark-worker")
     assert(!deployScript.contains("./start-spark.sh"), deployScript)
     assert(!deployScript.contains("./start-slave.sh"), deployScript)
+  }
+
+  test("Terraform supports deploying into an existing VPC and subnet") {
+    val deployScript = Files.readString(script)
+
+    assertOutputContains(deployScript, "existing_vpc_id")
+    assertOutputContains(deployScript, "existing_subnet_id")
+    assertOutputContains(deployScript, "use_existing_network")
+    assertOutputContains(deployScript, "local.vpc_id")
+    assertOutputContains(deployScript, "local.subnet_id")
   }
 
   private def runScript(args: String*): CommandResult =

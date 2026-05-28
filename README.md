@@ -91,6 +91,23 @@ The deployment creates an AWS key pair from the local public key. The EC2 instan
 
    The default master instance type is `x2iedn.2xlarge`. The default worker instance type is `i8g.4xlarge`. During Ansible configuration, the role derives Spark worker cores, worker memory, executor cores, executor memory, and local directories from the instance hardware. Spark master, history server, and worker processes are managed by systemd.
 
+   To deploy into an existing VPC, provide both the VPC ID and a subnet ID:
+
+   ```bash
+   ./deploy_spark_cluster.py deploy \
+     --region us-east-1 \
+     --vpc-id vpc-0123456789abcdef0 \
+     --subnet-id subnet-0123456789abcdef0 \
+     --workers 3 \
+     --migration-type alternator \
+     --config-file config.dynamodb.yml \
+     --ssh-private-key ~/.ssh/id_rsa \
+     --allowed-ssh-cidr "$MY_CIDR" \
+     --allowed-web-cidr "$MY_CIDR"
+   ```
+
+   The existing subnet must have outbound internet access so Ansible can download packages, Spark, AWS CLI, and the Migrator assembly. The script still creates a security group in the provided VPC.
+
 4. Inspect the created infrastructure and Spark endpoints:
 
    ```bash
@@ -238,6 +255,8 @@ Networking and infrastructure arguments:
 
 - `--vpc-cidr`: VPC CIDR. Defaults to `10.42.0.0/16`.
 - `--public-subnet-cidr`: Public subnet CIDR. Defaults to `10.42.1.0/24`.
+- `--vpc-id`: Existing AWS VPC ID to use instead of creating a new VPC. Must be provided with `--subnet-id`.
+- `--subnet-id`: Existing subnet ID for EC2 instances when `--vpc-id` is set. The subnet must have outbound internet access.
 - `--allow-public-access`: Allow `0.0.0.0/0` for SSH or Spark UI access when explicitly requested.
 - `--root-volume-size-gb`: Root EBS volume size for each EC2 instance. Defaults to `100`.
 - `--iam-instance-profile`: Optional existing IAM instance profile to attach to the EC2 instances.
