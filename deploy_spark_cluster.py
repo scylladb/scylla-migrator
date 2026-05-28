@@ -789,20 +789,13 @@ def start_spark(
     master_public_ip = outputs["master"]["public_ip"]
     ssh_command(
         master_public_ip,
-        f"cd {shlex.quote(REMOTE_MIGRATOR_DIR)} && ./start-spark.sh",
+        "sudo systemctl restart spark-master spark-history-server",
         private_key=private_key,
         known_hosts=known_hosts,
         insecure=insecure,
     )
 
-    for worker in outputs["workers"]:
-        ssh_command(
-            worker["public_ip"],
-            "cd /home/ubuntu && ./start-slave.sh",
-            private_key=private_key,
-            known_hosts=known_hosts,
-            insecure=insecure,
-        )
+    start_workers(outputs, private_key, known_hosts, insecure)
 
 
 def spark_master_is_reachable(
@@ -885,7 +878,7 @@ def start_workers(
     for worker in outputs["workers"]:
         ssh_command(
             worker["public_ip"],
-            "cd /home/ubuntu && ./start-slave.sh",
+            "sudo systemctl restart spark-worker",
             private_key=private_key,
             known_hosts=known_hosts,
             insecure=insecure,
@@ -1184,6 +1177,17 @@ def handle_redeploy(args: argparse.Namespace) -> None:
         migration_type=migration_type,
     )
 
+    outputs = metadata.get("terraform_outputs")
+    if args.skip_start:
+        return
+    if not outputs:
+        print("Skipping Spark restart because Terraform outputs were not found in metadata.")
+        return
+
+    start_spark(outputs, private_key, known_hosts, insecure)
+    wait_for_spark_master(outputs, private_key, known_hosts, insecure)
+    wait_for_spark_workers(outputs, private_key, known_hosts, insecure)
+
 
 def handle_destroy(args: argparse.Namespace) -> None:
     state_dir = resolve_state_dir(args.state_dir)
@@ -1323,6 +1327,11 @@ def build_parser() -> argparse.ArgumentParser:
             "Optional Migrator config to upload after rerunning Ansible. "
             "Defaults to the config file saved in deployment metadata."
         ),
+    )
+    redeploy.add_argument(
+        "--skip-start",
+        action="store_true",
+        help="Do not restart Spark systemd services after rerunning Ansible.",
     )
     redeploy.add_argument(
         "--insecure-ssh",

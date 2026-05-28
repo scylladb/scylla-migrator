@@ -1,0 +1,16 @@
+[Unit]
+Description=Apache Spark standalone worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory={{ spark_home }}
+Restart=on-failure
+RestartSec=10
+ExecStart=/bin/bash -lc 'source {{ home_dir }}/spark-env && exec "$SPARK_HOME/bin/spark-class" org.apache.spark.deploy.worker.Worker "spark://$SPARK_MASTER_HOST:7077" --cores "$SPARK_WORKER_CORES" --memory "$SPARK_WORKER_MEMORY" --work-dir "$SPARK_WORKER_DIR"'
+
+[Install]
+WantedBy=multi-user.target

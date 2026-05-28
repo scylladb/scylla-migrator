@@ -133,6 +133,7 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(result.output, "--ssh-private-key")
     assertOutputContains(result.output, "--migration-type")
     assertOutputContains(result.output, "--config-file")
+    assertOutputContains(result.output, "--skip-start")
     assertOutputContains(result.output, "--insecure-ssh")
   }
 
@@ -174,6 +175,30 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(workerTemplate, "SPARK_WORKER_DIR={{ spark_worker_dir }}")
     assertOutputContains(workerTemplate, "--cores $SPARK_WORKER_CORES")
     assertOutputContains(workerTemplate, "--memory $SPARK_WORKER_MEMORY")
+  }
+
+  test("Ansible installs Spark systemd unit files") {
+    val playbook = Files.readString(repoRoot.resolve("ansible/scylla-migrator.yml"))
+    val masterUnit = Files.readString(repoRoot.resolve("ansible/templates/spark-master.service"))
+    val historyUnit =
+      Files.readString(repoRoot.resolve("ansible/templates/spark-history-server.service"))
+    val workerUnit = Files.readString(repoRoot.resolve("ansible/templates/spark-worker.service"))
+
+    assertOutputContains(playbook, "spark-master.service")
+    assertOutputContains(playbook, "spark-history-server.service")
+    assertOutputContains(playbook, "spark-worker.service")
+    assertOutputContains(masterUnit, "org.apache.spark.deploy.master.Master")
+    assertOutputContains(historyUnit, "org.apache.spark.deploy.history.HistoryServer")
+    assertOutputContains(workerUnit, "org.apache.spark.deploy.worker.Worker")
+  }
+
+  test("Deploy script controls Spark through systemd without script fallback") {
+    val deployScript = Files.readString(script)
+
+    assertOutputContains(deployScript, "sudo systemctl restart spark-master spark-history-server")
+    assertOutputContains(deployScript, "sudo systemctl restart spark-worker")
+    assert(!deployScript.contains("./start-spark.sh"), deployScript)
+    assert(!deployScript.contains("./start-slave.sh"), deployScript)
   }
 
   private def runScript(args: String*): CommandResult =

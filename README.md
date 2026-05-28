@@ -9,6 +9,8 @@ The ScyllaDB Migrator is a Spark application that migrates data to ScyllaDB from
 - [Deploying a Spark Cluster](#deploying-a-spark-cluster)
   - [Prerequisites](#prerequisites)
   - [Runbook](#runbook)
+  - [Derived Spark Settings](#derived-spark-settings)
+  - [Systemd Units](#systemd-units)
   - [Security Notes](#security-notes)
   - [Command Reference](#command-reference)
 - [Contributing](#contributing)
@@ -87,7 +89,7 @@ The deployment creates an AWS key pair from the local public key. The EC2 instan
      --allowed-web-cidr "$MY_CIDR"
    ```
 
-   The default master instance type is `x2iedn.2xlarge`. The default worker instance type is `i8g.4xlarge`. During Ansible configuration, the role derives Spark worker cores, worker memory, executor cores, executor memory, and local directories from the instance hardware.
+   The default master instance type is `x2iedn.2xlarge`. The default worker instance type is `i8g.4xlarge`. During Ansible configuration, the role derives Spark worker cores, worker memory, executor cores, executor memory, and local directories from the instance hardware. Spark master, history server, and worker processes are managed by systemd.
 
 4. Inspect the created infrastructure and Spark endpoints:
 
@@ -103,7 +105,7 @@ The deployment creates an AWS key pair from the local public key. The EC2 instan
    ./deploy_spark_cluster.py redeploy
    ```
 
-   This uses the generated inventory in `.deploy_spark_cluster/inventory.ini` and does not run Terraform. If you deployed with `--config-file`, `redeploy` uploads that config again after Ansible finishes so bundled sample configs do not overwrite it.
+   This uses the generated inventory in `.deploy_spark_cluster/inventory.ini` and does not run Terraform. If you deployed with `--config-file`, `redeploy` uploads that config again after Ansible finishes so bundled sample configs do not overwrite it. By default, `redeploy` restarts the Spark systemd services so unit and environment changes take effect.
 
    To upload or switch to a config explicitly during redeploy, pass it again:
 
@@ -119,7 +121,7 @@ The deployment creates an AWS key pair from the local public key. The EC2 instan
    ./deploy_spark_cluster.py run
    ```
 
-   The `run` command checks that the Spark master is reachable on port `7077` and that the expected workers are registered. If needed, the script starts Spark or restarts the workers before submitting the job.
+   The `run` command checks that the Spark master is reachable on port `7077` and that the expected workers are registered. If needed, the script restarts the Spark systemd services before submitting the job.
 
    To upload a revised config before running, pass `--config-file`:
 
@@ -146,6 +148,53 @@ The deployment creates an AWS key pair from the local public key. The EC2 instan
    ```bash
    ./deploy_spark_cluster.py destroy --yes --delete-state-dir
    ```
+
+### Derived Spark Settings
+
+During Ansible configuration, the role derives Spark settings from each node's gathered hardware facts and writes them into `spark-env`.
+
+On each worker node:
+
+- `SPARK_WORKER_CORES` is set to the detected vCPU count.
+- `SPARK_WORKER_MEMORY` is set to 85% of detected system memory, with a minimum of `1G`.
+- `SPARK_WORKER_DIR` is set under `/mnt/spark-work` when `/mnt` is mounted, otherwise `/tmp/spark-work`.
+- `SPARK_LOCAL_DIRS` is set under `/mnt/spark-local` when `/mnt` is mounted, otherwise `/tmp/spark-local`.
+
+Executor settings are derived from the worker sizing:
+
+- `EXECUTOR_CORES` is chosen as a divisor of worker cores, preferring values from `10` down to `5`, then falling back through `4`, `3`, `2`, and `1`.
+- `EXECUTOR_MEMORY` is based on the number of executors that fit per worker. The role divides worker memory by executor slots and uses 90% of that value, with a minimum of `1G`.
+
+The master submit environment uses the first worker as the reference for `EXECUTOR_CORES` and `EXECUTOR_MEMORY`, so mixed worker instance types are not recommended.
+
+### Systemd Units
+
+Ansible installs and enables Spark systemd units on the provisioned nodes. The deploy helper uses these units for the managed Spark lifecycle.
+
+On the Spark master node:
+
+- `spark-master.service`: Runs the Spark standalone master on port `7077` with the web UI on port `8080`.
+- `spark-history-server.service`: Runs the Spark history server using `/tmp/spark-events`.
+
+On each Spark worker node:
+
+- `spark-worker.service`: Runs a Spark standalone worker registered to `spark://<master-private-ip>:7077`, using the derived worker cores, worker memory, local directories, and work directory.
+
+Useful commands on a node:
+
+```bash
+sudo systemctl status spark-master
+sudo systemctl status spark-history-server
+sudo systemctl status spark-worker
+sudo journalctl -u spark-master -f
+sudo journalctl -u spark-history-server -f
+sudo journalctl -u spark-worker -f
+```
+
+The Spark environment consumed by these services is rendered to:
+
+- Master: `/home/ubuntu/scylla-migrator/spark-env`
+- Workers: `/home/ubuntu/spark-env`
 
 ### Security Notes
 
@@ -196,7 +245,7 @@ Networking and infrastructure arguments:
 Operational arguments:
 
 - `--skip-ansible`: Create infrastructure but skip Ansible configuration.
-- `--skip-start`: Configure the nodes but do not start Spark.
+- `--skip-start`: Configure the nodes but do not restart Spark systemd services.
 - `--insecure-ssh`: Disable SSH host key verification. Use only in trusted test environments.
 
 #### `show`
@@ -228,6 +277,7 @@ Arguments:
 - `--ssh-private-key`: SSH private key to use. Defaults to the key saved in deployment metadata.
 - `--migration-type`: Override the saved migration type. Allowed values are `cql` and `alternator`.
 - `--config-file`: Upload a local config file after rerunning Ansible. Defaults to the config file saved in deployment metadata.
+- `--skip-start`: Do not restart Spark systemd services after rerunning Ansible.
 - `--insecure-ssh`: Disable SSH host key verification. Use only in trusted test environments.
 
 #### `destroy`

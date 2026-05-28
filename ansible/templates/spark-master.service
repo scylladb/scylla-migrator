@@ -1,0 +1,16 @@
+[Unit]
+Description=Apache Spark standalone master
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory={{ spark_home }}
+Restart=on-failure
+RestartSec=10
+ExecStart=/bin/bash -lc 'source {{ home_dir }}/scylla-migrator/spark-env && exec "$SPARK_HOME/bin/spark-class" org.apache.spark.deploy.master.Master --host "$SPARK_MASTER_HOST" --port 7077 --webui-port 8080'
+
+[Install]
+WantedBy=multi-user.target

@@ -211,6 +211,22 @@
       shell: mv spark-env-worker-sample spark-env
       when: inventory_hostname in groups['worker']
 
+    - name: install spark worker systemd service
+      become: true
+      template:
+        src: spark-worker.service
+        dest: /etc/systemd/system/spark-worker.service
+        mode: 0644
+      when: inventory_hostname in groups['worker']
+
+    - name: enable spark worker service
+      become: true
+      ansible.builtin.systemd:
+        name: spark-worker
+        enabled: true
+        daemon_reload: true
+      when: inventory_hostname in groups['worker']
+
 - name: Install scylla migrator on master
   hosts: master
   vars:
@@ -261,6 +277,14 @@
     - name: rename spark-env
       shell: cd "{{ home_dir }}/scylla-migrator" && mv spark-env-master-sample spark-env
 
+    - name: create Spark event log directory
+      ansible.builtin.file:
+        path: /tmp/spark-events
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: "0775"
+
     - name: change file permissions - spark-env and config.dynamodb.yml
       ansible.builtin.file:
         mode: 0655
@@ -274,4 +298,24 @@
       get_url:
         url: https://github.com/scylladb/scylla-migrator/releases/latest/download/scylla-migrator-assembly.jar
         dest: "{{ home_dir }}/scylla-migrator/scylla-migrator-assembly.jar"
+
+    - name: install Spark master systemd services
+      become: true
+      template:
+        src: "{{ item }}"
+        dest: "/etc/systemd/system/{{ item }}"
+        mode: 0644
+      with_items:
+        - spark-master.service
+        - spark-history-server.service
+
+    - name: enable Spark master systemd services
+      become: true
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        daemon_reload: true
+      with_items:
+        - spark-master
+        - spark-history-server
 ...
