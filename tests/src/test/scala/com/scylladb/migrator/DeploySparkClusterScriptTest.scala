@@ -235,6 +235,13 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assert(!deployScript.contains("StrictHostKeyChecking=yes"), deployScript)
   }
 
+  test("repository Ansible config enables host key checking by default") {
+    val ansibleConfig = Files.readString(repoRoot.resolve("ansible/ansible.cfg"))
+
+    assertOutputContains(ansibleConfig, "host_key_checking = True")
+    assert(!ansibleConfig.contains("host_key_checking = False"), ansibleConfig)
+  }
+
   test("Deploy script pins repository Ansible config") {
     val deployScript = Files.readString(script)
 
@@ -259,7 +266,7 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(deployScript, "shlex.join(exc.cmd)")
   }
 
-  test("show and destroy check state directory and Terraform state before running Terraform") {
+  test("run, show, and destroy check state before running Terraform") {
     val deployScript = Files.readString(script)
 
     assertOutputContains(deployScript, "require_terraform_state(state_dir)")
@@ -322,6 +329,12 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
       playbook,
       "when: not spark_archive.stat.exists and not spark_installed.stat.exists"
     )
+  }
+
+  test("Ansible become tasks do not embed sudo commands") {
+    val playbook = Files.readString(repoRoot.resolve("ansible/scylla-migrator.yml"))
+
+    assert(!playbook.contains("sudo "), playbook)
   }
 
   test("Spark env templates apply derived worker and executor settings") {

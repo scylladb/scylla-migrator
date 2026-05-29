@@ -11,7 +11,7 @@
   tasks: 
     - name: add universe repository
       become: true
-      shell: sudo add-apt-repository universe -y
+      shell: add-apt-repository universe -y
 
     - name: Update apt-cache
       become: true
@@ -119,7 +119,7 @@
 
     - name: install awscli v2
       become: true
-      shell: "sudo {{ home_dir }}/aws/install --update"
+      shell: "{{ home_dir }}/aws/install --update"
 
     - name: Delete aws zip file
       ansible.builtin.file:
@@ -170,7 +170,7 @@
 
     - name: Move spark to opt/spark
       become: true
-      command: "sudo mv {{ home_dir }}/{{ spark_package }} {{ spark_home }}"
+      command: "mv {{ home_dir }}/{{ spark_package }} {{ spark_home }}"
       when: not spark_installed.stat.exists
 
     - name: Add JAVA_HOME to PATH

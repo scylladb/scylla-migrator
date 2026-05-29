@@ -1255,6 +1255,7 @@ def handle_show(args: argparse.Namespace) -> None:
 
 def handle_run(args: argparse.Namespace) -> None:
     state_dir = resolve_state_dir(args.state_dir)
+    require_terraform_state(state_dir)
     require_commands(["terraform", "ssh", "scp"])
     metadata = load_metadata(state_dir)
     outputs = terraform_output(state_dir)
