@@ -57,6 +57,7 @@
         - unzip
         - python3-pip
         - python3-venv
+        - curl
 
     - name: Discover JAVA_HOME
       shell: dirname $(dirname $(readlink -f $(which java)))
@@ -176,13 +177,38 @@
         path: "{{ spark_home }}/RELEASE"
       register: spark_installed
 
-    - name: Download spark (poll every 15 seconds)
-      get_url: 
-        url: "https://archive.apache.org/dist/spark/spark-{{ spark_version }}/{{ spark_package }}.tgz"
-        dest: "{{ home_dir }}/{{ spark_package }}.tgz"
-      async: 1800
-      poll: 15
-      when: not spark_archive.stat.exists and not spark_installed.stat.exists
+    - name: Check whether Spark archive is complete
+      shell: |
+        set -euo pipefail
+        tar -tzf "{{ home_dir }}/{{ spark_package }}.tgz" >/dev/null
+      args:
+        executable: /bin/bash
+      register: spark_archive_valid
+      changed_when: false
+      failed_when: false
+      when: spark_archive.stat.exists and not spark_installed.stat.exists
+
+    - name: Download spark archive with resume and progress
+      shell: |
+        set -euo pipefail
+        curl --fail --location --continue-at - --progress-bar \
+          --retry 10 --retry-delay 10 --retry-all-errors \
+          --output "{{ home_dir }}/{{ spark_package }}.tgz" \
+          "https://archive.apache.org/dist/spark/spark-{{ spark_version }}/{{ spark_package }}.tgz"
+      args:
+        executable: /bin/bash
+      async: 7200
+      poll: 30
+      when: not spark_installed.stat.exists and (not spark_archive.stat.exists or (spark_archive_valid.rc | default(1)) != 0)
+
+    - name: Verify Spark archive
+      shell: |
+        set -euo pipefail
+        tar -tzf "{{ home_dir }}/{{ spark_package }}.tgz" >/dev/null
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: not spark_installed.stat.exists
 
     - name: Extract spark
       ansible.builtin.unarchive:

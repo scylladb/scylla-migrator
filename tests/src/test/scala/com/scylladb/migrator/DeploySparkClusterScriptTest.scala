@@ -318,16 +318,20 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assert(!playbook.contains("with_items: \"{{ groups['spark'] }}\""), playbook)
   }
 
-  test("Ansible skips Spark download when archive or install already exists") {
+  test("Ansible validates Spark archive before skipping download") {
     val playbook = Files.readString(repoRoot.resolve("ansible/scylla-migrator.yml"))
 
     assertOutputContains(playbook, "Check whether Spark archive exists")
     assertOutputContains(playbook, "spark_archive")
+    assertOutputContains(playbook, "Check whether Spark archive is complete")
+    assertOutputContains(playbook, "spark_archive_valid")
     assertOutputContains(playbook, "Check whether Spark is already installed")
     assertOutputContains(playbook, "spark_installed")
+    assertOutputContains(playbook, "Download spark archive with resume and progress")
+    assertOutputContains(playbook, "--continue-at -")
     assertOutputContains(
       playbook,
-      "when: not spark_archive.stat.exists and not spark_installed.stat.exists"
+      "when: not spark_installed.stat.exists and (not spark_archive.stat.exists or (spark_archive_valid.rc | default(1)) != 0)"
     )
   }
 
