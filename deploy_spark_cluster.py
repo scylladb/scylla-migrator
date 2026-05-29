@@ -472,6 +472,16 @@ def run_command(
     )
 
 
+def print_command_error(exc: subprocess.CalledProcessError) -> None:
+    print(f"Command failed with exit code {exc.returncode}: {shlex.join(exc.cmd)}", file=sys.stderr)
+    if exc.stdout:
+        print("Command stdout:", file=sys.stderr)
+        print(exc.stdout, file=sys.stderr)
+    if exc.stderr:
+        print("Command stderr:", file=sys.stderr)
+        print(exc.stderr, file=sys.stderr)
+
+
 def terraform_output(state_dir: Path) -> dict[str, Any]:
     completed = run_command(
         ["terraform", "output", "-json"],
@@ -682,8 +692,7 @@ def upload_config_if_requested(
 ) -> None:
     if config_file is None:
         return
-    if not config_file.exists():
-        raise SystemExit(f"Config file does not exist: {config_file}")
+    validate_local_config_file(config_file)
 
     remote_name = migration_config_name(migration_type)
     destination = f"{REMOTE_MIGRATOR_DIR}/{remote_name}"
@@ -695,6 +704,15 @@ def upload_config_if_requested(
         known_hosts=known_hosts,
         insecure=insecure,
     )
+
+
+def validate_local_config_file(config_file: Path | None) -> None:
+    if config_file is None:
+        return
+    if not config_file.exists():
+        raise SystemExit(f"Config file does not exist: {config_file}")
+    if not config_file.is_file():
+        raise SystemExit(f"Config path is not a file: {config_file}")
 
 
 def ensure_remote_config_exists(
@@ -1129,6 +1147,9 @@ def handle_deploy(args: argparse.Namespace) -> None:
     validate_network_args(args)
 
     state_dir = resolve_state_dir(args.state_dir)
+    deploy_config_file = resolve_path(args.config_file)
+    validate_local_config_file(deploy_config_file)
+
     private_key = resolve_path(args.ssh_private_key)
     if private_key is None or not private_key.exists():
         raise SystemExit(f"SSH private key does not exist: {private_key}")
@@ -1162,10 +1183,6 @@ def handle_deploy(args: argparse.Namespace) -> None:
     run_ansible(inventory_path, private_key, known_hosts, args.insecure_ssh)
 
     deploy_metadata = load_metadata(state_dir)
-    deploy_config_file = config_file_from_args_or_metadata(
-        args.config_file,
-        deploy_metadata,
-    )
     upload_config_if_requested(
         deploy_config_file,
         migration_type=args.migration_type,
@@ -1546,6 +1563,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args.func(args)
     except subprocess.CalledProcessError as exc:
+        print_command_error(exc)
         return exc.returncode
     return 0
 

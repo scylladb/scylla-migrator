@@ -137,6 +137,28 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(result.output, "must be contained in --vpc-cidr (10.42.0.0/16)")
   }
 
+  test("deploy validates local config file before Terraform work") {
+    val missingConfig = repoRoot.resolve("target/deploy-script-test/missing.yaml")
+    Files.deleteIfExists(missingConfig)
+
+    val result = runScript(
+      "deploy",
+      "--skip-ansible",
+      "--allowed-ssh-cidr",
+      "203.0.113.10/32",
+      "--allowed-web-cidr",
+      "203.0.113.10/32",
+      "--config-file",
+      missingConfig.toString,
+      "--ssh-private-key",
+      missingPrivateKey.toString
+    )
+
+    assertNotEquals(result.exitCode, 0, result.output)
+    assertOutputContains(result.output, s"Config file does not exist: ${missingConfig}")
+    assert(!result.output.contains("SSH private key does not exist"), result.output)
+  }
+
   test("AWS architecture inference keeps x86 GPU families distinct from Graviton") {
     val result = runPython(
       "-c",
@@ -226,6 +248,15 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(deployScript, "Terraform stdout:")
     assertOutputContains(deployScript, "Terraform stderr:")
     assertOutputContains(deployScript, "raise SystemExit(exc.returncode)")
+  }
+
+  test("main reports captured subprocess output on command failures") {
+    val deployScript = Files.readString(script)
+
+    assertOutputContains(deployScript, "print_command_error(exc)")
+    assertOutputContains(deployScript, "Command stdout:")
+    assertOutputContains(deployScript, "Command stderr:")
+    assertOutputContains(deployScript, "shlex.join(exc.cmd)")
   }
 
   test("show and destroy check state directory and Terraform state before running Terraform") {
