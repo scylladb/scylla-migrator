@@ -131,28 +131,47 @@
         state: absent
         path: "{{ home_dir }}/aws"
 
+    - name: Check whether Spark archive exists
+      stat:
+        path: "{{ home_dir }}/{{ spark_package }}.tgz"
+      register: spark_archive
+
+    - name: Check whether Spark package is already extracted
+      stat:
+        path: "{{ home_dir }}/{{ spark_package }}"
+      register: spark_extracted
+
+    - name: Check whether Spark is already installed
+      stat:
+        path: "{{ spark_home }}/RELEASE"
+      register: spark_installed
+
     - name: Download spark (poll every 15 seconds)
       get_url: 
         url: "https://archive.apache.org/dist/spark/spark-{{ spark_version }}/{{ spark_package }}.tgz"
         dest: "{{ home_dir }}/{{ spark_package }}.tgz"
       async: 1800
       poll: 15
+      when: not spark_archive.stat.exists and not spark_installed.stat.exists
 
     - name: Extract spark
       ansible.builtin.unarchive:
         src: "{{ home_dir }}/{{ spark_package }}.tgz"
         dest: "{{ home_dir }}"
         remote_src: yes
+      when: not spark_extracted.stat.exists and not spark_installed.stat.exists
 
     - name: Empty spark home
       become: true
       ansible.builtin.file:
         state: absent
         path: "{{ spark_home }}"
+      when: not spark_installed.stat.exists
 
     - name: Move spark to opt/spark
       become: true
       command: "sudo mv {{ home_dir }}/{{ spark_package }} {{ spark_home }}"
+      when: not spark_installed.stat.exists
 
     - name: Add JAVA_HOME to PATH
       ansible.builtin.lineinfile:
@@ -189,7 +208,7 @@
         dest: "{{ spark_home }}/conf/slaves"
         state: present
         line:  "{{ hostvars[item].ansible_host }}"
-      with_items: "{{ groups['spark'] }}"
+      with_items: "{{ groups['worker'] }}"
 
     - name: copy worker start/stop convenience scripts
       copy:

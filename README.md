@@ -122,7 +122,7 @@ The deployment creates an AWS key pair from the local public key. The EC2 instan
    ./deploy_spark_cluster.py redeploy
    ```
 
-   This uses the generated inventory in `.deploy_spark_cluster/inventory.ini` and does not run Terraform. If you deployed with `--config-file`, `redeploy` uploads that config again after Ansible finishes so bundled sample configs do not overwrite it. By default, `redeploy` restarts the Spark systemd services so unit and environment changes take effect.
+   This uses the generated inventory in `.deploy_spark_cluster/inventory.ini` and does not run Terraform. If you deployed with `--config-file`, `redeploy` uploads that config again after Ansible finishes so bundled sample configs do not overwrite it. By default, `redeploy` stops the Spark systemd services before Ansible runs, then restarts them after Ansible finishes so unit, environment, and binary changes take effect cleanly.
 
    To upload or switch to a config explicitly during redeploy, pass it again:
 
@@ -289,14 +289,14 @@ Arguments:
 
 #### `redeploy`
 
-Reruns the Ansible playbook against the current nodes in the generated inventory. This is useful after changing files under `ansible/` and does not run Terraform. After Ansible completes, the command uploads the saved or explicitly supplied Migrator config file to the Spark master.
+Reruns the Ansible playbook against the current nodes in the generated inventory. This is useful after changing files under `ansible/` and does not run Terraform. By default, it stops Spark systemd services before Ansible runs, uploads the saved or explicitly supplied Migrator config file after Ansible completes, and then restarts Spark services.
 
 Arguments:
 
 - `--ssh-private-key`: SSH private key to use. Defaults to the key saved in deployment metadata.
 - `--migration-type`: Override the saved migration type. Allowed values are `cql` and `alternator`.
 - `--config-file`: Upload a local config file after rerunning Ansible. Defaults to the config file saved in deployment metadata.
-- `--skip-start`: Do not restart Spark systemd services after rerunning Ansible.
+- `--skip-start`: Do not stop or restart Spark systemd services around the Ansible run.
 - `--insecure-ssh`: Disable SSH host key verification. Use only in trusted test environments.
 
 #### `destroy`

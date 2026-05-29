@@ -116,6 +116,44 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(result.output, "--vpc-id and --subnet-id must be provided together")
   }
 
+  test("deploy requires generated subnet CIDR to be inside generated VPC CIDR") {
+    val result = runScript(
+      "deploy",
+      "--skip-ansible",
+      "--allowed-ssh-cidr",
+      "203.0.113.10/32",
+      "--allowed-web-cidr",
+      "203.0.113.10/32",
+      "--vpc-cidr",
+      "10.42.0.0/16",
+      "--public-subnet-cidr",
+      "10.43.1.0/24",
+      "--ssh-private-key",
+      missingPrivateKey.toString
+    )
+
+    assertNotEquals(result.exitCode, 0, result.output)
+    assertOutputContains(result.output, "--public-subnet-cidr (10.43.1.0/24)")
+    assertOutputContains(result.output, "must be contained in --vpc-cidr (10.42.0.0/16)")
+  }
+
+  test("AWS architecture inference keeps x86 GPU families distinct from Graviton") {
+    val result = runPython(
+      "-c",
+      s"""import importlib.util
+         |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
+         |module = importlib.util.module_from_spec(spec)
+         |spec.loader.exec_module(module)
+         |print(module.infer_aws_architecture("i8g.4xlarge"))
+         |print(module.infer_aws_architecture("g5.4xlarge"))
+         |print(module.infer_aws_architecture("g6.4xlarge"))
+         |""".stripMargin
+    )
+
+    assertEquals(result.exitCode, 0, result.output)
+    assertEquals(result.output.linesIterator.toList, List("arm64", "x86_64", "x86_64"))
+  }
+
   test("allow-public-access gates the public CIDR guard") {
     Files.deleteIfExists(missingPrivateKey)
 
@@ -143,6 +181,60 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(result.output, "--migration-type")
     assertOutputContains(result.output, "--validator")
     assertOutputContains(result.output, "--insecure-ssh")
+  }
+
+  test("insecure SSH mode is command-scoped and not persisted in metadata") {
+    val deployScript = Files.readString(script)
+
+    assert(!deployScript.contains("\"insecure_ssh\""), deployScript)
+    assert(!deployScript.contains("metadata.get(\"insecure_ssh\""), deployScript)
+  }
+
+  test("run performs a remote config presence preflight before submit") {
+    val deployScript = Files.readString(script)
+
+    assertOutputContains(deployScript, "ensure_remote_config_exists")
+    assertOutputContains(deployScript, "Required Migrator config was not found")
+    assertOutputContains(deployScript, "Pass --config-file to upload it before running")
+  }
+
+  test("deploy metadata and Terraform vars are written with restricted permissions") {
+    val deployScript = Files.readString(script)
+
+    assertOutputContains(deployScript, "path.chmod(0o600)")
+    assertOutputContains(deployScript, "state_dir.chmod(0o700)")
+    assertOutputContains(deployScript, "path.parent.chmod(0o700)")
+  }
+
+  test("Ansible SSH host key checking matches direct SSH behavior") {
+    val deployScript = Files.readString(script)
+
+    assertOutputContains(deployScript, "StrictHostKeyChecking=accept-new")
+    assert(!deployScript.contains("StrictHostKeyChecking=yes"), deployScript)
+  }
+
+  test("Deploy script pins repository Ansible config") {
+    val deployScript = Files.readString(script)
+
+    assertOutputContains(deployScript, "\"ANSIBLE_CONFIG\": str(ansible_dir / \"ansible.cfg\")")
+  }
+
+  test("destroy reports Terraform stdout and stderr on failure") {
+    val deployScript = Files.readString(script)
+
+    assertOutputContains(deployScript, "Terraform destroy failed.")
+    assertOutputContains(deployScript, "Terraform stdout:")
+    assertOutputContains(deployScript, "Terraform stderr:")
+    assertOutputContains(deployScript, "raise SystemExit(exc.returncode)")
+  }
+
+  test("show and destroy check state directory and Terraform state before running Terraform") {
+    val deployScript = Files.readString(script)
+
+    assertOutputContains(deployScript, "require_terraform_state(state_dir)")
+    assertOutputContains(deployScript, "State directory does not exist")
+    assertOutputContains(deployScript, "Terraform state file does not exist")
+    assertOutputContains(deployScript, "terraform.tfstate")
   }
 
   test("redeploy help documents inventory rerun and SSH safety options") {
@@ -181,6 +273,26 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(playbook, "spark_executor_memory")
   }
 
+  test("Ansible writes only worker hosts to Spark worker list") {
+    val playbook = Files.readString(repoRoot.resolve("ansible/scylla-migrator.yml"))
+
+    assertOutputContains(playbook, "with_items: \"{{ groups['worker'] }}\"")
+    assert(!playbook.contains("with_items: \"{{ groups['spark'] }}\""), playbook)
+  }
+
+  test("Ansible skips Spark download when archive or install already exists") {
+    val playbook = Files.readString(repoRoot.resolve("ansible/scylla-migrator.yml"))
+
+    assertOutputContains(playbook, "Check whether Spark archive exists")
+    assertOutputContains(playbook, "spark_archive")
+    assertOutputContains(playbook, "Check whether Spark is already installed")
+    assertOutputContains(playbook, "spark_installed")
+    assertOutputContains(
+      playbook,
+      "when: not spark_archive.stat.exists and not spark_installed.stat.exists"
+    )
+  }
+
   test("Spark env templates apply derived worker and executor settings") {
     val masterTemplate =
       Files.readString(repoRoot.resolve("ansible/templates/spark-env-master-sample"))
@@ -217,6 +329,13 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
 
     assertOutputContains(deployScript, "sudo systemctl restart spark-master spark-history-server")
     assertOutputContains(deployScript, "sudo systemctl restart spark-worker")
+    assertOutputContains(deployScript, "sudo systemctl stop spark-worker")
+    assertOutputContains(deployScript, "sudo systemctl stop spark-history-server spark-master")
+    assertOutputContains(deployScript, "stop_spark(outputs, private_key, known_hosts, insecure)")
+    assertOutputContains(
+      deployScript,
+      "run_ansible(inventory_path, private_key, known_hosts, insecure)"
+    )
     assert(!deployScript.contains("./start-spark.sh"), deployScript)
     assert(!deployScript.contains("./start-slave.sh"), deployScript)
   }

@@ -484,6 +484,7 @@ def terraform_output(state_dir: Path) -> dict[str, Any]:
 
 def write_json(path: Path, content: dict[str, Any]) -> None:
     path.write_text(json.dumps(content, indent=2, sort_keys=True) + "\n")
+    path.chmod(0o600)
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -494,9 +495,35 @@ def read_json(path: Path) -> dict[str, Any]:
 
 def infer_aws_architecture(instance_type: str) -> str:
     family = instance_type.split(".", 1)[0].lower()
-    if family == "a1":
-        return "arm64"
-    if family.endswith(("g", "gd", "gn")):
+    arm64_families = {
+        "a1",
+        "c6g",
+        "c6gd",
+        "c6gn",
+        "c7g",
+        "c7gd",
+        "c7gn",
+        "c8g",
+        "g5g",
+        "hpc7g",
+        "i4g",
+        "i8g",
+        "im4gn",
+        "is4gen",
+        "m6g",
+        "m6gd",
+        "m7g",
+        "m7gd",
+        "m8g",
+        "r6g",
+        "r6gd",
+        "r7g",
+        "r7gd",
+        "r8g",
+        "t4g",
+        "x2gd",
+    }
+    if family in arm64_families:
         return "arm64"
     return "x86_64"
 
@@ -504,7 +531,9 @@ def infer_aws_architecture(instance_type: str) -> str:
 def known_hosts_path(state_dir: Path) -> Path:
     path = state_dir / "known_hosts"
     path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.chmod(0o700)
     path.touch(exist_ok=True)
+    path.chmod(0o600)
     return path
 
 
@@ -668,6 +697,31 @@ def upload_config_if_requested(
     )
 
 
+def ensure_remote_config_exists(
+    *,
+    migration_type: str,
+    master_public_ip: str,
+    private_key: Path,
+    known_hosts: Path,
+    insecure: bool,
+) -> None:
+    remote_name = migration_config_name(migration_type)
+    remote_path = f"{REMOTE_MIGRATOR_DIR}/{remote_name}"
+    if ssh_command_succeeds(
+        master_public_ip,
+        f"test -f {shlex.quote(remote_path)}",
+        private_key=private_key,
+        known_hosts=known_hosts,
+        insecure=insecure,
+    ):
+        return
+
+    raise SystemExit(
+        f"Required Migrator config was not found on the Spark master: {remote_path}. "
+        "Pass --config-file to upload it before running."
+    )
+
+
 def config_file_from_args_or_metadata(
     config_file_arg: str | None,
     metadata: dict[str, Any],
@@ -698,6 +752,7 @@ def remember_config_file(
 
 def write_terraform_files(args: argparse.Namespace, state_dir: Path) -> None:
     state_dir.mkdir(parents=True, exist_ok=True)
+    state_dir.chmod(0o700)
     (state_dir / "main.tf").write_text(TERRAFORM_MAIN)
 
     public_key = resolve_path(args.ssh_public_key)
@@ -782,7 +837,7 @@ def run_ansible(
     else:
         host_key_checking = "True"
         ssh_common_args = (
-            f"-o StrictHostKeyChecking=yes -o UserKnownHostsFile={known_hosts}"
+            f"-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile={known_hosts}"
         )
 
     run_command(
@@ -799,7 +854,10 @@ def run_ansible(
             "scylla-migrator.yml",
         ],
         cwd=ansible_dir,
-        env={"ANSIBLE_HOST_KEY_CHECKING": host_key_checking},
+        env={
+            "ANSIBLE_CONFIG": str(ansible_dir / "ansible.cfg"),
+            "ANSIBLE_HOST_KEY_CHECKING": host_key_checking,
+        },
     )
 
 
@@ -819,6 +877,30 @@ def start_spark(
     )
 
     start_workers(outputs, private_key, known_hosts, insecure)
+
+
+def stop_spark(
+    outputs: dict[str, Any],
+    private_key: Path,
+    known_hosts: Path,
+    insecure: bool,
+) -> None:
+    for worker in outputs["workers"]:
+        ssh_command(
+            worker["public_ip"],
+            "sudo systemctl stop spark-worker",
+            private_key=private_key,
+            known_hosts=known_hosts,
+            insecure=insecure,
+        )
+
+    ssh_command(
+        outputs["master"]["public_ip"],
+        "sudo systemctl stop spark-history-server spark-master",
+        private_key=private_key,
+        known_hosts=known_hosts,
+        insecure=insecure,
+    )
 
 
 def spark_master_is_reachable(
@@ -976,7 +1058,6 @@ def save_metadata(
         "config_file": str(resolve_path(args.config_file)) if args.config_file else "",
         "ssh_private_key": str(private_key),
         "ssh_known_hosts": str(known_hosts_path(state_dir)),
-        "insecure_ssh": args.insecure_ssh,
         "state_dir": str(state_dir),
         "terraform_outputs": outputs,
     }
@@ -998,6 +1079,14 @@ def master_host_from_inventory(inventory_path: Path) -> str:
     raise SystemExit(f"Could not find spark_master ansible_host in {inventory_path}")
 
 
+def require_terraform_state(state_dir: Path) -> None:
+    if not state_dir.is_dir():
+        raise SystemExit(f"State directory does not exist: {state_dir}")
+    terraform_state = state_dir / "terraform.tfstate"
+    if not terraform_state.is_file():
+        raise SystemExit(f"Terraform state file does not exist: {terraform_state}")
+
+
 def validate_access_cidrs(args: argparse.Namespace) -> None:
     public_cidrs = {
         "--allowed-ssh-cidr": args.allowed_ssh_cidr,
@@ -1015,6 +1104,22 @@ def validate_access_cidrs(args: argparse.Namespace) -> None:
 def validate_network_args(args: argparse.Namespace) -> None:
     if bool(args.vpc_id) != bool(args.subnet_id):
         raise SystemExit("--vpc-id and --subnet-id must be provided together.")
+    if args.vpc_id and args.subnet_id:
+        return
+
+    try:
+        vpc_network = ipaddress.ip_network(args.vpc_cidr, strict=False)
+        subnet_network = ipaddress.ip_network(args.public_subnet_cidr, strict=False)
+    except ValueError as exc:
+        raise SystemExit(f"Invalid VPC or subnet CIDR: {exc}") from exc
+
+    if vpc_network.version != 4 or subnet_network.version != 4:
+        raise SystemExit("--vpc-cidr and --public-subnet-cidr must be IPv4 CIDRs.")
+    if not subnet_network.subnet_of(vpc_network):
+        raise SystemExit(
+            f"--public-subnet-cidr ({subnet_network}) must be contained in "
+            f"--vpc-cidr ({vpc_network})."
+        )
 
 
 def handle_deploy(args: argparse.Namespace) -> None:
@@ -1119,6 +1224,7 @@ def print_cluster_details(outputs: dict[str, Any], *, metadata: dict[str, Any]) 
 
 def handle_show(args: argparse.Namespace) -> None:
     state_dir = resolve_state_dir(args.state_dir)
+    require_terraform_state(state_dir)
     require_commands(["terraform"])
     metadata = load_metadata(state_dir)
     outputs = terraform_output(state_dir)
@@ -1140,7 +1246,7 @@ def handle_run(args: argparse.Namespace) -> None:
     if private_key is None or not private_key.exists():
         raise SystemExit("Could not find SSH private key. Pass --ssh-private-key.")
     known_hosts = resolve_path(metadata.get("ssh_known_hosts")) or known_hosts_path(state_dir)
-    insecure = args.insecure_ssh or bool(metadata.get("insecure_ssh", False))
+    insecure = args.insecure_ssh
 
     ensure_spark_running(outputs, private_key, known_hosts, insecure)
 
@@ -1159,6 +1265,13 @@ def handle_run(args: argparse.Namespace) -> None:
         metadata,
         config_file=run_config_file,
         migration_type=migration_type,
+    )
+    ensure_remote_config_exists(
+        migration_type=migration_type,
+        master_public_ip=outputs["master"]["public_ip"],
+        private_key=private_key,
+        known_hosts=known_hosts,
+        insecure=insecure,
     )
 
     submit_script = submit_script_name(migration_type, args.validator)
@@ -1188,9 +1301,15 @@ def handle_redeploy(args: argparse.Namespace) -> None:
         raise SystemExit("Could not find SSH private key. Pass --ssh-private-key.")
 
     known_hosts = resolve_path(metadata.get("ssh_known_hosts")) or known_hosts_path(state_dir)
-    insecure = args.insecure_ssh or bool(metadata.get("insecure_ssh", False))
+    insecure = args.insecure_ssh
     migration_type = args.migration_type or metadata.get("migration_type") or "cql"
     redeploy_config_file = config_file_from_args_or_metadata(args.config_file, metadata)
+    outputs = metadata.get("terraform_outputs")
+
+    if outputs and not args.skip_start:
+        stop_spark(outputs, private_key, known_hosts, insecure)
+    elif not outputs and not args.skip_start:
+        print("Skipping Spark stop because Terraform outputs were not found in metadata.")
 
     run_ansible(inventory_path, private_key, known_hosts, insecure)
     upload_config_if_requested(
@@ -1208,7 +1327,6 @@ def handle_redeploy(args: argparse.Namespace) -> None:
         migration_type=migration_type,
     )
 
-    outputs = metadata.get("terraform_outputs")
     if args.skip_start:
         return
     if not outputs:
@@ -1222,6 +1340,7 @@ def handle_redeploy(args: argparse.Namespace) -> None:
 
 def handle_destroy(args: argparse.Namespace) -> None:
     state_dir = resolve_state_dir(args.state_dir)
+    require_terraform_state(state_dir)
     require_commands(["terraform"])
 
     if not args.yes:
@@ -1229,7 +1348,21 @@ def handle_destroy(args: argparse.Namespace) -> None:
         if answer != "yes":
             raise SystemExit("Destroy cancelled.")
 
-    run_command(["terraform", "destroy", "-auto-approve"], cwd=state_dir)
+    try:
+        run_command(
+            ["terraform", "destroy", "-auto-approve"],
+            cwd=state_dir,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        print("Terraform destroy failed.", file=sys.stderr)
+        if exc.stdout:
+            print("Terraform stdout:", file=sys.stderr)
+            print(exc.stdout, file=sys.stderr)
+        if exc.stderr:
+            print("Terraform stderr:", file=sys.stderr)
+            print(exc.stderr, file=sys.stderr)
+        raise SystemExit(exc.returncode) from exc
 
     if args.delete_state_dir:
         shutil.rmtree(state_dir)
@@ -1378,7 +1511,7 @@ def build_parser() -> argparse.ArgumentParser:
     redeploy.add_argument(
         "--skip-start",
         action="store_true",
-        help="Do not restart Spark systemd services after rerunning Ansible.",
+        help="Do not stop or restart Spark systemd services around the Ansible run.",
     )
     redeploy.add_argument(
         "--insecure-ssh",
