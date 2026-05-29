@@ -1,7 +1,6 @@
 ##################################################################################################################
-# SLAVESIZE is used by the start-slave.sh script. By default, a Spark worker uses all the
-# resources of the machine it is started on. If you want to decrease the migration velocity,
-# you can set the maximum number of cores and memory that can be used by the worker.
+# The spark-worker systemd unit uses these values to bound the worker's CPU, memory, and
+# work directory according to the hardware detected by Ansible.
 ##################################################################################################################
 
 export JAVA_HOME={{ java_home }}
@@ -13,4 +12,3 @@ export SPARK_MASTER_HOST={{ hostvars["spark_master"]["ansible_facts"]["default_i
 export SPARK_WORKER_CORES={{ spark_worker_cores }}
 export SPARK_WORKER_MEMORY={{ spark_worker_memory }}
 export SPARK_WORKER_DIR={{ spark_worker_dir }}
-export SLAVESIZE="--cores $SPARK_WORKER_CORES --memory $SPARK_WORKER_MEMORY --work-dir $SPARK_WORKER_DIR"

@@ -1,6 +1,6 @@
 ---
 
-- name: Install spark on scylla-migrator servers
+- name: Install Spark on Scylla Migrator servers
   hosts: spark
   vars:
     home_dir: /home/ubuntu
@@ -36,7 +36,7 @@
       with_items: "{{ apt_source_file_stats.results }}"
       when: item.stat.exists
 
-    - name: add universe repository
+    - name: Add universe repository
       become: true
       command: add-apt-repository -y -n universe
 
@@ -112,14 +112,14 @@
       ansible.builtin.debug:
         msg: "Spark settings: worker_cores={{ spark_worker_cores }}, worker_memory={{ spark_worker_memory }}, executor_cores={{ spark_executor_cores }}, executor_memory={{ spark_executor_memory }}, local_dirs={{ spark_local_dirs }}"
 
-    - name: install cqlsh in a virtualenv
+    - name: Install cqlsh in a virtualenv
       ansible.builtin.pip:
         name: scylla-cqlsh
         state: present
         virtualenv: "{{ cqlsh_venv }}"
         virtualenv_command: python3 -m venv
 
-    - name: expose cqlsh on PATH
+    - name: Expose cqlsh on PATH
       become: true
       ansible.builtin.file:
         src: "{{ cqlsh_venv }}/bin/cqlsh"
@@ -148,7 +148,7 @@
       when: aws_cli_download_bundle.changed
       register: aws_cli_unarchive_installer
 
-    - name: install awscli v2
+    - name: Install awscli v2
       become: true
       shell: "{{ home_dir }}/aws/install --update"
 
@@ -253,40 +253,14 @@
         regexp: '^export PATH=\$PATH:\$SPARK_HOME/sbin$'
         line: export PATH=$PATH:$SPARK_HOME/sbin
 
-    - name: Make sure slaves file exists
-      become: true
-      ansible.builtin.file:
-        state: touch
-        path: "{{ spark_home }}/conf/slaves"
-
-    - name: Add spark nodes to slaves file
-      lineinfile:
-        dest: "{{ spark_home }}/conf/slaves"
-        state: present
-        line:  "{{ hostvars[item].ansible_host }}"
-      with_items: "{{ groups['worker'] }}"
-
-    - name: copy worker start/stop convenience scripts
-      copy:
-        src: "{{ item }}"
-        dest: "{{ home_dir }}"
-        mode: 0755
-      when: inventory_hostname in groups['worker']
-      with_items:
-        - start-slave.sh
-        - stop-slave.sh
-
-    - name: copy template
+    - name: Install Spark worker environment
       template:
-        src: spark-env-worker-sample
-        dest: "{{ home_dir }}"
+        src: spark-env-worker
+        dest: "{{ home_dir }}/spark-env"
+        mode: 0644
       when: inventory_hostname in groups['worker']
 
-    - name: rename spark-env
-      shell: mv spark-env-worker-sample spark-env
-      when: inventory_hostname in groups['worker']
-
-    - name: install spark worker systemd service
+    - name: Install Spark worker systemd service
       become: true
       template:
         src: spark-worker.service
@@ -294,7 +268,7 @@
         mode: 0644
       when: inventory_hostname in groups['worker']
 
-    - name: enable spark worker service
+    - name: Enable Spark worker service
       become: true
       ansible.builtin.systemd:
         name: spark-worker
@@ -302,7 +276,7 @@
         daemon_reload: true
       when: inventory_hostname in groups['worker']
 
-- name: Install scylla migrator on master
+- name: Install Scylla Migrator on master
   hosts: master
   vars:
     home_dir: /home/ubuntu
@@ -325,34 +299,24 @@
         path: "{{ home_dir }}/scylla-migrator"
         state: directory
 
-    - name: copy master start/stop convenience scripts
-      copy:
-        src: "{{ item }}"
-        dest: "{{ home_dir }}/scylla-migrator"
-        mode: 0755
-      with_items:
-        - start-spark.sh
-        - stop-spark.sh
-        - start-slave.sh
-        - stop-slave.sh
-        - config.dynamodb.yml
-    
-    - name: copy template
+    - name: Install Spark master environment
+      template:
+        src: spark-env-master
+        dest: "{{ home_dir }}/scylla-migrator/spark-env"
+        mode: 0644
+
+    - name: Install Spark submit scripts
       template:
         src: "{{ item }}"
         dest: "{{ home_dir }}/scylla-migrator"
         mode: 0755
       with_items:
-        - spark-env-master-sample
         - submit-alternator-job.sh
         - submit-alternator-validator.sh
         - submit-cql-job.sh
         - submit-cql-job-validator.sh
 
-    - name: rename spark-env
-      shell: cd "{{ home_dir }}/scylla-migrator" && mv spark-env-master-sample spark-env
-
-    - name: create Spark event log directory
+    - name: Create Spark event log directory
       ansible.builtin.file:
         path: /tmp/spark-events
         state: directory
@@ -360,21 +324,12 @@
         group: ubuntu
         mode: "0775"
 
-    - name: change file permissions - spark-env and config.dynamodb.yml
-      ansible.builtin.file:
-        mode: 0655
-        state: file
-        path: "{{ home_dir }}/scylla-migrator/{{ item }}"
-      with_items:
-        - spark-env
-        - config.dynamodb.yml
-
-    - name: download scylla-migrator
+    - name: Download Scylla Migrator
       get_url:
         url: https://github.com/scylladb/scylla-migrator/releases/latest/download/scylla-migrator-assembly.jar
         dest: "{{ home_dir }}/scylla-migrator/scylla-migrator-assembly.jar"
 
-    - name: install Spark master systemd services
+    - name: Install Spark master systemd services
       become: true
       template:
         src: "{{ item }}"
@@ -384,7 +339,7 @@
         - spark-master.service
         - spark-history-server.service
 
-    - name: enable Spark master systemd services
+    - name: Enable Spark master systemd services
       become: true
       ansible.builtin.systemd:
         name: "{{ item }}"

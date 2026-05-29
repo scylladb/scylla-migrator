@@ -17,20 +17,19 @@ An `Ansible <https://www.ansible.com/>`_ playbook is provided in the `ansible fo
 
 2. Update ``ansible/inventory/hosts`` file with master and worker instances
 3. Update ``ansible/ansible.cfg`` with location of private key if necessary
-4. The ``ansible/template/spark-env-master-sample`` and ``ansible/template/spark-env-worker-sample`` contain environment variables determining number of workers, CPUs per worker, and memory allocations - as well as considerations for setting them.
+4. The ``ansible/templates/spark-env-master`` and ``ansible/templates/spark-env-worker`` templates contain environment variables for Spark driver, executor, and worker resource allocation.
 5. run ``ansible-playbook scylla-migrator.yml``
-6. On the Spark master node:
+6. Start Spark on the Spark master node:
 
    .. code-block:: bash
 
-     cd scylla-migrator
-     ./start-spark.sh
+     sudo systemctl restart spark-master spark-history-server
 
-7. On the Spark worker nodes:
+7. Start Spark on each Spark worker node:
 
    .. code-block:: bash
 
-     ./start-slave.sh
+     sudo systemctl restart spark-worker
 
 8. Open Spark web console
 
@@ -42,7 +41,7 @@ An `Ansible <https://www.ansible.com/>`_ playbook is provided in the `ansible fo
    - If you're migrating to ScyllaDB CQL interface (from Apache Cassandra, ScyllaDB, or other CQL source), make a copy review the comments in ``config.yaml.example``, and edit as directed.
    - If you're migrating to Alternator (from DynamoDB or other ScyllaDB Alternator), make a copy, review the comments in ``config.dynamodb.yml``, and edit as directed.
 
-10. As part of ansible deployment, sample submit jobs were created.  You may edit and use the submit jobs.
+10. As part of the Ansible deployment, Spark submit scripts are installed on the master. You may edit and use these scripts.
 
    - For CQL migration: edit ``scylla-migrator/submit-cql-job.sh``, change line ``--conf spark.scylla.config=config.yaml \`` to point to the whatever you named the ``config.yaml`` in previous step.
    - For Alternator migration: edit ``scylla-migrator/submit-alternator-job.sh``, change line ``--conf spark.scylla.config=/home/ubuntu/scylla-migrator/config.dynamodb.yml \`` to reference the ``config.yaml`` file you created and modified in previous step.

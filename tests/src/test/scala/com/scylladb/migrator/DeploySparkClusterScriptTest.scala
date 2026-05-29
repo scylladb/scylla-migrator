@@ -311,11 +311,11 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(playbook, "spark_executor_memory")
   }
 
-  test("Ansible writes only worker hosts to Spark worker list") {
+  test("Ansible does not maintain legacy Spark slaves file") {
     val playbook = Files.readString(repoRoot.resolve("ansible/scylla-migrator.yml"))
 
-    assertOutputContains(playbook, "with_items: \"{{ groups['worker'] }}\"")
-    assert(!playbook.contains("with_items: \"{{ groups['spark'] }}\""), playbook)
+    assert(!playbook.contains("conf/slaves"), playbook)
+    assert(!playbook.contains("Add spark nodes to slaves file"), playbook)
   }
 
   test("Ansible validates Spark archive before skipping download") {
@@ -354,9 +354,10 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
 
   test("Spark env templates apply derived worker and executor settings") {
     val masterTemplate =
-      Files.readString(repoRoot.resolve("ansible/templates/spark-env-master-sample"))
+      Files.readString(repoRoot.resolve("ansible/templates/spark-env-master"))
     val workerTemplate =
-      Files.readString(repoRoot.resolve("ansible/templates/spark-env-worker-sample"))
+      Files.readString(repoRoot.resolve("ansible/templates/spark-env-worker"))
+    val workerUnit = Files.readString(repoRoot.resolve("ansible/templates/spark-worker.service"))
 
     assertOutputContains(masterTemplate, "EXECUTOR_CORES={{ master_executor_cores")
     assertOutputContains(masterTemplate, "EXECUTOR_MEMORY={{ master_executor_memory")
@@ -364,8 +365,8 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(workerTemplate, "SPARK_WORKER_CORES={{ spark_worker_cores }}")
     assertOutputContains(workerTemplate, "SPARK_WORKER_MEMORY={{ spark_worker_memory }}")
     assertOutputContains(workerTemplate, "SPARK_WORKER_DIR={{ spark_worker_dir }}")
-    assertOutputContains(workerTemplate, "--cores $SPARK_WORKER_CORES")
-    assertOutputContains(workerTemplate, "--memory $SPARK_WORKER_MEMORY")
+    assertOutputContains(workerUnit, "--cores \"$SPARK_WORKER_CORES\"")
+    assertOutputContains(workerUnit, "--memory \"$SPARK_WORKER_MEMORY\"")
   }
 
   test("Ansible installs Spark systemd unit files") {
@@ -378,9 +379,17 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(playbook, "spark-master.service")
     assertOutputContains(playbook, "spark-history-server.service")
     assertOutputContains(playbook, "spark-worker.service")
+    assertOutputContains(playbook, "src: spark-env-master")
+    assertOutputContains(playbook, "src: spark-env-worker")
+    assert(!playbook.contains("spark-env-master-sample"), playbook)
+    assert(!playbook.contains("spark-env-worker-sample"), playbook)
     assertOutputContains(masterUnit, "org.apache.spark.deploy.master.Master")
     assertOutputContains(historyUnit, "org.apache.spark.deploy.history.HistoryServer")
     assertOutputContains(workerUnit, "org.apache.spark.deploy.worker.Worker")
+    assert(!playbook.contains("start-spark.sh"), playbook)
+    assert(!playbook.contains("stop-spark.sh"), playbook)
+    assert(!playbook.contains("start-slave.sh"), playbook)
+    assert(!playbook.contains("stop-slave.sh"), playbook)
   }
 
   test("Deploy script controls Spark through systemd without script fallback") {

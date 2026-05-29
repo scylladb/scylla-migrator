@@ -122,7 +122,7 @@ The deployment creates an AWS key pair from the local public key. The EC2 instan
    ./deploy_spark_cluster.py redeploy
    ```
 
-   This uses the generated inventory in `.deploy_spark_cluster/inventory.ini` and does not run Terraform. If you deployed with `--config-file`, `redeploy` uploads that config again after Ansible finishes so bundled sample configs do not overwrite it. By default, `redeploy` stops the Spark systemd services before Ansible runs, then restarts them after Ansible finishes so unit, environment, and binary changes take effect cleanly.
+   This uses the generated inventory in `.deploy_spark_cluster/inventory.ini` and does not run Terraform. If you deployed with `--config-file`, `redeploy` uploads that config again after Ansible finishes so the master keeps the intended migration settings. By default, `redeploy` stops the Spark systemd services before Ansible runs, then restarts them after Ansible finishes so unit, environment, and binary changes take effect cleanly.
 
    To upload or switch to a config explicitly during redeploy, pass it again:
 
