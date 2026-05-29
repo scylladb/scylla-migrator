@@ -8,15 +8,45 @@
     spark_version: "4.0.2"
     spark_package: "spark-{{ spark_version }}-bin-hadoop3"
     cqlsh_venv: "{{ home_dir }}/.venvs/scylla-cqlsh"
+    apt_source_files:
+      - /etc/apt/sources.list
+      - /etc/apt/sources.list.d/ubuntu.sources
   tasks: 
+    - name: Check apt source files
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      with_items: "{{ apt_source_files }}"
+      register: apt_source_file_stats
+
+    - name: Use canonical Ubuntu ports mirror
+      become: true
+      ansible.builtin.replace:
+        path: "{{ item.item }}"
+        regexp: 'https?://[A-Za-z0-9.-]+\.ec2\.ports\.ubuntu\.com/ubuntu-ports'
+        replace: 'http://ports.ubuntu.com/ubuntu-ports'
+      with_items: "{{ apt_source_file_stats.results }}"
+      when: item.stat.exists
+
+    - name: Use canonical Ubuntu archive mirror
+      become: true
+      ansible.builtin.replace:
+        path: "{{ item.item }}"
+        regexp: 'https?://[A-Za-z0-9.-]+\.ec2\.archive\.ubuntu\.com/ubuntu'
+        replace: 'http://archive.ubuntu.com/ubuntu'
+      with_items: "{{ apt_source_file_stats.results }}"
+      when: item.stat.exists
+
     - name: add universe repository
       become: true
-      shell: add-apt-repository universe -y
+      command: add-apt-repository -y -n universe
 
     - name: Update apt-cache
       become: true
       apt:
         update_cache: yes
+        cache_valid_time: 3600
+        update_cache_retries: 12
+        update_cache_retry_max_delay: 30
 
     - name: Install package dependencies.
       become: true

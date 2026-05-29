@@ -337,6 +337,17 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assert(!playbook.contains("sudo "), playbook)
   }
 
+  test("Ansible avoids regional EC2 Ubuntu mirrors and retries apt cache updates") {
+    val playbook = Files.readString(repoRoot.resolve("ansible/scylla-migrator.yml"))
+
+    assertOutputContains(playbook, "Use canonical Ubuntu ports mirror")
+    assertOutputContains(playbook, "ports.ubuntu.com/ubuntu-ports")
+    assertOutputContains(playbook, "Use canonical Ubuntu archive mirror")
+    assertOutputContains(playbook, "archive.ubuntu.com/ubuntu")
+    assertOutputContains(playbook, "update_cache_retries: 12")
+    assertOutputContains(playbook, "update_cache_retry_max_delay: 30")
+  }
+
   test("Spark env templates apply derived worker and executor settings") {
     val masterTemplate =
       Files.readString(repoRoot.resolve("ansible/templates/spark-env-master-sample"))
