@@ -85,7 +85,7 @@ object JdbcSafeProperties {
     * special-casing: `"İ".toLowerCase(Locale.ROOT)` returns `"i\u0307"` (2 chars), so a crafted key
     * like `allowLoadLocal\u0130nfile` would have been normalized to a 16-char string that does not
     * appear in the blocklist, while JDBC drivers (notably MySQL Connector/J) compare property names
-    * with per-character `equalsIgnoreCase` and would still accept the key. Per- character matching
+    * with per-character `equalsIgnoreCase` and would still accept the key. Per-character matching
     * closes that bypass.
     */
   def classifyKey(

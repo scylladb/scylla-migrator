@@ -652,7 +652,7 @@ object MySQL {
 
     val jdbcUrl =
       buildJdbcUrl(source, connectionTimeZoneId = spark.sessionState.conf.sessionLocalTimeZone)
-    val readProperties = jdbcReadProperties(source, safeProps)
+    val readProperties = jdbcReadProperties(source, safeProps, computeSafePropsIfEmpty = false)
     ensureSensitiveReaderOptionsAreRedacted(
       spark,
       readProperties.stringPropertyNames().toArray(new Array[String](0)).toSeq,

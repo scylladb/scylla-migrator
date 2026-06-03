@@ -5,7 +5,7 @@ package com.scylladb.migrator.readers.jdbc
   * Spark's JDBC source opens one connection per partition. Because each connection runs an
   * independent SELECT with its own transactional view, concurrent writes on the source table can
   * yield results that mix data from different points in time. Callers should surface this warning
-  * at INFO/WARN level so operators can plan to quiesce the source before correctness- sensitive
+  * at INFO/WARN level so operators can plan to quiesce the source before correctness-sensitive
   * migrations.
   */
 object JdbcConsistencyWarning {
