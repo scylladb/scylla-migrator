@@ -40,3 +40,4 @@ validation:
   floatingPointTolerance: 0.001
   timestampMsTolerance: 0
   copyMissingRows: true
+  repairWritetimeStrategy: coordinator

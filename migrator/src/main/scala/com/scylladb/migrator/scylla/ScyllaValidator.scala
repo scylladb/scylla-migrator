@@ -10,9 +10,16 @@ import com.datastax.spark.connector.{
 import com.datastax.spark.connector.cql.{ CassandraConnector, Schema, TableDef }
 import com.datastax.spark.connector.rdd.ReadConf
 import com.scylladb.migrator.{ readers, writers, Connectors, ConsistencyLevelUtils }
-import com.scylladb.migrator.config.{ CopyType, MigratorConfig, SourceSettings, TargetSettings }
+import com.scylladb.migrator.config.{
+  CopyType,
+  MigratorConfig,
+  RepairWritetimeStrategy,
+  SourceSettings,
+  TargetSettings
+}
 import com.scylladb.migrator.validation.RowComparisonFailure
 import org.apache.logging.log4j.LogManager
+import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{ Row, SparkSession }
 import org.apache.spark.sql.cassandra.DataTypeConverter
 import org.apache.spark.sql.types.{ IntegerType, LongType, StructField, StructType }
@@ -77,6 +84,17 @@ object ScyllaValidator {
     validationConfig.hashColumns.foreach { _ =>
       log.warn(
         "hashColumns is only supported for MySQL-to-ScyllaDB validation and will be ignored."
+      )
+    }
+
+    if (
+      validationConfig.copyMissingRows &&
+      validationConfig.repairWritetimeStrategy == RepairWritetimeStrategy.Config &&
+      targetSettings.writeWritetimestampInuS.isEmpty
+    ) {
+      sys.error(
+        "repairWritetimeStrategy=config requires target.writeWritetimestampInuS " +
+          "to be set in the configuration."
       )
     }
 
@@ -199,6 +217,16 @@ object ScyllaValidator {
         .toList
 
       if (validationConfig.copyMissingRows) {
+        if (
+          !includePerColumnMetadata &&
+          validationConfig.repairWritetimeStrategy != RepairWritetimeStrategy.Source
+        ) {
+          log.warn(
+            s"repairWritetimeStrategy=${validationConfig.repairWritetimeStrategy} is configured " +
+              "but preserveTimestamps is disabled. The strategy only applies to timestamp-preserving " +
+              "repair writes and will be ignored for this run."
+          )
+        }
         log.info("Copying missing rows from source to target")
 
         val repairSchema =
@@ -224,24 +252,53 @@ object ScyllaValidator {
           if (includePerColumnMetadata) {
             val (repairRdd, writeRepairSchema, timestampColumns) =
               readers.Cassandra.explodeRowsFromPerColumnMeta(spark, rawRepairDf)
-            // Use current coordinator time for repair writes so they beat any
-            // tombstones on the target (LWW semantics). Without this, a delete
-            // with a newer timestamp silently shadows the repair write.
             val writetimeIdx = writeRepairSchema.fieldIndex(timestampColumns.writeTime)
-            val repairTimeMicros = System.currentTimeMillis() * 1000L
-            val repairRddWithCurrentTime = repairRdd.map { row =>
-              val values = row.toSeq.toArray
-              values(writetimeIdx) match {
-                case com.datastax.spark.connector.types.CassandraOption.Unset =>
-                case _ =>
-                  values(writetimeIdx) = java.lang.Long.valueOf(repairTimeMicros)
+
+            def overrideWritetime(rdd: RDD[Row], micros: Long): RDD[Row] =
+              rdd.map { row =>
+                val values = row.toSeq.toArray
+                values(writetimeIdx) match {
+                  case com.datastax.spark.connector.types.CassandraOption.Unset =>
+                  case _ =>
+                    values(writetimeIdx) = java.lang.Long.valueOf(micros)
+                }
+                Row(ArraySeq.unsafeWrapArray(values): _*)
               }
-              Row(ArraySeq.unsafeWrapArray(values): _*)
+
+            val rddForWrite = validationConfig.repairWritetimeStrategy match {
+              case RepairWritetimeStrategy.Source =>
+                log.info(
+                  "repairWritetimeStrategy=source: using original source writetime. " +
+                    "Repair writes may be shadowed by newer delete tombstones on the target."
+                )
+                repairRdd
+
+              case RepairWritetimeStrategy.Coordinator =>
+                val repairTimeMicros = System.currentTimeMillis() * 1000L
+                log.info(
+                  s"repairWritetimeStrategy=coordinator: overriding writetime to $repairTimeMicros. " +
+                    "Repair writes will beat most tombstones but may resurrect deleted rows."
+                )
+                overrideWritetime(repairRdd, repairTimeMicros)
+
+              case RepairWritetimeStrategy.Config =>
+                val configTimeMicros = targetSettings.writeWritetimestampInuS.getOrElse(
+                  sys.error(
+                    "repairWritetimeStrategy=config requires target.writeWritetimestampInuS " +
+                      "to be set in the configuration."
+                  )
+                )
+                log.info(
+                  s"repairWritetimeStrategy=config: overriding writetime to $configTimeMicros " +
+                    "(from target.writeWritetimestampInuS)."
+                )
+                overrideWritetime(repairRdd, configTimeMicros)
             }
+
             writers.Scylla.writeRowRDD(
               targetSettings,
               Nil,
-              repairRddWithCurrentTime,
+              rddForWrite,
               writeRepairSchema,
               Some(timestampColumns),
               None,

@@ -23,6 +23,24 @@ import java.util.Locale
   *   If true, rows that exist in the source but are missing in the target are copied to the target
   *   during validation. Only missing rows are copied — rows with value differences are still only
   *   reported, never overwritten. Defaults to false.
+  *
+  * '''WARNING''': the validator cannot distinguish rows that were never migrated from rows that
+  * were deleted on the target after migration. When `copyMissingRows` is enabled, any row present
+  * in the source but absent in the target will be (re-)written to the target. If the row was
+  * intentionally deleted on the target only (e.g. during dual writes), this constitutes data
+  * resurrection. Use `repairWritetimeStrategy` to control how the CQL TIMESTAMP is chosen for the
+  * repair write.
+  * @param repairWritetimeStrategy
+  *   Controls the CQL TIMESTAMP used when `copyMissingRows` writes rows back to the target under
+  *   Cassandra/Scylla validation with `preserveTimestamps: true`. Ignored when timestamp
+  *   preservation is disabled or for non-Cassandra validators.
+  *
+  *   - `source` (default): use the original source writetime. Preserves fidelity but the write may
+  *     be silently shadowed by a newer delete tombstone on the target.
+  *   - `coordinator`: use current coordinator wall-clock time (µs). Beats most tombstones but may
+  *     resurrect rows that were intentionally deleted on the target only.
+  *   - `config`: use the fixed value from `target.writeWritetimestampInuS`. That setting must be
+  *     present in the target configuration.
   * @param hashColumns
   *   When set, validation compares these columns via a single content-hash column instead of
   *   joining their raw values. This reduces Spark-side join/shuffle volume, but the current
@@ -38,6 +56,7 @@ case class Validation(
   floatingPointTolerance: Double,
   timestampMsTolerance: Long,
   copyMissingRows: Boolean = false,
+  repairWritetimeStrategy: RepairWritetimeStrategy = RepairWritetimeStrategy.Source,
   hashColumns: Option[List[String]] = None,
   numericTypePolicy: NumericTypePolicy = NumericTypePolicy.Lenient
 )
