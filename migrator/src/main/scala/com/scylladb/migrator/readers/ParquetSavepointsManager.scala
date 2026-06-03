@@ -1,14 +1,17 @@
 package com.scylladb.migrator.readers
 
 import com.scylladb.migrator.SavepointsManager
-import com.scylladb.migrator.config.MigratorConfig
+import com.scylladb.migrator.config.{ MigratorConfig, SparkSecretRedaction }
 import com.scylladb.migrator.alternator.StringSetAccumulator
+import org.apache.hadoop.conf.Configuration
 import org.apache.spark.SparkContext
 
 class ParquetSavepointsManager(
   migratorConfig: MigratorConfig,
-  filesAccumulator: StringSetAccumulator
-) extends SavepointsManager(migratorConfig) {
+  filesAccumulator: StringSetAccumulator,
+  hadoopConfiguration: Option[Configuration] = None,
+  redactionRegex: Option[String] = None
+) extends SavepointsManager(migratorConfig, hadoopConfiguration, redactionRegex) {
 
   def describeMigrationState(): String = {
     val processedCount = filesAccumulator.value.size
@@ -26,12 +29,21 @@ class ParquetSavepointsManager(
 
 object ParquetSavepointsManager {
 
-  def apply(migratorConfig: MigratorConfig, spark: SparkContext): ParquetSavepointsManager = {
+  def apply(
+    migratorConfig: MigratorConfig,
+    spark: SparkContext,
+    redactionRegex: Option[String] = None
+  ): ParquetSavepointsManager = {
     val filesAccumulator =
       StringSetAccumulator(migratorConfig.skipParquetFiles.getOrElse(Set.empty))
 
     spark.register(filesAccumulator, "processed-parquet-files")
 
-    new ParquetSavepointsManager(migratorConfig, filesAccumulator)
+    new ParquetSavepointsManager(
+      migratorConfig,
+      filesAccumulator,
+      Some(spark.hadoopConfiguration),
+      redactionRegex.orElse(SparkSecretRedaction.redactionRegex(spark))
+    )
   }
 }

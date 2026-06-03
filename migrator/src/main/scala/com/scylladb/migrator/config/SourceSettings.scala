@@ -46,7 +46,22 @@ object DynamoDBEndpoint {
     }
 }
 
-sealed trait SourceSettings
+sealed trait SourceSettings {
+
+  /** Whether this source supports durable resume via savepoints.
+    *
+    * Single source of truth consulted by:
+    *   - `MigratorConfig` decoder (whether the `savepoints` block is required) and encoder (whether
+    *     to emit it),
+    *   - `Migrator.migrate` (whether to log the generic "no durable resume" warning before
+    *     dispatch),
+    *   - `readers.MySQL` / `readers.Cassandra` (derive `SourceDataFrame.savepointsSupported`),
+    *   - `AlternatorMigrator.migrate` (whether to wrap the write in `DynamoDbSavepointsManager`).
+    *
+    * New non-resumable sources should override to `false`; no central code edit is required.
+    */
+  def supportsSavepoints: Boolean
+}
 object SourceSettings {
   case class Cassandra(
     host: String,
@@ -63,7 +78,9 @@ object SourceSettings {
     where: Option[String],
     consistencyLevel: String,
     cloud: Option[CloudConfig] = None
-  ) extends SourceSettings
+  ) extends SourceSettings {
+    val supportsSavepoints: Boolean = true
+  }
 
   /** When `cloud` is set, the connector will reach the cluster through the Astra SNI proxy
     * described by the secure-connect bundle. In that mode the `host` and `port` fields are
@@ -202,6 +219,10 @@ object SourceSettings {
     def alternatorSettings: Option[AlternatorSettings]
     lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
       AwsUtils.computeFinalCredentials(credentials, endpoint, region)
+
+    // Both AWS DynamoDB and Scylla Alternator readers track scan-segment progress via
+    // `DynamoDbSavepointsManager`, so the capability is shared by both subtypes.
+    val supportsSavepoints: Boolean = true
   }
 
   case class DynamoDB(
@@ -242,6 +263,11 @@ object SourceSettings {
   ) extends SourceSettings {
     lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
       AwsUtils.computeFinalCredentials(credentials, endpoint, region)
+
+    // File-level resume is available via `ParquetSavepointsManager`. The user-facing toggle
+    // `savepoints.enableParquetFileTracking` decides whether to use it for a given run, but the
+    // *capability* of the source is "supported".
+    val supportsSavepoints: Boolean = true
   }
 
   case class MySQL(
@@ -259,7 +285,14 @@ object SourceSettings {
     fetchSize: Int = MySQL.DefaultFetchSize,
     where: Option[String],
     connectionProperties: Option[Map[String, String]]
-  ) extends SourceSettings
+  ) extends SourceSettings {
+
+    // MySQL reads use Spark JDBC jobs that do not expose durable per-range progress, and
+    // partitioned reads use multiple independent JDBC statements/connections instead of one
+    // resumable snapshot. Hence: no savepoints. The MySQL reader emits the user-facing log
+    // describing this; the central code only consults this flag.
+    val supportsSavepoints: Boolean = false
+  }
 
   object MySQL {
     val DefaultFetchSize: Int = 1000
@@ -462,6 +495,12 @@ object SourceSettings {
   ) extends SourceSettings {
     lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
       AwsUtils.computeFinalCredentials(credentials, endpoint, region)
+
+    // S3 export RDDs use `ParallelCollectionPartition`s rather than the EMR Hadoop connector's
+    // `DynamoDBSplit`s, so per-segment savepoint progress is not tracked. The AlternatorMigrator
+    // consults this flag (instead of a separate `hadoopPartitionedSource` Boolean) to decide
+    // whether to construct `DynamoDbSavepointsManager`.
+    val supportsSavepoints: Boolean = false
   }
 
   object DynamoDBS3Export {

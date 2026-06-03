@@ -384,16 +384,35 @@ object MySQL {
     )
 
   def readDataframe(spark: SparkSession, source: SourceSettings.MySQL): SourceDataFrame = {
+    // MySQL-specific caveat lives in the reader, not in the central dispatcher. The generic
+    // "no savepoints" warning is emitted by `Migrator.migrate` for any source whose
+    // `supportsSavepoints` is `false`; this log adds the JDBC-specific detail that operators
+    // expect when reading MySQL run logs.
+    log.info(
+      "MySQL reads use Spark JDBC jobs that do not expose durable per-range progress, and " +
+        "partitioned reads use multiple independent JDBC statements instead of one resumable " +
+        "snapshot."
+    )
     val df = readDataframeRaw(spark, source)
     MySQLSchemaLogger.logSchemaInfo(df)
     log.info(
       s"Number of partitions: ${df.queryExecution.executedPlan.execute().getNumPartitions}"
     )
-    sourceDataFrame(df)
+    sourceDataFrame(df, source)
   }
 
-  private[readers] def sourceDataFrame(df: DataFrame): SourceDataFrame =
-    SourceDataFrame(df, timestampColumns = None, savepointsSupported = false)
+  // Derive `savepointsSupported` from the setting so the two flags cannot drift. Today this is
+  // always `false` for MySQL; expressing it via `source.supportsSavepoints` keeps the runtime
+  // path consistent with the config-time predicate.
+  private[readers] def sourceDataFrame(
+    df: DataFrame,
+    source: SourceSettings.MySQL
+  ): SourceDataFrame =
+    SourceDataFrame(
+      df,
+      timestampColumns    = None,
+      savepointsSupported = source.supportsSavepoints
+    )
 
   private[readers] def buildJdbcUrl(
     source: SourceSettings.MySQL,

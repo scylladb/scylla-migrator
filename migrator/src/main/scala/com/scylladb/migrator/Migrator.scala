@@ -32,7 +32,10 @@ object Migrator {
     log.info(s"ScyllaDB Migrator ${BuildInfo.version}")
 
     val migratorConfig =
-      MigratorConfig.loadFrom(spark.conf.get("spark.scylla.config"))
+      MigratorConfig.loadFrom(
+        spark.conf.get("spark.scylla.config"),
+        spark.sparkContext.hadoopConfiguration
+      )
 
     log.info(s"Loaded config:\n${migratorConfig.renderRedacted}")
 
@@ -45,7 +48,19 @@ object Migrator {
     * This is the programmatic entry point used by integration tests (in-process Spark) and by
     * `main` (spark-submit). The caller is responsible for creating and stopping the SparkSession.
     */
-  def migrate(config: MigratorConfig)(implicit spark: SparkSession): Unit =
+  def migrate(config: MigratorConfig)(implicit spark: SparkSession): Unit = {
+    // Backend-neutral warning. Any source whose `supportsSavepoints` is `false` (MySQL, DynamoDB
+    // S3 export, future non-resumable backends) gets the same up-front notice without per-source
+    // `case` branches. Source-specific reader caveats (e.g. MySQL JDBC partitioning semantics)
+    // are emitted from the reader itself.
+    if (!config.source.supportsSavepoints) {
+      log.warn(
+        "Source does not support savepoints; any configured savepoints settings are ignored. " +
+          "If this migration is interrupted, it must be restarted from scratch. " +
+          "Ensure the target table supports idempotent writes."
+      )
+    }
+
     (config.source, config.target) match {
       case (cqlSource: SourceSettings.Cassandra, scyllaTarget: TargetSettings.Scylla) =>
         val sourceDF = readers.Cassandra.readDataframe(
@@ -57,13 +72,6 @@ object Migrator {
         ScyllaMigrator.migrate(config, scyllaTarget, sourceDF)
       case (mysqlSource: SourceSettings.MySQL, scyllaTarget: TargetSettings.Scylla) =>
         log.info("Starting MySQL to ScyllaDB migration")
-        log.warn(
-          "MySQL source does not support savepoints; any configured savepoints settings are ignored. " +
-            "MySQL reads use Spark JDBC jobs that do not expose durable per-range progress, and " +
-            "partitioned reads use multiple independent JDBC statements instead of one resumable snapshot. " +
-            "If this migration is interrupted, it must be restarted from scratch. " +
-            "Ensure the target table supports idempotent writes."
-        )
         val sourceDF = readers.MySQL.readDataframe(spark, mysqlSource)
         ScyllaMigrator.migrate(config, scyllaTarget, sourceDF)
       case (parquetSource: SourceSettings.Parquet, scyllaTarget: TargetSettings.Scylla) =>
@@ -88,5 +96,6 @@ object Migrator {
             s"${source.getClass.getSimpleName} -> ${target.getClass.getSimpleName}"
         )
     }
+  }
 
 }

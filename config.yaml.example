@@ -456,6 +456,41 @@ savepoints:
   # Where should savepoint configurations be stored? This is a path on the host running
   # the Spark driver - usually the Spark master.
   path: /app/savepoints
+  #
+  # The legacy path form above is equivalent to a local filesystem target:
+  # target:
+  #   type: filesystem
+  #   path: /app/savepoints
+  #
+  # target.type: filesystem accepts only local filesystem paths. For Hadoop filesystem
+  # URIs, use the legacy path form directly:
+  # path: gs://my-bucket/scylla-migrator/savepoints
+  # path: s3a://my-bucket/scylla-migrator/savepoints
+  #
+  # For Google Cloud Storage, the structured form below builds the Hadoop path
+  # gs://my-bucket/prefix:
+  # target:
+  #   type: gcs
+  #   bucket: my-bucket
+  #   prefix: scylla-migrator/savepoints
+  #   projectId: my-gcp-project
+  #   # Optional GCS credentials can be supplied here for writing savepoints.
+  #   # If omitted, Spark/Hadoop runtime configuration is used.
+  #   # credentials:
+  #   #   serviceAccountJsonKeyfile: /path/to/service-account.json
+  #
+  # For AWS S3, the structured form below builds the Hadoop path s3a://my-bucket/prefix:
+  # target:
+  #   type: s3
+  #   bucket: my-bucket
+  #   prefix: scylla-migrator/savepoints
+  #   region: us-east-1
+  #   # Optional AWS credentials can be supplied here for writing savepoints.
+  #   # If the config file itself is on S3, Spark/Hadoop must still have credentials
+  #   # to read that file before these settings can be parsed.
+  #   # credentials:
+  #   #   accessKey: ...
+  #   #   secretKey: ...
   # Interval in which savepoints will be created
   intervalSeconds: 300
 
@@ -499,3 +534,10 @@ savepoints:
 #   # hashColumns:
 #   #   - large_text_column
 #   #   - blob_column
+#   # Optional - numeric cross-type comparison policy.
+#   # Lenient (default): Int==Long==BigInt==BigDecimal(scale<=0) treated as equal;
+#   #   Float/Double normalized to BigDecimal within floatingPointTolerance.
+#   # DetectWiden: same as Lenient, but flags Float->Double widening that loses bits
+#   #   (e.g. Float(0.1f) vs Double(0.1)) as NumericTypeMismatch.
+#   # StrictType: any Float vs Double pair flagged regardless of value.
+#   # numericTypePolicy: Lenient

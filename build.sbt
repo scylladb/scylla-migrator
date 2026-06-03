@@ -5,7 +5,8 @@ val awsSdkVersion = "2.23.19"
 val sparkVersion = "4.0.2"
 val hadoopVersion = "3.4.1"
 val circeVersion = "0.14.7"
-val connectorVersion = "4.1.2"
+val connectorVersion = "4.1.3"
+val gcsConnectorVersion = "hadoop3-2.2.26"
 val dynamodbStreamsKinesisAdapterVersion =
   "1.5.4" // Note This version still depends on AWS SDK 1.x, but there is no more recent version that supports AWS SDK v2.
 
@@ -103,6 +104,10 @@ lazy val tests = project
       "org.apache.cassandra"      % "java-driver-query-builder" % "4.18.0",
       "com.github.mjakubowski84" %% "parquet4s-core"            % "1.9.4",
       "org.apache.hadoop"         % "hadoop-client"             % hadoopVersion,
+      ("com.google.cloud.bigdataoss" % "gcs-connector" % gcsConnectorVersion).classifier(
+        "shaded"
+      ),
+      "com.google.cloud.bigdataoss" % "util-hadoop" % gcsConnectorVersion,
       "org.scalameta"            %% "munit"                     % "1.0.1"
     ),
     Test / parallelExecution := false,

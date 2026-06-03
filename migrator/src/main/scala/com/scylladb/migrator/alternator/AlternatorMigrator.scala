@@ -1,7 +1,12 @@
 package com.scylladb.migrator.alternator
 
 import com.scylladb.migrator.{ readers, writers, DynamoUtils }
-import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
+import com.scylladb.migrator.config.{
+  MigratorConfig,
+  SourceSettings,
+  SparkSecretRedaction,
+  TargetSettings
+}
 import com.scylladb.migrator.writers.DynamoStreamReplication
 import org.apache.hadoop.dynamodb.DynamoDBItemWritable
 import org.apache.hadoop.io.Text
@@ -40,9 +45,9 @@ object AlternatorMigrator {
       sourceRDD,
       sourceTableDesc,
       maybeStreamedSource,
+      source,
       target,
-      migratorConfig,
-      hadoopPartitionedSource = true
+      migratorConfig
     )
   }
 
@@ -53,18 +58,24 @@ object AlternatorMigrator {
   )(implicit spark: SparkSession): Unit = {
     val (sourceRDD, sourceTableDesc) =
       readers.DynamoDB.readRDD(spark, source, migratorConfig.skipSegments)
-    Using.resource(DynamoDbSavepointsManager(migratorConfig, sourceRDD, spark.sparkContext)) {
-      savepointsManager =>
-        try
-          writers.DynamoDBS3Export.writeRDD(target, sourceRDD, Some(sourceTableDesc))
-        catch {
-          case NonFatal(e) =>
-            log.error(
-              "Caught error while writing DynamoDB S3 Export. Will create a savepoint before exiting",
-              e
-            )
-        } finally
-          savepointsManager.dumpMigrationState("final")
+    Using.resource(
+      DynamoDbSavepointsManager(
+        migratorConfig,
+        sourceRDD,
+        spark.sparkContext,
+        SparkSecretRedaction.redactionRegex(spark)
+      )
+    ) { savepointsManager =>
+      try
+        writers.DynamoDBS3Export.writeRDD(target, sourceRDD, Some(sourceTableDesc))
+      catch {
+        case NonFatal(e) =>
+          log.error(
+            "Caught error while writing DynamoDB S3 Export. Will create a savepoint before exiting",
+            e
+          )
+      } finally
+        savepointsManager.dumpMigrationState("final")
     }
   }
 
@@ -73,6 +84,10 @@ object AlternatorMigrator {
     target: TargetSettings.DynamoDBLike,
     migratorConfig: MigratorConfig
   )(implicit spark: SparkSession): Unit = {
+    log.info(
+      "S3 export source uses ParallelCollectionPartitions (not DynamoDBSplits); " +
+        "scan-segment savepoint tracking is not available for this path."
+    )
     val (sourceRDD, sourceTableDesc) = readers.DynamoDBS3Export.readRDD(source)(spark.sparkContext)
     // Adapt the decoded items to the format expected by the EMR Hadoop connector
     val normalizedRDD =
@@ -83,9 +98,9 @@ object AlternatorMigrator {
       normalizedRDD,
       sourceTableDesc,
       None,
+      source,
       target,
-      migratorConfig,
-      hadoopPartitionedSource = false
+      migratorConfig
     )
   }
 
@@ -95,15 +110,13 @@ object AlternatorMigrator {
     *   Description of the table to replicate on the target database
     * @param maybeStreamedSource
     *   Settings of the source table in case `streamChanges` was `true`
+    * @param source
+    *   The original `SourceSettings`. Used to consult `supportsSavepoints` so the RDD path follows
+    *   the same backend-neutral predicate as the DataFrame paths in `ScyllaMigrator`.
     * @param target
     *   Target table settings
     * @param migratorConfig
     *   The complete original configuration
-    * @param hadoopPartitionedSource
-    *   Whether the source RDD uses `HadoopPartition`s (from the DynamoDB Hadoop connector)
-    *   containing `DynamoDBSplit`s. When `true`, scan segment progress is tracked via
-    *   `DynamoDbSavepointsManager`. Must be `false` for source types whose RDDs use other partition
-    *   types (e.g., `ParallelCollectionPartition` from S3 exports).
     * @param spark
     *   Spark session
     */
@@ -111,9 +124,9 @@ object AlternatorMigrator {
     sourceRDD: RDD[(Text, DynamoDBItemWritable)],
     sourceTableDesc: TableDescription,
     maybeStreamedSource: Option[SourceSettings.DynamoDB],
+    source: SourceSettings,
     target: TargetSettings.DynamoDBLike,
-    migratorConfig: MigratorConfig,
-    hadoopPartitionedSource: Boolean
+    migratorConfig: MigratorConfig
   )(implicit spark: SparkSession): Unit = {
 
     log.info("We need to transfer: " + sourceRDD.getNumPartitions + " partitions in total")
@@ -136,19 +149,25 @@ object AlternatorMigrator {
       if (maybeStreamedSource.isDefined && target.skipInitialSnapshotTransfer.contains(true)) {
         log.info("Skip transferring table snapshot")
       } else {
-        if (hadoopPartitionedSource) {
+        // Backend-neutral gating: any `SourceSettings` subtype with `supportsSavepoints = true`
+        // (DynamoDB, Alternator) is wrapped in `DynamoDbSavepointsManager` to track scan-segment
+        // progress; sources with `supportsSavepoints = false` (DynamoDB S3 export, future
+        // non-resumable RDD sources) skip the manager and emit the generic "no savepoints"
+        // warning from `Migrator.migrate` instead of a per-source `log.warn` here.
+        if (source.supportsSavepoints) {
           Using.resource(
-            DynamoDbSavepointsManager(migratorConfig, sourceRDD, spark.sparkContext)
+            DynamoDbSavepointsManager(
+              migratorConfig,
+              sourceRDD,
+              spark.sparkContext,
+              SparkSecretRedaction.redactionRegex(spark)
+            )
           ) { _ =>
             log.info("Starting write...")
             writers.DynamoDB
               .writeRDD(target, migratorConfig.renamesMap, sourceRDD, targetTableDesc)
           }
         } else {
-          log.warn(
-            "Savepoints are not supported when the source is a DynamoDB S3 export. " +
-              "If the migration is interrupted, it will reprocess all data on restart."
-          )
           log.info("Starting write...")
           writers.DynamoDB.writeRDD(target, migratorConfig.renamesMap, sourceRDD, targetTableDesc)
         }

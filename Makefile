@@ -5,6 +5,7 @@ SHELL := bash
 .PHONY: help build docker-build-jar docker-image lint lint-fix \
         spark-image start-services stop-services wait-for-services \
         start-services-scylla wait-for-services-scylla \
+        start-services-scylla-gcs wait-for-services-scylla-gcs \
         start-services-cassandra wait-for-services-cassandra test-integration-cassandra \
         start-services-alternator wait-for-services-alternator \
         test test-unit test-integration test-integration-scylla \
@@ -55,6 +56,7 @@ SBT_COVERAGE_SUFFIX :=
 endif
 
 DOCKER_SPARK_BIND_DIRS := ./tests/docker/parquet ./tests/docker/spark-master ./tests/docker/aws-profile
+DOCKER_GCS_BIND_DIRS := ./tests/docker/gcs
 DOCKER_SCYLLA_BIND_DIRS := ./tests/docker/scylla ./tests/docker/scylla-source ./tests/docker/cassandra5 ./tests/docker/cassandra3 ./tests/docker/cassandra2
 
 # Parameterized Cassandra version for per-version testing (2, 3, 4, or 5)
@@ -147,14 +149,19 @@ spark-image: ## Pull or build the Spark Docker image
 	echo "SPARK_IMAGE=$${IMAGE}" >> "$${GITHUB_ENV:-/dev/null}"
 
 start-services: ## Start all Docker Compose test services
-	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
-	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
-	docker compose -f $(COMPOSE_FILE) up -d mysql dynamodb cassandra cassandra2 cassandra3 cassandra5 scylla-source scylla s3
+	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_GCS_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
+	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_GCS_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
+	docker compose -f $(COMPOSE_FILE) up -d mysql dynamodb cassandra cassandra2 cassandra3 cassandra5 scylla-source scylla s3 gcs
 
-start-services-scylla: ## Start services needed for Scylla integration tests
+start-services-scylla: ## Start services needed for Scylla integration tests without GCS savepoints
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla ./tests/docker/scylla-source
 	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla ./tests/docker/scylla-source
 	docker compose $(COMPOSE_SCYLLA_FILES) up -d mysql cassandra scylla-source scylla
+
+start-services-scylla-gcs: ## Start services needed for Scylla integration tests including GCS savepoints
+	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_GCS_BIND_DIRS) ./tests/docker/scylla ./tests/docker/scylla-source
+	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_GCS_BIND_DIRS) ./tests/docker/scylla ./tests/docker/scylla-source
+	docker compose $(COMPOSE_SCYLLA_FILES) up -d mysql cassandra scylla-source scylla gcs
 
 start-services-dynamodb: ## Start services for DynamoDB integration tests (SCYLLA_VERSION=..., TABLETS_MODE=...)
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
@@ -176,7 +183,8 @@ wait-for-services: ## Wait for all test services to become ready
 	($(call wait-for-cql,cassandra)) & p5=$$!
 	($(call wait-for-cql,scylla-source)) & p6=$$!
 	($(call wait-for-mysql,mysql)) & p7=$$!
-	wait $$p1; wait $$p2; wait $$p3; wait $$p4; wait $$p5; wait $$p6; wait $$p7
+	($(call wait-for-port,4443)) & p8=$$!
+	wait $$p1; wait $$p2; wait $$p3; wait $$p4; wait $$p5; wait $$p6; wait $$p7; wait $$p8
 
 wait-for-services-scylla: ## Wait for Scylla test services to become ready
 	$(Q)($(call wait-for-cql-compose,$(COMPOSE_SCYLLA_FILES),cassandra)) & p1=$$!
@@ -184,6 +192,14 @@ wait-for-services-scylla: ## Wait for Scylla test services to become ready
 	($(call wait-for-cql-compose,$(COMPOSE_SCYLLA_FILES),scylla)) & p3=$$!
 	($(call wait-for-mysql-compose,$(COMPOSE_SCYLLA_FILES),mysql)) & p4=$$!
 	wait $$p1; wait $$p2; wait $$p3; wait $$p4
+
+wait-for-services-scylla-gcs: ## Wait for Scylla and GCS test services to become ready
+	$(Q)($(call wait-for-cql-compose,$(COMPOSE_SCYLLA_FILES),cassandra)) & p1=$$!
+	($(call wait-for-cql-compose,$(COMPOSE_SCYLLA_FILES),scylla-source)) & p2=$$!
+	($(call wait-for-cql-compose,$(COMPOSE_SCYLLA_FILES),scylla)) & p3=$$!
+	($(call wait-for-mysql-compose,$(COMPOSE_SCYLLA_FILES),mysql)) & p4=$$!
+	($(call wait-for-port,4443)) & p5=$$!
+	wait $$p1; wait $$p2; wait $$p3; wait $$p4; wait $$p5
 
 wait-for-services-dynamodb: ## Wait for DynamoDB test services to become ready
 	$(Q)($(call wait-for-port,8000)) & p1=$$!
