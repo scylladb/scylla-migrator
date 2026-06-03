@@ -145,8 +145,8 @@ object DynamoStreamReplication {
               case OpType.Delete =>
                 deleteCount.add(1)
                 val keyToDelete = itemConverted.asScala
-                  .filter { case (key, _) => keyAttributeNames.contains(key) }
                   .map { case (key, value) => renamesMap.getOrElse(key, key) -> value }
+                  .filter { case (key, _) => keyAttributeNames.contains(key) }
                   .asJava
                 try
                   client.deleteItem(

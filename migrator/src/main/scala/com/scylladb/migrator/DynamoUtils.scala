@@ -432,8 +432,8 @@ object DynamoUtils {
   def enableKinesisStreamingDestination(
     source: SourceSettings.DynamoDB,
     streamArn: String
-  ): Unit = {
-    val sourceClient =
+  ): Unit =
+    Using.resource(
       buildDynamoClient(
         source.endpoint,
         source.finalCredentials.map(_.toProvider),
@@ -443,34 +443,34 @@ object DynamoUtils {
         else Nil,
         source.alternatorSettings
       )
+    ) { sourceClient =>
+      val currentStatus: Option[DestinationStatus] =
+        Try(
+          sourceClient.describeKinesisStreamingDestination(
+            DescribeKinesisStreamingDestinationRequest.builder().tableName(source.table).build()
+          )
+        ).toOption
+          .flatMap(findKinesisDestinationByArn(_, streamArn))
+          .map(_.destinationStatus())
 
-    val currentStatus: Option[DestinationStatus] =
-      Try(
-        sourceClient.describeKinesisStreamingDestination(
-          DescribeKinesisStreamingDestinationRequest.builder().tableName(source.table).build()
-        )
-      ).toOption
-        .flatMap(findKinesisDestinationByArn(_, streamArn))
-        .map(_.destinationStatus())
-
-    currentStatus match {
-      case Some(DestinationStatus.ACTIVE) =>
-        log.info(
-          s"Kinesis streaming destination '$streamArn' is already ACTIVE on table " +
-            s"'${source.table}'; skipping enable"
-        )
-      case Some(DestinationStatus.ENABLING) =>
-        log.info(
-          s"Kinesis streaming destination '$streamArn' is already ENABLING on table " +
-            s"'${source.table}'; skipping enable"
-        )
-      case _ =>
-        log.info(
-          s"Enabling Kinesis streaming destination '$streamArn' for DynamoDB table '${source.table}'"
-        )
-        callEnableWithRetry(sourceClient, source.table, streamArn)
+      currentStatus match {
+        case Some(DestinationStatus.ACTIVE) =>
+          log.info(
+            s"Kinesis streaming destination '$streamArn' is already ACTIVE on table " +
+              s"'${source.table}'; skipping enable"
+          )
+        case Some(DestinationStatus.ENABLING) =>
+          log.info(
+            s"Kinesis streaming destination '$streamArn' is already ENABLING on table " +
+              s"'${source.table}'; skipping enable"
+          )
+        case _ =>
+          log.info(
+            s"Enabling Kinesis streaming destination '$streamArn' for DynamoDB table '${source.table}'"
+          )
+          callEnableWithRetry(sourceClient, source.table, streamArn)
+      }
     }
-  }
 
   /** Call `EnableKinesisStreamingDestination` with a bounded retry loop.
     *
@@ -565,8 +565,8 @@ object DynamoUtils {
     source: SourceSettings.DynamoDB,
     streamArn: String,
     maxWait: JDuration = JDuration.ofMinutes(15)
-  ): Unit = {
-    val sourceClient =
+  ): Unit =
+    Using.resource(
       buildDynamoClient(
         source.endpoint,
         source.finalCredentials.map(_.toProvider),
@@ -576,88 +576,85 @@ object DynamoUtils {
         else Nil,
         source.alternatorSettings
       )
+    ) { sourceClient =>
+      val deadline = Instant.now().plus(maxWait)
+      val rng = new scala.util.Random()
+      var transientAttempts = 0
+      val maxTransient = 5
 
-    val deadline = Instant.now().plus(maxWait)
-    val rng = new scala.util.Random()
-    var transientAttempts = 0
-    val maxTransient = 5
-
-    while (true) {
-      val now = Instant.now()
-      if (now.isAfter(deadline)) {
-        throw new TimeoutException(
-          s"Kinesis streaming destination for '${source.table}' -> '$streamArn' did not " +
-            s"reach ACTIVE within $maxWait"
-        )
-      }
-
-      val describeResult =
-        Try(
-          sourceClient.describeKinesisStreamingDestination(
-            DescribeKinesisStreamingDestinationRequest
-              .builder()
-              .tableName(source.table)
-              .build()
+      while (true) {
+        val now = Instant.now()
+        if (now.isAfter(deadline)) {
+          throw new TimeoutException(
+            s"Kinesis streaming destination for '${source.table}' -> '$streamArn' did not " +
+              s"reach ACTIVE within $maxWait"
           )
-        )
+        }
 
-      describeResult match {
-        case Success(resp) =>
-          val destination = findKinesisDestinationByArn(resp, streamArn)
-          destination match {
-            case Some(d) if d.destinationStatus() == DestinationStatus.ACTIVE =>
-              log.info(s"Kinesis streaming destination '$streamArn' is ACTIVE")
-              return
-            case Some(d) if d.destinationStatus() == DestinationStatus.ENABLE_FAILED =>
-              throw new RuntimeException(
-                s"Kinesis streaming destination enable failed for '$streamArn': " +
-                  s"${Option(d.destinationStatusDescription()).getOrElse("<no description>")}"
-              )
-            case Some(d) =>
-              val sleepMs = 5000L + rng.nextInt(1000)
-              log.info(
-                s"Kinesis streaming destination '$streamArn' status = ${d.destinationStatus()}; " +
-                  s"waiting ${sleepMs}ms (deadline: $deadline)"
-              )
-              Thread.sleep(sleepMs)
-              transientAttempts = 0
-            case None =>
-              // LOGIC-3: surface the ARNs AWS did return so operators can eyeball a typo
-              // (case of the stream name, wrong account, wrong partition, wrong region). The
-              // ARN itself is non-PII infrastructure identifier; safe to log.
-              val registered = resp.kinesisDataStreamDestinations().asScala.toList
-              val detail =
-                if (registered.isEmpty)
-                  "the table currently has no Kinesis destinations registered"
-                else {
-                  val summary = registered
-                    .map(d => s"'${d.streamArn()}' (${d.destinationStatus()})")
-                    .mkString(", ")
-                  s"the table currently has: $summary"
-                }
-              throw new RuntimeException(
-                s"Kinesis streaming destination for '${source.table}' -> '$streamArn' " +
-                  s"was not found in DescribeKinesisStreamingDestination ($detail). " +
-                  "Matching is strict and case-sensitive on the stream-name portion of the ARN; " +
-                  "check for typos and confirm the destination is registered on the same AWS " +
-                  "account and region as the source."
-              )
-          }
-        case Failure(e: DynamoDbException) if transientAttempts < maxTransient =>
-          val backoffMs = (500L * (1L << transientAttempts.min(6))) + rng.nextInt(250)
-          log.warn(
-            s"DescribeKinesisStreamingDestination transient error (attempt " +
-              s"${transientAttempts + 1}/$maxTransient): ${e.getClass.getSimpleName}; " +
-              s"retrying in ${backoffMs}ms",
-            e
+        val describeResult =
+          Try(
+            sourceClient.describeKinesisStreamingDestination(
+              DescribeKinesisStreamingDestinationRequest
+                .builder()
+                .tableName(source.table)
+                .build()
+            )
           )
-          transientAttempts += 1
-          Thread.sleep(backoffMs)
-        case Failure(e) =>
-          throw e
+
+        describeResult match {
+          case Success(resp) =>
+            val destination = findKinesisDestinationByArn(resp, streamArn)
+            destination match {
+              case Some(d) if d.destinationStatus() == DestinationStatus.ACTIVE =>
+                log.info(s"Kinesis streaming destination '$streamArn' is ACTIVE")
+                return
+              case Some(d) if d.destinationStatus() == DestinationStatus.ENABLE_FAILED =>
+                throw new RuntimeException(
+                  s"Kinesis streaming destination enable failed for '$streamArn': " +
+                    s"${Option(d.destinationStatusDescription()).getOrElse("<no description>")}"
+                )
+              case Some(d) =>
+                val sleepMs = 5000L + rng.nextInt(1000)
+                log.info(
+                  s"Kinesis streaming destination '$streamArn' status = ${d.destinationStatus()}; " +
+                    s"waiting ${sleepMs}ms (deadline: $deadline)"
+                )
+                Thread.sleep(sleepMs)
+                transientAttempts = 0
+              case None =>
+                val registered = resp.kinesisDataStreamDestinations().asScala.toList
+                val detail =
+                  if (registered.isEmpty)
+                    "the table currently has no Kinesis destinations registered"
+                  else {
+                    val summary = registered
+                      .map(d => s"'${d.streamArn()}' (${d.destinationStatus()})")
+                      .mkString(", ")
+                    s"the table currently has: $summary"
+                  }
+                throw new RuntimeException(
+                  s"Kinesis streaming destination for '${source.table}' -> '$streamArn' " +
+                    s"was not found in DescribeKinesisStreamingDestination ($detail). " +
+                    "Matching is strict and case-sensitive on the stream-name portion of the ARN; " +
+                    "check for typos and confirm the destination is registered on the same AWS " +
+                    "account and region as the source."
+                )
+            }
+          case Failure(e: DynamoDbException) if transientAttempts < maxTransient =>
+            val backoffMs = (500L * (1L << transientAttempts.min(6))) + rng.nextInt(250)
+            log.warn(
+              s"DescribeKinesisStreamingDestination transient error (attempt " +
+                s"${transientAttempts + 1}/$maxTransient): ${e.getClass.getSimpleName}; " +
+                s"retrying in ${backoffMs}ms",
+              e
+            )
+            transientAttempts += 1
+            Thread.sleep(backoffMs)
+          case Failure(e) =>
+            throw e
+        }
       }
     }
-  }
 
   def buildDynamoClient(
     endpoint: Option[DynamoDBEndpoint],
