@@ -432,7 +432,7 @@ def repo_root() -> Path:
 
 
 def resolve_path(value: str | None) -> Path | None:
-    if value is None:
+    if value is None or value == "":
         return None
     return Path(value).expanduser().resolve()
 
@@ -500,7 +500,10 @@ def write_json(path: Path, content: dict[str, Any]) -> None:
 def read_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
-    return json.loads(path.read_text())
+    try:
+        return json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"Invalid JSON in {path}: {exc}") from exc
 
 
 def infer_aws_architecture(instance_type: str) -> str:
@@ -679,6 +682,22 @@ def submit_script_name(migration_type: str, validator: bool) -> str:
     if migration_type == "alternator":
         return "submit-alternator-validator.sh" if validator else "submit-alternator-job.sh"
     raise ValueError(f"Unsupported migration type: {migration_type}")
+
+
+def remote_submit_command(submit_script: str) -> str:
+    log_stem = Path(submit_script).stem
+    remote_dir = shlex.quote(REMOTE_MIGRATOR_DIR)
+    remote_log_stem = shlex.quote(f"{REMOTE_MIGRATOR_DIR}/{log_stem}")
+    script = shlex.quote(f"./{submit_script}")
+    return (
+        f"cd {remote_dir} && "
+        "timestamp=$(date -u +%Y%m%dT%H%M%SZ) && "
+        f"log_file={remote_log_stem}-$timestamp.log && "
+        f"pid_file={remote_log_stem}-$timestamp.pid && "
+        f"{{ nohup {script} > \"$log_file\" 2>&1 < /dev/null & echo $! > \"$pid_file\"; }} && "
+        'echo "Started Spark submit job with PID $(cat "$pid_file")." && '
+        'echo "Log file: $log_file"'
+    )
 
 
 def upload_config_if_requested(
@@ -971,7 +990,8 @@ def registered_worker_count(
         + shlex.quote(
             "import json, urllib.request; "
             f"data=json.load(urllib.request.urlopen('http://{private_ip}:8080/json', timeout=5)); "
-            "print(len(data.get('workers', [])))"
+            "print(sum(1 for worker in data.get('workers', []) "
+            "if worker.get('state') == 'ALIVE'))"
         )
     )
     completed = subprocess.run(
@@ -1084,17 +1104,6 @@ def save_metadata(
 
 def load_metadata(state_dir: Path) -> dict[str, Any]:
     return read_json(state_dir / "metadata.json")
-
-
-def master_host_from_inventory(inventory_path: Path) -> str:
-    for raw_line in inventory_path.read_text().splitlines():
-        line = raw_line.strip()
-        if not line.startswith("spark_master "):
-            continue
-        for token in line.split()[1:]:
-            if token.startswith("ansible_host="):
-                return token.split("=", 1)[1]
-    raise SystemExit(f"Could not find spark_master ansible_host in {inventory_path}")
 
 
 def require_terraform_state(state_dir: Path) -> None:
@@ -1295,7 +1304,7 @@ def handle_run(args: argparse.Namespace) -> None:
     submit_script = submit_script_name(migration_type, args.validator)
     ssh_command(
         outputs["master"]["public_ip"],
-        f"cd {shlex.quote(REMOTE_MIGRATOR_DIR)} && ./{submit_script}",
+        remote_submit_command(submit_script),
         private_key=private_key,
         known_hosts=known_hosts,
         insecure=insecure,
@@ -1304,15 +1313,9 @@ def handle_run(args: argparse.Namespace) -> None:
 
 def handle_redeploy(args: argparse.Namespace) -> None:
     state_dir = resolve_state_dir(args.state_dir)
-    require_commands(["ansible-playbook", "ssh", "scp"])
+    require_terraform_state(state_dir)
+    require_commands(["terraform", "ansible-playbook", "ssh", "scp"])
     metadata = load_metadata(state_dir)
-
-    inventory_path = state_dir / "inventory.ini"
-    if not inventory_path.exists():
-        raise SystemExit(
-            f"Inventory not found at {inventory_path}. Run deploy first, or pass "
-            "the state directory containing the generated inventory."
-        )
 
     private_key = resolve_path(args.ssh_private_key or metadata.get("ssh_private_key"))
     if private_key is None or not private_key.exists():
@@ -1322,18 +1325,28 @@ def handle_redeploy(args: argparse.Namespace) -> None:
     insecure = args.insecure_ssh
     migration_type = args.migration_type or metadata.get("migration_type") or "cql"
     redeploy_config_file = config_file_from_args_or_metadata(args.config_file, metadata)
-    outputs = metadata.get("terraform_outputs")
+    outputs = terraform_output(state_dir)
+    metadata["terraform_outputs"] = outputs
+    write_json(state_dir / "metadata.json", metadata)
 
-    if outputs and not args.skip_start:
+    inventory_path = write_ansible_inventory(
+        outputs,
+        private_key=private_key,
+        state_dir=state_dir,
+    )
+
+    all_public_ips = [outputs["master"]["public_ip"]]
+    all_public_ips.extend(worker["public_ip"] for worker in outputs["workers"])
+    wait_for_ssh(all_public_ips, private_key, known_hosts, insecure)
+
+    if not args.skip_start:
         stop_spark(outputs, private_key, known_hosts, insecure)
-    elif not outputs and not args.skip_start:
-        print("Skipping Spark stop because Terraform outputs were not found in metadata.")
 
     run_ansible(inventory_path, private_key, known_hosts, insecure)
     upload_config_if_requested(
         redeploy_config_file,
         migration_type=migration_type,
-        master_public_ip=master_host_from_inventory(inventory_path),
+        master_public_ip=outputs["master"]["public_ip"],
         private_key=private_key,
         known_hosts=known_hosts,
         insecure=insecure,
@@ -1346,9 +1359,6 @@ def handle_redeploy(args: argparse.Namespace) -> None:
     )
 
     if args.skip_start:
-        return
-    if not outputs:
-        print("Skipping Spark restart because Terraform outputs were not found in metadata.")
         return
 
     start_spark(outputs, private_key, known_hosts, insecure)
@@ -1512,9 +1522,9 @@ def build_parser() -> argparse.ArgumentParser:
     redeploy = subparsers.add_parser(
         "redeploy",
         parents=[common],
-        description="Rerun Ansible on the current nodes in the generated inventory.",
+        description="Rerun Ansible on the current Terraform-managed nodes.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-        help="Rerun Ansible on the current nodes in the generated inventory.",
+        help="Rerun Ansible on the current Terraform-managed nodes.",
     )
     redeploy.add_argument("--ssh-private-key", default=None)
     redeploy.add_argument("--migration-type", choices=["cql", "alternator"], default=None)

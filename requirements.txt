@@ -2,4 +2,4 @@
 #
 # Terraform, ssh, and scp are external command-line tools and must be installed
 # separately.
-ansible-core
+ansible-core==2.20.1

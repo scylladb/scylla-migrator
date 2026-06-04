@@ -19,6 +19,45 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertEquals(result.exitCode, 0, result.output)
   }
 
+  test("empty config metadata path resolves as absent") {
+    val result = runPython(
+      "-c",
+      s"""import importlib.util
+         |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
+         |module = importlib.util.module_from_spec(spec)
+         |spec.loader.exec_module(module)
+         |print(module.resolve_path("") is None)
+         |print(module.config_file_from_args_or_metadata(None, {"config_file": ""}) is None)
+         |""".stripMargin
+    )
+
+    assertEquals(result.exitCode, 0, result.output)
+    assertEquals(result.output.linesIterator.toList, List("True", "True"))
+  }
+
+  test("invalid JSON state files report a clear CLI error") {
+    val badJson = repoRoot.resolve("target/deploy-script-test/invalid.json")
+    Files.createDirectories(badJson.getParent)
+    Files.writeString(badJson, "{not valid json")
+
+    val result = runPython(
+      "-c",
+      s"""import importlib.util
+         |from pathlib import Path
+         |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
+         |module = importlib.util.module_from_spec(spec)
+         |spec.loader.exec_module(module)
+         |try:
+         |    module.read_json(Path("${badJson}"))
+         |except SystemExit as exc:
+         |    print(exc)
+         |""".stripMargin
+    )
+
+    assertEquals(result.exitCode, 0, result.output)
+    assertOutputContains(result.output, s"Invalid JSON in ${badJson}")
+  }
+
   test("top-level help lists supported subcommands") {
     val result = runScript("--help")
 
@@ -220,6 +259,25 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(deployScript, "Pass --config-file to upload it before running")
   }
 
+  test("run counts only live Spark workers as registered") {
+    val deployScript = Files.readString(script)
+
+    assertOutputContains(deployScript, "worker.get('state') == 'ALIVE'")
+    assert(!deployScript.contains("print(len(data.get('workers', [])))"), deployScript)
+  }
+
+  test("run launches remote Spark submit through nohup") {
+    val deployScript = Files.readString(script)
+    val readme = Files.readString(repoRoot.resolve("README.md"))
+
+    assertOutputContains(deployScript, "def remote_submit_command")
+    assertOutputContains(deployScript, "nohup {script}")
+    assertOutputContains(deployScript, "2>&1 < /dev/null")
+    assertOutputContains(deployScript, "echo $! >")
+    assertOutputContains(deployScript, "remote_submit_command(submit_script)")
+    assertOutputContains(readme, "The submit script is launched with `nohup`")
+  }
+
   test("deploy metadata and Terraform vars are written with restricted permissions") {
     val deployScript = Files.readString(script)
 
@@ -266,7 +324,7 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(deployScript, "shlex.join(exc.cmd)")
   }
 
-  test("run, show, and destroy check state before running Terraform") {
+  test("run, show, redeploy, and destroy check state before running Terraform") {
     val deployScript = Files.readString(script)
 
     assertOutputContains(deployScript, "require_terraform_state(state_dir)")
@@ -287,6 +345,27 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(result.output, "--insecure-ssh")
   }
 
+  test("redeploy refreshes Terraform outputs before SSH and Ansible work") {
+    val deployScript = Files.readString(script)
+
+    assertOutputContains(
+      deployScript,
+      "require_commands([\"terraform\", \"ansible-playbook\", \"ssh\", \"scp\"])"
+    )
+    assertOutputContains(deployScript, "outputs = terraform_output(state_dir)")
+    assertOutputContains(deployScript, "metadata[\"terraform_outputs\"] = outputs")
+    assertOutputContains(deployScript, "inventory_path = write_ansible_inventory(")
+    assertOutputContains(
+      deployScript,
+      "wait_for_ssh(all_public_ips, private_key, known_hosts, insecure)"
+    )
+    assertOutputContains(deployScript, "master_public_ip=outputs[\"master\"][\"public_ip\"]")
+    assert(!deployScript.contains("Inventory not found"), deployScript)
+    assert(!deployScript.contains("inventory_path.exists()"), deployScript)
+    assert(!deployScript.contains("master_host_from_inventory"), deployScript)
+    assert(!deployScript.contains("metadata.get(\"terraform_outputs\")"), deployScript)
+  }
+
   test("Ansible installs the Alternator validator submit script") {
     val playbook = Files.readString(repoRoot.resolve("ansible/scylla-migrator.yml"))
 
@@ -299,6 +378,13 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(gitignore, "config.yaml")
     assertOutputContains(gitignore, "config.dynamodb.yaml")
     assertOutputContains(gitignore, "config.dynamodb.yml")
+  }
+
+  test("deploy script Python dependencies are pinned") {
+    val requirements = Files.readString(repoRoot.resolve("requirements.txt"))
+
+    assertOutputContains(requirements, "ansible-core==")
+    assert(!requirements.contains("ansible-core\n"), requirements)
   }
 
   test("Ansible derives Spark resource settings from host facts") {

@@ -122,7 +122,7 @@ The deployment creates an AWS key pair from the local public key. The EC2 instan
    ./deploy_spark_cluster.py redeploy
    ```
 
-   This uses the generated inventory in `.deploy_spark_cluster/inventory.ini` and does not run Terraform. If you deployed with `--config-file`, `redeploy` uploads that config again after Ansible finishes so the master keeps the intended migration settings. By default, `redeploy` stops the Spark systemd services before Ansible runs, then restarts them after Ansible finishes so unit, environment, and binary changes take effect cleanly.
+   This refreshes Terraform outputs from the state directory, rewrites `.deploy_spark_cluster/inventory.ini`, and then reruns Ansible. It does not apply Terraform changes. If you deployed with `--config-file`, `redeploy` uploads that config again after Ansible finishes so the master keeps the intended migration settings. By default, `redeploy` stops the Spark systemd services before Ansible runs, then restarts them after Ansible finishes so unit, environment, and binary changes take effect cleanly.
 
    To upload or switch to a config explicitly during redeploy, pass it again:
 
@@ -138,7 +138,7 @@ The deployment creates an AWS key pair from the local public key. The EC2 instan
    ./deploy_spark_cluster.py run
    ```
 
-   The `run` command checks that the Spark master is reachable on port `7077` and that the expected workers are registered. If needed, the script restarts the Spark systemd services before submitting the job.
+   The `run` command checks that the Spark master is reachable on port `7077` and that the expected workers are registered. If needed, the script restarts the Spark systemd services before submitting the job. The submit script is launched with `nohup`, and the command prints the remote PID and log file path before returning.
 
    To upload a revised config before running, pass `--config-file`:
 
@@ -152,7 +152,7 @@ The deployment creates an AWS key pair from the local public key. The EC2 instan
    ./deploy_spark_cluster.py run --validator
    ```
 
-7. Monitor progress in the Spark UI printed by `show` or by the `deploy` command.
+7. Monitor progress in the Spark UI printed by `show` or by the `deploy` command. You can also SSH to the master and tail the log file printed by `run`.
 
 8. Destroy the cluster when the migration is complete:
 
@@ -263,7 +263,7 @@ Networking and infrastructure arguments:
 
 Operational arguments:
 
-- `--skip-ansible`: Create infrastructure but skip Ansible configuration.
+- `--skip-ansible`: Create infrastructure but skip Ansible configuration. To configure the nodes later, run `redeploy`; it refreshes Terraform outputs and regenerates the inventory before running Ansible.
 - `--skip-start`: Configure the nodes but do not restart Spark systemd services.
 - `--insecure-ssh`: Disable SSH host key verification. Use only in trusted test environments.
 
@@ -277,7 +277,7 @@ Arguments:
 
 #### `run`
 
-Runs the configured Spark job on the Spark master node using the submit scripts installed by Ansible.
+Starts the configured Spark job on the Spark master node using the submit scripts installed by Ansible. The job is launched with `nohup` so it can keep running if the local SSH session disconnects. The command prints the remote PID and log file path before returning.
 
 Arguments:
 
@@ -289,7 +289,7 @@ Arguments:
 
 #### `redeploy`
 
-Reruns the Ansible playbook against the current nodes in the generated inventory. This is useful after changing files under `ansible/` and does not run Terraform. By default, it stops Spark systemd services before Ansible runs, uploads the saved or explicitly supplied Migrator config file after Ansible completes, and then restarts Spark services.
+Refreshes Terraform outputs from the state directory, rewrites the generated inventory, and reruns the Ansible playbook against the current Terraform-managed nodes. This is useful after changing files under `ansible/`. It does not apply Terraform changes. By default, it stops Spark systemd services before Ansible runs, uploads the saved or explicitly supplied Migrator config file after Ansible completes, and then restarts Spark services.
 
 Arguments:
 
