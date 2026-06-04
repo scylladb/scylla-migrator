@@ -110,47 +110,51 @@ object AlternatorValidator {
         log.info("Copying missing rows from source to target")
 
         val missingRowsRdd =
-          cachedJoined.filter { case (_, (_, r)) => r.isEmpty }
-        val missingRowCount = missingRowsRdd.count()
+          cachedJoined
+            .filter { case (_, (_, r)) => r.isEmpty }
+            .persist(StorageLevel.MEMORY_AND_DISK)
+        try {
+          val missingRowCount = missingRowsRdd.count()
 
-        if (missingRowCount > 0) {
-          val missingAsHadoop = missingRowsRdd.map { case (_, (sourceItem, _)) =>
-            val item = new java.util.HashMap[String, AttributeValue]()
-            sourceItem.foreach { case (k, v) =>
-              item.put(k, DdbValue.toAttributeValue(v))
+          if (missingRowCount > 0) {
+            val missingAsHadoop = missingRowsRdd.map { case (_, (sourceItem, _)) =>
+              val item = new java.util.HashMap[String, AttributeValue]()
+              sourceItem.foreach { case (k, v) =>
+                item.put(k, DdbValue.toAttributeValue(v))
+              }
+              (new Text(), new DynamoDBItemWritable(item))
             }
-            (new Text(), new DynamoDBItemWritable(item))
-          }
 
-          val targetTableDesc = {
-            val client = DynamoUtils.buildDynamoClient(
-              targetSettings.endpoint,
-              targetSettings.finalCredentials.map(_.toProvider),
-              targetSettings.region,
-              Seq.empty,
-              targetSettings.alternatorSettings
+            val targetTableDesc = {
+              val client = DynamoUtils.buildDynamoClient(
+                targetSettings.endpoint,
+                targetSettings.finalCredentials.map(_.toProvider),
+                targetSettings.region,
+                Seq.empty,
+                targetSettings.alternatorSettings
+              )
+              try
+                client
+                  .describeTable(
+                    DescribeTableRequest.builder().tableName(targetSettings.table).build()
+                  )
+                  .table()
+              finally
+                client.close()
+            }
+
+            writers.DynamoDB.writeRDD(
+              targetSettings,
+              renamedColumn,
+              missingAsHadoop,
+              targetTableDesc
             )
-            try
-              client
-                .describeTable(
-                  DescribeTableRequest.builder().tableName(targetSettings.table).build()
-                )
-                .table()
-            finally
-              client.close()
           }
 
-          writers.DynamoDB.writeRDD(
-            targetSettings,
-            renamedColumn,
-            missingAsHadoop,
-            targetTableDesc
+          log.info(
+            s"Finished copying missing rows to target: $missingRowCount missing row(s) copied"
           )
-        }
-
-        log.info(
-          s"Finished copying missing rows to target: $missingRowCount missing row(s) copied"
-        )
+        } finally missingRowsRdd.unpersist()
       }
 
       failures

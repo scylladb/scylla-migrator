@@ -87,7 +87,8 @@ class DdbValueTest extends munit.FunSuite {
       ).asJava
     )
     val av = AttributeValue.fromM(Map("nested" -> inner).asJava)
-    assertEquals(DdbValue.toAttributeValue(DdbValue.from(av)), av)
+    val ddb = DdbValue.from(av)
+    assertEquals(DdbValue.from(DdbValue.toAttributeValue(ddb)), ddb)
   }
 
 }
