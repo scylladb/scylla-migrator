@@ -35,6 +35,32 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertEquals(result.output.linesIterator.toList, List("True", "True"))
   }
 
+  test("migration type is persisted without a new config file") {
+    val result = runPython(
+      "-c",
+      s"""import importlib.util, tempfile
+         |from pathlib import Path
+         |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
+         |module = importlib.util.module_from_spec(spec)
+         |spec.loader.exec_module(module)
+         |with tempfile.TemporaryDirectory() as state_dir:
+         |    metadata = {"config_file": "/tmp/config.yaml", "migration_type": "cql"}
+         |    module.remember_config_file(
+         |        Path(state_dir),
+         |        metadata,
+         |        config_file=None,
+         |        migration_type="alternator",
+         |    )
+         |    saved = module.read_json(Path(state_dir) / "metadata.json")
+         |    print(saved["migration_type"])
+         |    print(saved["config_file"])
+         |""".stripMargin
+    )
+
+    assertEquals(result.exitCode, 0, result.output)
+    assertEquals(result.output.linesIterator.toList, List("alternator", "/tmp/config.yaml"))
+  }
+
   test("invalid JSON state files report a clear CLI error") {
     val badJson = repoRoot.resolve("target/deploy-script-test/invalid.json")
     Files.createDirectories(badJson.getParent)
@@ -263,6 +289,7 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     val deployScript = Files.readString(script)
 
     assertOutputContains(deployScript, "worker.get('state') == 'ALIVE'")
+    assertOutputContains(deployScript, "ConnectTimeout=10")
     assert(!deployScript.contains("print(len(data.get('workers', [])))"), deployScript)
   }
 
@@ -298,6 +325,22 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
 
     assertOutputContains(ansibleConfig, "host_key_checking = True")
     assert(!ansibleConfig.contains("host_key_checking = False"), ansibleConfig)
+  }
+
+  test("Ansible getting-started docs use explicit inventory and private key arguments") {
+    val ansibleDocs =
+      Files.readString(repoRoot.resolve("docs/source/getting-started/ansible.rst"))
+
+    assertOutputContains(ansibleDocs, "ansible-playbook -i /path/to/inventory.ini")
+    assertOutputContains(ansibleDocs, "--private-key /path/to/private-key")
+    assertOutputContains(ansibleDocs, "scp -i /path/to/private-key config.yaml")
+    assertOutputContains(ansibleDocs, "config.dynamodb.yml")
+    assertOutputContains(ansibleDocs, "http://<spark-master-hostname>:18080")
+    assertOutputContains(ansibleDocs, "cd /home/ubuntu/scylla-migrator")
+    assertOutputContains(ansibleDocs, "./submit-cql-job-validator.sh")
+    assert(!ansibleDocs.contains("ansible/inventory/hosts"), ansibleDocs)
+    assert(!ansibleDocs.contains("Update ``ansible/ansible.cfg``"), ansibleDocs)
+    assert(!ansibleDocs.contains("private_key_file"), ansibleDocs)
   }
 
   test("Deploy script pins repository Ansible config") {

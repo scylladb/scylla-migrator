@@ -779,11 +779,9 @@ def remember_config_file(
     config_file: Path | None,
     migration_type: str,
 ) -> None:
-    if config_file is None:
-        return
-
-    metadata["config_file"] = str(config_file)
     metadata["migration_type"] = migration_type
+    if config_file is not None:
+        metadata["config_file"] = str(config_file)
     write_json(state_dir / "metadata.json", metadata)
 
 
@@ -998,6 +996,8 @@ def registered_worker_count(
         [
             "ssh",
             *ssh_options(private_key, known_hosts, insecure),
+            "-o",
+            "ConnectTimeout=10",
             f"{DEFAULT_USER}@{master_public_ip}",
             command,
         ],
