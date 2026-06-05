@@ -39,8 +39,16 @@ object MySQLToScyllaValidator {
   ) extends ValidationCandidate
   private[scylla] case class HashRefinementFrames(
     source: DataFrame,
-    target: DataFrame
-  )
+    target: DataFrame,
+    ownsSourcePersistence: Boolean,
+    ownsTargetPersistence: Boolean
+  ) {
+    def unpersistOwned(): Unit =
+      try
+        if (ownsSourcePersistence) source.unpersist(blocking = false)
+      finally
+        if (ownsTargetPersistence) target.unpersist(blocking = false)
+  }
 
   private[scylla] def buildCaseInsensitiveRenameMap(
     renames: List[Rename]
@@ -203,10 +211,7 @@ object MySQLToScyllaValidator {
             .foreach(failures += _)
         }
       finally
-        refinementFrames.foreach { frames =>
-          frames.source.unpersist(blocking = false)
-          frames.target.unpersist(blocking = false)
-        }
+        refinementFrames.foreach(_.unpersistOwned())
 
       failures.toList
     }
@@ -266,8 +271,147 @@ object MySQLToScyllaValidator {
         s"Configured primaryKey does not match the MySQL table's actual PK. " +
           s"Configured: ${configuredPrimaryKey.mkString(", ")}. " +
           s"Actual source PK: ${actualSourcePrimaryKey.mkString(", ")}. " +
-          "Validation cannot safely proceed with a mismatched join key."
+          "Validation cannot safely proceed with a mismatched join key. " +
+          "To allow a custom join key that differs from MySQL's declared PK, set " +
+          "'skipSourcePrimaryKeyValidation: true' in the MySQL source config."
       )
+  }
+
+  // Decides whether to trust the configured primaryKey as-is (skip) or verify it against the
+  // MySQL-reported PK (lookupActualSourcePrimaryKey). The lookup is injected so this branching
+  // can be unit tested without a live JDBC connection.
+  private[scylla] def validateSourcePrimaryKeyOrSkip(
+    skipSourcePrimaryKeyValidation: Boolean,
+    primaryKey: Seq[String],
+    database: String,
+    table: String,
+    lookupActualSourcePrimaryKey: () => Seq[String]
+  ): Unit =
+    if (skipSourcePrimaryKeyValidation) {
+      log.warn(
+        "skipSourcePrimaryKeyValidation is set: skipping check that configured primaryKey " +
+          s"matches MySQL's declared PRIMARY KEY. Configured: ${primaryKey.mkString(", ")}."
+      )
+    } else {
+      val actualSourcePK = lookupActualSourcePrimaryKey()
+      if (actualSourcePK.isEmpty)
+        sys.error(
+          s"MySQL table $database.$table does not expose " +
+            "a primary key via JDBC metadata. Validation requires the real source primary key, " +
+            "or set 'skipSourcePrimaryKeyValidation: true' to use a custom join key."
+        )
+      validateSourcePrimaryKey(primaryKey, actualSourcePK)
+    }
+
+  // When skipSourcePrimaryKeyValidation bypasses the MySQL-declared PK check, the configured
+  // join key is no longer guaranteed unique. A non-unique join key can match multiple source
+  // rows to one target row, producing field mismatches or conflicting copyMissingRows writes.
+  private[scylla] def validateSourceJoinKeyUniqueness(
+    sourceDF: DataFrame,
+    joinKey: Seq[String]
+  ): Unit = {
+    val keyColumns = joinKey.zipWithIndex.map { case (name, index) =>
+      sparkColumn(resolveFieldName(sourceDF.schema.fieldNames, name)).as(s"key_$index")
+    }
+    val keyNames = joinKey.indices.map(index => s"key_$index")
+    val invalidExamples = sourceDF
+      .select(keyColumns: _*)
+      .groupBy(keyNames.map(sparkColumn): _*)
+      .count()
+      .filter((sparkColumn("count") > 1) || keyNames.map(sparkColumn(_).isNull).reduce(_ || _))
+      .take(5)
+    if (invalidExamples.nonEmpty) {
+      val examples = invalidExamples
+        .map { row =>
+          joinKey.zipWithIndex
+            .map { case (col, idx) => s"$col=${row.get(idx)}" }
+            .mkString("(", ", ", ")")
+        }
+        .mkString(", ")
+      sys.error(
+        s"skipSourcePrimaryKeyValidation is set, but the configured join key " +
+          s"(${joinKey.mkString(", ")}) is not unique or contains nulls in the MySQL source. " +
+          "Found invalid key " +
+          s"values: $examples. A non-unique join key can match multiple source rows to a single " +
+          "target row, causing field mismatches or conflicting copyMissingRows writes. " +
+          "Configure a join key that uniquely " +
+          "identifies each source row."
+      )
+    }
+  }
+
+  // Decides what to do about join-key uniqueness when skipSourcePrimaryKeyValidation bypasses
+  // the declared-PK check. The check itself (checkUniqueness) is injected so this decision can
+  // be unit tested without a live DataFrame/Spark job. The three outcomes are: run the full-scan
+  // uniqueness check (verifySourceJoinKeyUniqueness), proceed without it only if the risk has
+  // been explicitly accepted (acknowledgeUnverifiedJoinKey), or abort -- validation must never
+  // silently proceed with an unverified, unacknowledged custom join key.
+  private[scylla] def validateJoinKeyUniquenessOrAcknowledge(
+    skipSourcePrimaryKeyValidation: Boolean,
+    verifySourceJoinKeyUniqueness: Boolean,
+    acknowledgeUnverifiedJoinKey: Boolean,
+    joinKey: Seq[String],
+    checkUniqueness: () => Unit
+  ): Unit =
+    if (skipSourcePrimaryKeyValidation) {
+      if (verifySourceJoinKeyUniqueness)
+        checkUniqueness()
+      else if (acknowledgeUnverifiedJoinKey)
+        log.warn(
+          "skipSourcePrimaryKeyValidation is set and verifySourceJoinKeyUniqueness is false, " +
+            "but acknowledgeUnverifiedJoinKey is set: proceeding without verifying that the " +
+            s"configured join key (${joinKey.mkString(", ")}) is unique in the MySQL source. " +
+            "A non-unique join key can match multiple source rows to a single target row, " +
+            "causing field mismatches or conflicting copyMissingRows writes."
+        )
+      else
+        sys.error(
+          "skipSourcePrimaryKeyValidation is set, but the configured join key " +
+            s"(${joinKey.mkString(", ")}) has not been verified as unique. Set " +
+            "'verifySourceJoinKeyUniqueness: true' to check it (requires a full scan of the " +
+            "source table), or set 'acknowledgeUnverifiedJoinKey: true' to proceed without " +
+            "verification and accept the risk of field mismatches or conflicting " +
+            "copyMissingRows writes from a non-unique join key."
+        )
+    }
+
+  private[scylla] def missingSourceRows(
+    sourceDF: DataFrame,
+    targetDF: DataFrame,
+    primaryKey: Seq[String]
+  ): DataFrame = {
+    val sourceKeys = primaryKey.map(resolveFieldName(sourceDF.schema.fieldNames, _))
+    val targetKeys = primaryKey.zip(sourceKeys).map { case (configuredName, sourceName) =>
+      sparkColumn(resolveFieldName(targetDF.schema.fieldNames, configuredName)).as(sourceName)
+    }
+    val missing = sourceDF.join(targetDF.select(targetKeys: _*).distinct(), sourceKeys, "left_anti")
+    missing.select(missing.columns.toIndexedSeq.map { name =>
+      sparkColumn(name).as(resolveFieldName(targetDF.schema.fieldNames, name))
+    }: _*)
+  }
+
+  private[scylla] def withValidatedSourceJoinKey[A](
+    sourceDF: DataFrame,
+    sourceSettings: SourceSettings.MySQL,
+    joinKey: Seq[String]
+  )(validate: => A): A = {
+    val ownsPersistence = sourceSettings.skipSourcePrimaryKeyValidation &&
+      sourceSettings.verifySourceJoinKeyUniqueness &&
+      sourceDF.storageLevel == StorageLevel.NONE
+    if (ownsPersistence)
+      sourceDF.persist(StorageLevel.MEMORY_AND_DISK)
+    try {
+      validateJoinKeyUniquenessOrAcknowledge(
+        sourceSettings.skipSourcePrimaryKeyValidation,
+        sourceSettings.verifySourceJoinKeyUniqueness,
+        sourceSettings.acknowledgeUnverifiedJoinKey,
+        joinKey,
+        () => validateSourceJoinKeyUniqueness(sourceDF, joinKey)
+      )
+      validate
+    } finally
+      if (ownsPersistence)
+        sourceDF.unpersist(blocking = false)
   }
 
   private[scylla] def sourcePrimaryKeyFromMetadata(
@@ -381,13 +525,21 @@ object MySQLToScyllaValidator {
     rawTargetDF: DataFrame,
     primaryKey: Seq[String],
     hashBackedColumns: Seq[String]
-  ): HashRefinementFrames =
-    HashRefinementFrames(
-      selectColumnsForHashRefinement(rawSourceDF, primaryKey, hashBackedColumns)
-        .persist(StorageLevel.MEMORY_AND_DISK),
-      selectColumnsForHashRefinement(rawTargetDF, primaryKey, hashBackedColumns)
-        .persist(StorageLevel.MEMORY_AND_DISK)
-    )
+  ): HashRefinementFrames = {
+    val source = selectColumnsForHashRefinement(rawSourceDF, primaryKey, hashBackedColumns)
+    val target = selectColumnsForHashRefinement(rawTargetDF, primaryKey, hashBackedColumns)
+    val ownsSource = source.storageLevel == StorageLevel.NONE
+    if (ownsSource) source.persist(StorageLevel.MEMORY_AND_DISK)
+    val ownsTarget = target.storageLevel == StorageLevel.NONE
+    try {
+      if (ownsTarget) target.persist(StorageLevel.MEMORY_AND_DISK)
+      HashRefinementFrames(source, target, ownsSource, ownsTarget)
+    } catch {
+      case scala.util.control.NonFatal(error) =>
+        HashRefinementFrames(source, target, ownsSource, ownsTarget).unpersistOwned()
+        throw error
+    }
+  }
 
   private[scylla] def selectAndAliasColumns(
     df: DataFrame,
@@ -623,13 +775,13 @@ object MySQLToScyllaValidator {
       )
     )
 
-    val actualSourcePK = sourcePrimaryKeyFromMetadata(sourceSettings)
-    if (actualSourcePK.isEmpty)
-      sys.error(
-        s"MySQL table ${sourceSettings.database}.${sourceSettings.table} does not expose a primary key via JDBC metadata. " +
-          "Validation requires the real source primary key."
-      )
-    validateSourcePrimaryKey(primaryKey, actualSourcePK)
+    validateSourcePrimaryKeyOrSkip(
+      sourceSettings.skipSourcePrimaryKeyValidation,
+      primaryKey,
+      sourceSettings.database,
+      sourceSettings.table,
+      () => sourcePrimaryKeyFromMetadata(sourceSettings)
+    )
 
     // Always read all columns from MySQL; hash is computed in Spark (not MySQL)
     val rawSourceDF = {
@@ -688,301 +840,310 @@ object MySQLToScyllaValidator {
         "Source 'where' filter is configured. Disabling extra-target-row detection and " +
           "probing only target rows matching the filtered source primary keys."
       )
-    val rawTargetDF = lookupTargetRowsForSourceKeys(
-      spark,
-      rawSourceDF,
-      targetConnector,
-      targetTableDef,
-      targetSettings,
-      renamedPK,
-      selectedTargetColumns
-    )
-
-    val (sourceDF, targetDF, directComparableColumns, hashBackedColumns) = hashColumns match {
-      case Some(cols) =>
-        val renamedCols = cols.map(resolveRename)
-        validateHashColumnsPresentOnBothSides(
-          requestedHashColumns = renamedCols,
-          sourceColumns        = rawSourceDF.columns.toSeq,
-          targetColumns        = targetColumnNames
-        )
-
-        val promotedToDirectCols =
-          if (validationConfig.numericTypePolicy == NumericTypePolicy.DetectWiden) {
-            val promoted = detectSchemaTypeMismatches(
-              rawSourceDF.schema,
-              rawTargetDF.schema,
-              renamedCols,
-              NumericTypePolicy.DetectWiden
-            ).map(_._1)
-            if (promoted.nonEmpty)
-              log.info(
-                s"Promoting hash-backed columns to direct comparison for DetectWiden: " +
-                  s"${promoted.mkString(", ")}"
-              )
-            promoted.map(_.toLowerCase(Locale.ROOT)).toSet
-          } else Set.empty[String]
-
-        val effectiveHashCols =
-          renamedCols.filterNot(c => promotedToDirectCols.contains(c.toLowerCase(Locale.ROOT)))
-        val hashedSource =
-          if (effectiveHashCols.nonEmpty)
-            addContentHash(rawSourceDF, effectiveHashCols, renamedPK, dropHashedColumns = true)
-          else rawSourceDF
-        val hashedTarget =
-          if (effectiveHashCols.nonEmpty)
-            addContentHash(rawTargetDF, effectiveHashCols, renamedPK, dropHashedColumns = true)
-          else rawTargetDF
-        val hashBackedColumnsLower = effectiveHashCols.map(_.toLowerCase(Locale.ROOT)).toSet
-        val directCols = hashedSource.columns
-          .filter(c => !renamedPKLower.contains(c.toLowerCase(Locale.ROOT)))
-          .filter(_ != MySQL.ContentHashColumn)
-          .filterNot(c => hashBackedColumnsLower.contains(c.toLowerCase(Locale.ROOT)))
-        (hashedSource, hashedTarget, directCols, effectiveHashCols)
-
-      case None =>
-        val nonPKCols =
-          rawSourceDF.columns.filter(c => !renamedPKLower.contains(c.toLowerCase(Locale.ROOT)))
-        (rawSourceDF, rawTargetDF, nonPKCols, Nil)
-    }
-
-    val targetColumnsLower = targetDF.columns.map(_.toLowerCase(Locale.ROOT)).toSet
-    val droppedColumns =
-      (directComparableColumns ++ (if (hashBackedColumns.nonEmpty) Seq(MySQL.ContentHashColumn)
-                                   else Nil))
-        .filterNot(c => targetColumnsLower.contains(c.toLowerCase(Locale.ROOT)))
-    if (droppedColumns.nonEmpty)
-      sys.error(
-        s"Comparable columns unexpectedly disappeared from the target schema: ${droppedColumns.mkString(", ")}. " +
-          "Validation cannot continue safely."
+    hashColumns.foreach { cols =>
+      validateHashColumnsPresentOnBothSides(
+        requestedHashColumns = cols.map(resolveRename),
+        sourceColumns        = rawSourceDF.columns.toSeq,
+        targetColumns        = targetColumnNames
       )
-    val finalDirectComparableColumns =
-      directComparableColumns.filter(c => targetColumnsLower.contains(c.toLowerCase(Locale.ROOT)))
-    val finalHashBackedColumns = hashBackedColumns
-    log.info(
-      s"Comparable columns: ${(finalDirectComparableColumns ++ finalHashBackedColumns).mkString(", ")}"
-    )
-
-    val numericPolicy = validationConfig.numericTypePolicy
-    val schemaTypeMismatchFields =
-      if (numericPolicy == NumericTypePolicy.StrictType && finalHashBackedColumns.nonEmpty)
-        detectSchemaTypeMismatches(
-          rawSourceDF.schema,
-          rawTargetDF.schema,
-          finalHashBackedColumns,
-          numericPolicy
-        )
-      else Nil
-    val schemaTypeMismatches: List[RowComparisonFailure] =
-      if (schemaTypeMismatchFields.isEmpty) Nil
-      else {
-        val desc = schemaTypeMismatchFields
-          .map { case (col, src, tgt) => s"$col ($src vs $tgt)" }
-          .mkString(", ")
-        log.error(s"Schema-level numeric type mismatches on hash-backed columns: $desc")
-        List(
-          RowComparisonFailure(
-            "[schema-level type mismatch]",
-            None,
-            List(RowComparisonFailure.Item.NumericTypeMismatch(schemaTypeMismatchFields))
-          )
-        )
-      }
-
-    val sourcePrefixed = prefixColumns(sourceDF, "src_")
-    val targetPrefixed = prefixColumns(targetDF, "tgt_")
-
-    // Resolve PK column names against the actual DataFrame schemas using case-insensitive
-    // lookup. This is necessary because ScyllaDB normalizes unquoted column names to lowercase,
-    // so a MySQL column "UserId" may appear as "userid" in the target DataFrame. Spark's
-    // DataFrame.apply() resolves columns case-insensitively, but Row.fieldIndex() is
-    // case-sensitive and would throw IllegalArgumentException on a mismatch.
-    val srcSchemaFields = sourcePrefixed.schema.fieldNames
-    val tgtSchemaFields = targetPrefixed.schema.fieldNames
-
-    val joinCondition = renamedPK
-      .map { pk =>
-        val srcCol = resolveFieldName(srcSchemaFields, s"src_$pk")
-        val tgtCol = resolveFieldName(tgtSchemaFields, s"tgt_$pk")
-        sparkColumn(srcCol) === sparkColumn(tgtCol)
-      }
-      .reduce(_ && _)
-
-    val joined = sourcePrefixed.join(targetPrefixed, joinCondition, "left_outer")
-
-    val joinedSchemaFields = joined.schema.fieldNames
-    val floatTol = validationConfig.floatingPointTolerance
-    val tsTol = validationConfig.timestampMsTolerance
-
-    // Pre-compute field indices to avoid repeated case-insensitive lookups on every row.
-    // For wide tables (100+ columns) × millions of rows, this provides significant speedup.
-    val directFieldIndices = finalDirectComparableColumns.toIndexedSeq.map { colName =>
-      val srcFieldName = resolveFieldName(joinedSchemaFields, s"src_$colName")
-      val tgtFieldName = resolveFieldName(joinedSchemaFields, s"tgt_$colName")
-      (colName, joinedSchemaFields.indexOf(srcFieldName), joinedSchemaFields.indexOf(tgtFieldName))
     }
-    val contentHashFieldIndices =
-      if (finalHashBackedColumns.nonEmpty) {
-        val srcFieldName = resolveFieldName(joinedSchemaFields, s"src_${MySQL.ContentHashColumn}")
-        val tgtFieldName = resolveFieldName(joinedSchemaFields, s"tgt_${MySQL.ContentHashColumn}")
-        Some((joinedSchemaFields.indexOf(srcFieldName), joinedSchemaFields.indexOf(tgtFieldName)))
-      } else None
-    val fieldIndexByName =
-      directFieldIndices.map { case (name, srcIdx, tgtIdx) =>
-        name -> (srcIdx, tgtIdx)
-      }.toMap
 
-    // Pre-compute PK field indices so that the RDD closure uses index-based access
-    // instead of calling resolveField (linear scan) on every row.
-    val srcPKIndices = renamedPK.map { pk =>
-      val fieldName = resolveFieldName(joinedSchemaFields, s"src_$pk")
-      (pk, joinedSchemaFields.indexOf(fieldName))
-    }.toArray
-    val tgtPKIndices = renamedPK.map { pk =>
-      val fieldName = resolveFieldName(joinedSchemaFields, s"tgt_$pk")
-      (pk, joinedSchemaFields.indexOf(fieldName))
-    }.toArray
+    withValidatedSourceJoinKey(rawSourceDF, sourceSettings, renamedPK) {
+      val rawTargetDF = lookupTargetRowsForSourceKeys(
+        spark,
+        rawSourceDF,
+        targetConnector,
+        targetTableDef,
+        targetSettings,
+        renamedPK,
+        selectedTargetColumns
+      )
 
-    val candidateFailuresRdd: RDD[ValidationCandidate] = joined.rdd
-      .flatMap { joinedRow =>
-        val srcNull = srcPKIndices.forall { case (_, idx) => joinedRow.isNullAt(idx) }
-        val tgtNull = tgtPKIndices.forall { case (_, idx) => joinedRow.isNullAt(idx) }
+      val (sourceDF, targetDF, directComparableColumns, hashBackedColumns) = hashColumns match {
+        case Some(cols) =>
+          val renamedCols = cols.map(resolveRename)
+          val promotedToDirectCols =
+            if (validationConfig.numericTypePolicy == NumericTypePolicy.DetectWiden) {
+              val promoted = detectSchemaTypeMismatches(
+                rawSourceDF.schema,
+                rawTargetDF.schema,
+                renamedCols,
+                NumericTypePolicy.DetectWiden
+              ).map(_._1)
+              if (promoted.nonEmpty)
+                log.info(
+                  s"Promoting hash-backed columns to direct comparison for DetectWiden: " +
+                    s"${promoted.mkString(", ")}"
+                )
+              promoted.map(_.toLowerCase(Locale.ROOT)).toSet
+            } else Set.empty[String]
 
-        if (srcNull) {
-          // Row exists in target but not in source
-          val tgtRepr =
-            tgtPKIndices
-              .map { case (pk, idx) => s"$pk=${joinedRow.get(idx)}" }
-              .mkString(", ")
-          Some(
-            FinalValidationFailure(
-              RowComparisonFailure(
-                tgtRepr,
-                None,
-                List(RowComparisonFailure.Item.ExtraTargetRow)
-              )
+          val effectiveHashCols =
+            renamedCols.filterNot(c => promotedToDirectCols.contains(c.toLowerCase(Locale.ROOT)))
+          val hashedSource =
+            if (effectiveHashCols.nonEmpty)
+              addContentHash(rawSourceDF, effectiveHashCols, renamedPK, dropHashedColumns = true)
+            else rawSourceDF
+          val hashedTarget =
+            if (effectiveHashCols.nonEmpty)
+              addContentHash(rawTargetDF, effectiveHashCols, renamedPK, dropHashedColumns = true)
+            else rawTargetDF
+          val hashBackedColumnsLower = effectiveHashCols.map(_.toLowerCase(Locale.ROOT)).toSet
+          val directCols = hashedSource.columns
+            .filter(c => !renamedPKLower.contains(c.toLowerCase(Locale.ROOT)))
+            .filter(_ != MySQL.ContentHashColumn)
+            .filterNot(c => hashBackedColumnsLower.contains(c.toLowerCase(Locale.ROOT)))
+          (hashedSource, hashedTarget, directCols, effectiveHashCols)
+
+        case None =>
+          val nonPKCols =
+            rawSourceDF.columns.filter(c => !renamedPKLower.contains(c.toLowerCase(Locale.ROOT)))
+          (rawSourceDF, rawTargetDF, nonPKCols, Nil)
+      }
+
+      val targetColumnsLower = targetDF.columns.map(_.toLowerCase(Locale.ROOT)).toSet
+      val droppedColumns =
+        (directComparableColumns ++ (if (hashBackedColumns.nonEmpty) Seq(MySQL.ContentHashColumn)
+                                     else Nil))
+          .filterNot(c => targetColumnsLower.contains(c.toLowerCase(Locale.ROOT)))
+      if (droppedColumns.nonEmpty)
+        sys.error(
+          s"Comparable columns unexpectedly disappeared from the target schema: ${droppedColumns.mkString(", ")}. " +
+            "Validation cannot continue safely."
+        )
+      val finalDirectComparableColumns =
+        directComparableColumns.filter(c => targetColumnsLower.contains(c.toLowerCase(Locale.ROOT)))
+      val finalHashBackedColumns = hashBackedColumns
+      log.info(
+        s"Comparable columns: ${(finalDirectComparableColumns ++ finalHashBackedColumns).mkString(", ")}"
+      )
+
+      val numericPolicy = validationConfig.numericTypePolicy
+      val schemaTypeMismatchFields =
+        if (numericPolicy == NumericTypePolicy.StrictType && finalHashBackedColumns.nonEmpty)
+          detectSchemaTypeMismatches(
+            rawSourceDF.schema,
+            rawTargetDF.schema,
+            finalHashBackedColumns,
+            numericPolicy
+          )
+        else Nil
+      val schemaTypeMismatches: List[RowComparisonFailure] =
+        if (schemaTypeMismatchFields.isEmpty) Nil
+        else {
+          val desc = schemaTypeMismatchFields
+            .map { case (col, src, tgt) => s"$col ($src vs $tgt)" }
+            .mkString(", ")
+          log.error(s"Schema-level numeric type mismatches on hash-backed columns: $desc")
+          List(
+            RowComparisonFailure(
+              "[schema-level type mismatch]",
+              None,
+              List(RowComparisonFailure.Item.NumericTypeMismatch(schemaTypeMismatchFields))
             )
           )
-        } else if (tgtNull) {
-          val srcRepr =
-            srcPKIndices
-              .map { case (pk, idx) => s"$pk=${joinedRow.get(idx)}" }
-              .mkString(", ")
-          Some(
-            FinalValidationFailure(
-              RowComparisonFailure(
-                srcRepr,
-                None,
-                List(RowComparisonFailure.Item.MissingTargetRow)
-              )
-            )
-          )
-        } else {
-          val directDifferingFields =
-            differingFieldNamesForRow(joinedRow, directFieldIndices, tsTol, floatTol, numericPolicy)
-              .map { colName =>
-                val (srcIdx, tgtIdx) = fieldIndexByName(colName)
-                val srcVal = if (joinedRow.isNullAt(srcIdx)) None else Some(joinedRow.get(srcIdx))
-                val tgtVal = if (joinedRow.isNullAt(tgtIdx)) None else Some(joinedRow.get(tgtIdx))
-                s"$colName (source=${truncateValue(srcVal)}, target=${truncateValue(tgtVal)})"
-              }
-          val hashMismatch =
-            hasContentHashMismatch(
-              joinedRow,
-              contentHashFieldIndices,
-              tsTol,
-              floatTol,
-              numericPolicy
-            )
-          if (directDifferingFields.isEmpty && !hashMismatch) None
-          else {
-            val srcPkValues = srcPKIndices.map { case (_, idx) => joinedRow.get(idx) }.toVector
-            val srcRepr =
-              srcPKIndices
-                .map { case (pk, idx) => s"$pk=${joinedRow.get(idx)}" }
-                .mkString(", ")
+        }
+
+      val sourcePrefixed = prefixColumns(sourceDF, "src_")
+      val targetPrefixed = prefixColumns(targetDF, "tgt_")
+
+      // Resolve PK column names against the actual DataFrame schemas using case-insensitive
+      // lookup. This is necessary because ScyllaDB normalizes unquoted column names to lowercase,
+      // so a MySQL column "UserId" may appear as "userid" in the target DataFrame. Spark's
+      // DataFrame.apply() resolves columns case-insensitively, but Row.fieldIndex() is
+      // case-sensitive and would throw IllegalArgumentException on a mismatch.
+      val srcSchemaFields = sourcePrefixed.schema.fieldNames
+      val tgtSchemaFields = targetPrefixed.schema.fieldNames
+
+      val joinCondition = renamedPK
+        .map { pk =>
+          val srcCol = resolveFieldName(srcSchemaFields, s"src_$pk")
+          val tgtCol = resolveFieldName(tgtSchemaFields, s"tgt_$pk")
+          sparkColumn(srcCol) === sparkColumn(tgtCol)
+        }
+        .reduce(_ && _)
+
+      val joined = sourcePrefixed.join(targetPrefixed, joinCondition, "left_outer")
+
+      val joinedSchemaFields = joined.schema.fieldNames
+      val floatTol = validationConfig.floatingPointTolerance
+      val tsTol = validationConfig.timestampMsTolerance
+
+      // Pre-compute field indices to avoid repeated case-insensitive lookups on every row.
+      // For wide tables (100+ columns) × millions of rows, this provides significant speedup.
+      val directFieldIndices = finalDirectComparableColumns.toIndexedSeq.map { colName =>
+        val srcFieldName = resolveFieldName(joinedSchemaFields, s"src_$colName")
+        val tgtFieldName = resolveFieldName(joinedSchemaFields, s"tgt_$colName")
+        (
+          colName,
+          joinedSchemaFields.indexOf(srcFieldName),
+          joinedSchemaFields.indexOf(tgtFieldName)
+        )
+      }
+      val contentHashFieldIndices =
+        if (finalHashBackedColumns.nonEmpty) {
+          val srcFieldName = resolveFieldName(joinedSchemaFields, s"src_${MySQL.ContentHashColumn}")
+          val tgtFieldName = resolveFieldName(joinedSchemaFields, s"tgt_${MySQL.ContentHashColumn}")
+          Some((joinedSchemaFields.indexOf(srcFieldName), joinedSchemaFields.indexOf(tgtFieldName)))
+        } else None
+      val fieldIndexByName =
+        directFieldIndices.map { case (name, srcIdx, tgtIdx) =>
+          name -> (srcIdx, tgtIdx)
+        }.toMap
+
+      // Pre-compute PK field indices so that the RDD closure uses index-based access
+      // instead of calling resolveField (linear scan) on every row.
+      val srcPKIndices = renamedPK.map { pk =>
+        val fieldName = resolveFieldName(joinedSchemaFields, s"src_$pk")
+        (pk, joinedSchemaFields.indexOf(fieldName))
+      }.toArray
+      val tgtPKIndices = renamedPK.map { pk =>
+        val fieldName = resolveFieldName(joinedSchemaFields, s"tgt_$pk")
+        (pk, joinedSchemaFields.indexOf(fieldName))
+      }.toArray
+
+      val candidateFailuresRdd: RDD[ValidationCandidate] = joined.rdd
+        .flatMap { joinedRow =>
+          val srcNull = srcPKIndices.forall { case (_, idx) => joinedRow.isNullAt(idx) }
+          val tgtNull = tgtPKIndices.forall { case (_, idx) => joinedRow.isNullAt(idx) }
+
+          if (srcNull) {
+            // Row exists in target but not in source
             val tgtRepr =
               tgtPKIndices
                 .map { case (pk, idx) => s"$pk=${joinedRow.get(idx)}" }
                 .mkString(", ")
             Some(
-              MatchedRowValidationCandidate(
-                srcPkValues,
-                srcRepr,
-                tgtRepr,
-                directDifferingFields.toList,
-                hashMismatch
+              FinalValidationFailure(
+                RowComparisonFailure(
+                  tgtRepr,
+                  None,
+                  List(RowComparisonFailure.Item.ExtraTargetRow)
+                )
               )
             )
+          } else if (tgtNull) {
+            val srcRepr =
+              srcPKIndices
+                .map { case (pk, idx) => s"$pk=${joinedRow.get(idx)}" }
+                .mkString(", ")
+            Some(
+              FinalValidationFailure(
+                RowComparisonFailure(
+                  srcRepr,
+                  None,
+                  List(RowComparisonFailure.Item.MissingTargetRow)
+                )
+              )
+            )
+          } else {
+            val directDifferingFields =
+              differingFieldNamesForRow(
+                joinedRow,
+                directFieldIndices,
+                tsTol,
+                floatTol,
+                numericPolicy
+              )
+                .map { colName =>
+                  val (srcIdx, tgtIdx) = fieldIndexByName(colName)
+                  val srcVal = if (joinedRow.isNullAt(srcIdx)) None else Some(joinedRow.get(srcIdx))
+                  val tgtVal = if (joinedRow.isNullAt(tgtIdx)) None else Some(joinedRow.get(tgtIdx))
+                  s"$colName (source=${truncateValue(srcVal)}, target=${truncateValue(tgtVal)})"
+                }
+            val hashMismatch =
+              hasContentHashMismatch(
+                joinedRow,
+                contentHashFieldIndices,
+                tsTol,
+                floatTol,
+                numericPolicy
+              )
+            if (directDifferingFields.isEmpty && !hashMismatch) None
+            else {
+              val srcPkValues = srcPKIndices.map { case (_, idx) => joinedRow.get(idx) }.toVector
+              val srcRepr =
+                srcPKIndices
+                  .map { case (pk, idx) => s"$pk=${joinedRow.get(idx)}" }
+                  .mkString(", ")
+              val tgtRepr =
+                tgtPKIndices
+                  .map { case (pk, idx) => s"$pk=${joinedRow.get(idx)}" }
+                  .mkString(", ")
+              Some(
+                MatchedRowValidationCandidate(
+                  srcPkValues,
+                  srcRepr,
+                  tgtRepr,
+                  directDifferingFields.toList,
+                  hashMismatch
+                )
+              )
+            }
           }
         }
+
+      val sourceSideFailures = collectFailureSample(
+        candidateFailuresRdd,
+        rawSourceDF,
+        rawTargetDF,
+        renamedPK,
+        finalHashBackedColumns,
+        tsTol,
+        floatTol,
+        validationConfig.failuresToFetch,
+        numericPolicy
+      )
+      val failures =
+        if (
+          sourceSettings.where.isDefined || sourceSideFailures.size >= validationConfig.failuresToFetch
+        )
+          sourceSideFailures
+        else
+          sourceSideFailures ++ collectExtraTargetFailureSample(
+            rawSourceDF,
+            targetConnector,
+            targetTableDef,
+            targetSettings,
+            renamedPK,
+            validationConfig.failuresToFetch - sourceSideFailures.size
+          )
+      val allFailures = schemaTypeMismatches ++ failures
+      log.info(
+        s"Validation complete for ${sourceSettings.database}.${sourceSettings.table} -> " +
+          s"${targetSettings.keyspace}.${targetSettings.table}. " +
+          s"Collected ${allFailures.size} failure(s) in sample."
+      )
+
+      if (validationConfig.copyMissingRows) {
+        log.info("Copying missing rows from source to target")
+
+        val missingSourceDf = missingSourceRows(rawSourceDF, rawTargetDF, renamedPK)
+          .persist(StorageLevel.MEMORY_AND_DISK)
+
+        try {
+          val missingCount = missingSourceDf.count()
+
+          if (missingCount > 0) {
+            writers.Scylla.writeDataframe(
+              targetSettings,
+              Nil,
+              missingSourceDf,
+              None,
+              None,
+              sourceSettings
+            )
+          }
+
+          log.info(
+            s"Finished copying missing rows to target: $missingCount missing row(s) copied"
+          )
+        } finally
+          missingSourceDf.unpersist()
       }
 
-    val sourceSideFailures = collectFailureSample(
-      candidateFailuresRdd,
-      rawSourceDF,
-      rawTargetDF,
-      renamedPK,
-      finalHashBackedColumns,
-      tsTol,
-      floatTol,
-      validationConfig.failuresToFetch,
-      numericPolicy
-    )
-    val failures =
-      if (
-        sourceSettings.where.isDefined || sourceSideFailures.size >= validationConfig.failuresToFetch
-      )
-        sourceSideFailures
-      else
-        sourceSideFailures ++ collectExtraTargetFailureSample(
-          rawSourceDF,
-          targetConnector,
-          targetTableDef,
-          targetSettings,
-          renamedPK,
-          validationConfig.failuresToFetch - sourceSideFailures.size
-        )
-    val allFailures = schemaTypeMismatches ++ failures
-    log.info(
-      s"Validation complete for ${sourceSettings.database}.${sourceSettings.table} -> " +
-        s"${targetSettings.keyspace}.${targetSettings.table}. " +
-        s"Collected ${allFailures.size} failure(s) in sample."
-    )
-
-    if (validationConfig.copyMissingRows) {
-      log.info("Copying missing rows from source to target")
-
-      val missingSourceDf = rawSourceDF
-        .join(
-          rawTargetDF.select(renamedPK.map(sparkColumn): _*).distinct(),
-          renamedPK,
-          "left_anti"
-        )
-        .persist(StorageLevel.MEMORY_AND_DISK)
-
-      try {
-        val missingCount = missingSourceDf.count()
-
-        if (missingCount > 0) {
-          writers.Scylla.writeDataframe(
-            targetSettings,
-            Nil,
-            missingSourceDf,
-            None,
-            None,
-            sourceSettings
-          )
-        }
-
-        log.info(
-          s"Finished copying missing rows to target: $missingCount missing row(s) copied"
-        )
-      } finally
-        missingSourceDf.unpersist()
+      allFailures
     }
-
-    allFailures
   }
 
   private[scylla] def resolveHashBackedDifferences(
@@ -1007,10 +1168,7 @@ object MySQLToScyllaValidator {
         floatingPointTolerance,
         numericTypePolicy
       )
-    finally {
-      refinementFrames.source.unpersist(blocking = false)
-      refinementFrames.target.unpersist(blocking = false)
-    }
+    finally refinementFrames.unpersistOwned()
   }
 
   private def resolveHashBackedDifferences(
@@ -1032,8 +1190,10 @@ object MySQLToScyllaValidator {
 
     val sourceLookup =
       prefixColumns(keyDf.join(projectedSource, resolvedPrimaryKey, "inner"), "src_")
+    val targetPrimaryKey = primaryKey.map(resolveFieldName(projectedTarget.schema.fieldNames, _))
+    val targetKeyDf = keyDf.toDF(targetPrimaryKey: _*)
     val targetLookup =
-      prefixColumns(keyDf.join(projectedTarget, resolvedPrimaryKey, "inner"), "tgt_")
+      prefixColumns(targetKeyDf.join(projectedTarget, targetPrimaryKey, "inner"), "tgt_")
 
     val sourceLookupFields = sourceLookup.schema.fieldNames
     val targetLookupFields = targetLookup.schema.fieldNames

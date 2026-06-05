@@ -1,6 +1,6 @@
 package com.scylladb.migrator.scylla
 
-import com.scylladb.migrator.config.Rename
+import com.scylladb.migrator.config.{ Credentials, Rename, SourceSettings }
 import com.scylladb.migrator.readers.MySQL
 import com.scylladb.migrator.validation.RowComparisonFailure
 import org.apache.spark.sql.{ Row, SparkSession }
@@ -297,6 +297,7 @@ class MySQLToScyllaValidatorTest extends munit.FunSuite {
       )
     }
     assert(error.getMessage.contains("does not match the MySQL table's actual PK"))
+    assert(error.getMessage.contains("skipSourcePrimaryKeyValidation"))
   }
 
   test("validateSourcePrimaryKey rejects source PK with the same columns in a different order") {
@@ -307,6 +308,130 @@ class MySQLToScyllaValidatorTest extends munit.FunSuite {
       )
     }
     assert(error.getMessage.contains("does not match the MySQL table's actual PK"))
+  }
+
+  test("validateSourcePrimaryKeyOrSkip performs the metadata check when explicitly disabled") {
+    var lookupCalls = 0
+    val error = intercept[RuntimeException] {
+      MySQLToScyllaValidator.validateSourcePrimaryKeyOrSkip(
+        skipSourcePrimaryKeyValidation = false,
+        primaryKey                     = Seq("custom_key"),
+        database                       = "mydb",
+        table                          = "mytable",
+        lookupActualSourcePrimaryKey = { () =>
+          lookupCalls += 1
+          Seq("id")
+        }
+      )
+    }
+    assertEquals(lookupCalls, 1)
+    assert(error.getMessage.contains("does not match the MySQL table's actual PK"))
+  }
+
+  test("validateSourcePrimaryKeyOrSkip default (false) accepts a matching metadata PK") {
+    MySQLToScyllaValidator.validateSourcePrimaryKeyOrSkip(
+      skipSourcePrimaryKeyValidation = false,
+      primaryKey                     = Seq("id"),
+      database                       = "mydb",
+      table                          = "mytable",
+      lookupActualSourcePrimaryKey   = () => Seq("id")
+    )
+  }
+
+  test("validateSourcePrimaryKeyOrSkip errors when MySQL exposes no PK via metadata") {
+    val error = intercept[RuntimeException] {
+      MySQLToScyllaValidator.validateSourcePrimaryKeyOrSkip(
+        skipSourcePrimaryKeyValidation = false,
+        primaryKey                     = Seq("custom_key"),
+        database                       = "mydb",
+        table                          = "mytable",
+        lookupActualSourcePrimaryKey   = () => Seq.empty
+      )
+    }
+    assert(error.getMessage.contains("does not expose"))
+    assert(error.getMessage.contains("skipSourcePrimaryKeyValidation"))
+  }
+
+  test("validateSourcePrimaryKeyOrSkip bypasses the metadata lookup entirely when enabled") {
+    var lookupCalls = 0
+    MySQLToScyllaValidator.validateSourcePrimaryKeyOrSkip(
+      skipSourcePrimaryKeyValidation = true,
+      primaryKey                     = Seq("custom_key"),
+      database                       = "mydb",
+      table                          = "mytable",
+      lookupActualSourcePrimaryKey = { () =>
+        lookupCalls += 1
+        throw new RuntimeException("lookup should not be called when skipping")
+      }
+    )
+    assertEquals(lookupCalls, 0)
+  }
+
+  test("validateJoinKeyUniquenessOrAcknowledge does nothing when skip is false") {
+    var checkCalls = 0
+    MySQLToScyllaValidator.validateJoinKeyUniquenessOrAcknowledge(
+      skipSourcePrimaryKeyValidation = false,
+      verifySourceJoinKeyUniqueness  = false,
+      acknowledgeUnverifiedJoinKey   = false,
+      joinKey                        = Seq("custom_key"),
+      checkUniqueness = { () =>
+        checkCalls += 1
+      }
+    )
+    assertEquals(checkCalls, 0)
+  }
+
+  test(
+    "validateJoinKeyUniquenessOrAcknowledge runs the uniqueness check when verify is enabled"
+  ) {
+    var checkCalls = 0
+    MySQLToScyllaValidator.validateJoinKeyUniquenessOrAcknowledge(
+      skipSourcePrimaryKeyValidation = true,
+      verifySourceJoinKeyUniqueness  = true,
+      acknowledgeUnverifiedJoinKey   = false,
+      joinKey                        = Seq("custom_key"),
+      checkUniqueness = { () =>
+        checkCalls += 1
+      }
+    )
+    assertEquals(checkCalls, 1)
+  }
+
+  test(
+    "validateJoinKeyUniquenessOrAcknowledge skips the check without erroring when acknowledged"
+  ) {
+    var checkCalls = 0
+    MySQLToScyllaValidator.validateJoinKeyUniquenessOrAcknowledge(
+      skipSourcePrimaryKeyValidation = true,
+      verifySourceJoinKeyUniqueness  = false,
+      acknowledgeUnverifiedJoinKey   = true,
+      joinKey                        = Seq("custom_key"),
+      checkUniqueness = { () =>
+        checkCalls += 1
+        throw new RuntimeException("checkUniqueness should not be called when acknowledged")
+      }
+    )
+    assertEquals(checkCalls, 0)
+  }
+
+  test(
+    "validateJoinKeyUniquenessOrAcknowledge aborts when neither verify nor acknowledge is set"
+  ) {
+    var checkCalls = 0
+    val error = intercept[RuntimeException] {
+      MySQLToScyllaValidator.validateJoinKeyUniquenessOrAcknowledge(
+        skipSourcePrimaryKeyValidation = true,
+        verifySourceJoinKeyUniqueness  = false,
+        acknowledgeUnverifiedJoinKey   = false,
+        joinKey                        = Seq("custom_key"),
+        checkUniqueness = { () =>
+          checkCalls += 1
+        }
+      )
+    }
+    assertEquals(checkCalls, 0)
+    assert(error.getMessage.contains("verifySourceJoinKeyUniqueness"))
+    assert(error.getMessage.contains("acknowledgeUnverifiedJoinKey"))
   }
 
   test("sourcePrimaryKeyFromMetadata uses the literal table name") {
@@ -551,6 +676,196 @@ class MySQLToScyllaValidatorTest extends munit.FunSuite {
     assertEquals(prefixed.collect().toList, List(Row(1, "alpha", "beta")))
   }
 
+  // --- validateSourceJoinKeyUniqueness tests (Spark-local) ---
+
+  test("validateSourceJoinKeyUniqueness accepts a join key with no duplicates") {
+    import spark.implicits._
+    val df = Seq((1, "a"), (2, "b"), (3, "c")).toDF("id", "name")
+    MySQLToScyllaValidator.validateSourceJoinKeyUniqueness(df, Seq("id"))
+  }
+
+  test("validateSourceJoinKeyUniqueness rejects a join key with duplicate values") {
+    import spark.implicits._
+    val df = Seq((1, "a"), (1, "b"), (2, "c")).toDF("id", "name")
+    val error = intercept[RuntimeException] {
+      MySQLToScyllaValidator.validateSourceJoinKeyUniqueness(df, Seq("id"))
+    }
+    assert(error.getMessage.contains("skipSourcePrimaryKeyValidation"))
+    assert(error.getMessage.contains("not unique"))
+    assert(error.getMessage.contains("id=1"))
+  }
+
+  test("validateSourceJoinKeyUniqueness rejects a composite join key with duplicate combinations") {
+    import spark.implicits._
+    val df =
+      Seq((1, "x", "a"), (1, "x", "b"), (1, "y", "c")).toDF("tenant_id", "user_id", "name")
+    val error = intercept[RuntimeException] {
+      MySQLToScyllaValidator.validateSourceJoinKeyUniqueness(df, Seq("tenant_id", "user_id"))
+    }
+    assert(error.getMessage.contains("tenant_id=1"))
+    assert(error.getMessage.contains("user_id=x"))
+  }
+
+  test("join-key verification handles count and generated-name columns") {
+    import spark.implicits._
+    val unique = Seq((1, "a"), (2, "b")).toDF("count", "key_0")
+    MySQLToScyllaValidator.validateSourceJoinKeyUniqueness(unique, Seq("count", "key_0"))
+    val duplicates = Seq((1, "a"), (1, "a")).toDF("count", "key_0")
+    val error = intercept[RuntimeException] {
+      MySQLToScyllaValidator.validateSourceJoinKeyUniqueness(duplicates, Seq("count", "key_0"))
+    }
+    assert(error.getMessage.contains("count=1"))
+  }
+
+  test("join-key verification resolves case-only names with case-sensitive Spark") {
+    import spark.implicits._
+    val previous = spark.conf.get("spark.sql.caseSensitive")
+    spark.conf.set("spark.sql.caseSensitive", "true")
+    try {
+      val df = Seq((1, "a"), (2, "b")).toDF("id", "name")
+      MySQLToScyllaValidator.validateSourceJoinKeyUniqueness(df, Seq("ID"))
+    } finally spark.conf.set("spark.sql.caseSensitive", previous)
+  }
+
+  test("join-key verification rejects a unique null key component") {
+    val schema = StructType(Seq(StructField("id", IntegerType), StructField("name", StringType)))
+    val df = spark.createDataFrame(spark.sparkContext.parallelize(Seq(Row(null, "a"))), schema)
+    val error = intercept[RuntimeException] {
+      MySQLToScyllaValidator.validateSourceJoinKeyUniqueness(df, Seq("id", "name"))
+    }
+    assert(error.getMessage.contains("contains nulls"))
+  }
+
+  test("missing-row repair supplies exact target column names under case-sensitive Spark") {
+    import spark.implicits._
+    val previous = spark.conf.get("spark.sql.caseSensitive")
+    spark.conf.set("spark.sql.caseSensitive", "true")
+    try {
+      val source = Seq((1, 1, "present"), (1, 2, "missing"), (2, 1, "also missing"))
+        .toDF("TenantId", "UserId", "Payload")
+      val target = Seq((1, 1, "a"), (1, 1, "a"), (9, 9, "b"))
+        .toDF("tenantid", "userid", "payload")
+      val missing = MySQLToScyllaValidator.missingSourceRows(
+        source,
+        target,
+        Seq("TENANTID", "userid")
+      )
+      assertEquals(missing.columns.toList, target.columns.toList)
+      assertEquals(
+        missing.collect().toSet,
+        Set(Row(1, 2, "missing"), Row(2, 1, "also missing"))
+      )
+    } finally spark.conf.set("spark.sql.caseSensitive", previous)
+  }
+
+  private def customKeySettings(verify: Boolean = true): SourceSettings.MySQL =
+    SourceSettings.MySQL(
+      host                           = "localhost",
+      port                           = 3306,
+      database                       = "db",
+      table                          = "records",
+      credentials                    = Credentials("user", "password"),
+      primaryKey                     = Some(List("id")),
+      partitionColumn                = None,
+      numPartitions                  = None,
+      lowerBound                     = None,
+      upperBound                     = None,
+      where                          = None,
+      connectionProperties           = None,
+      skipSourcePrimaryKeyValidation = true,
+      verifySourceJoinKeyUniqueness  = verify,
+      acknowledgeUnverifiedJoinKey   = !verify
+    )
+
+  test("verification takes precedence over acknowledgment and rejects duplicate keys") {
+    import spark.implicits._
+    val df = Seq(1, 1).toDF("id")
+    val settings = customKeySettings().copy(acknowledgeUnverifiedJoinKey = true)
+    var validationRan = false
+    try {
+      val error = intercept[RuntimeException] {
+        MySQLToScyllaValidator.withValidatedSourceJoinKey(df, settings, Seq("id")) {
+          validationRan = true
+        }
+      }
+      assert(error.getMessage.contains("not unique"))
+      assert(!validationRan)
+      assertEquals(df.storageLevel, org.apache.spark.storage.StorageLevel.NONE)
+    } finally df.unpersist()
+  }
+
+  test("verification without the metadata override neither scans nor persists source rows") {
+    val reads = spark.sparkContext.longAccumulator("disabled-custom-key-source-reads")
+    val schema = StructType(Seq(StructField("id", IntegerType)))
+    val rows = spark.sparkContext.parallelize(Seq(1, 1), 1).map { id =>
+      reads.add(1L)
+      Row(id)
+    }
+    val df = spark.createDataFrame(rows, schema)
+    val settings = customKeySettings().copy(skipSourcePrimaryKeyValidation = false)
+    var validationRan = false
+    try {
+      MySQLToScyllaValidator.withValidatedSourceJoinKey(df, settings, Seq("id")) {
+        validationRan = true
+        assertEquals(reads.value.longValue(), 0L)
+        assertEquals(df.storageLevel, org.apache.spark.storage.StorageLevel.NONE)
+      }
+      assert(validationRan)
+      assertEquals(reads.value.longValue(), 0L)
+      assertEquals(df.storageLevel, org.apache.spark.storage.StorageLevel.NONE)
+    } finally df.unpersist()
+  }
+
+  test("verified source is reused during validation and released afterward") {
+    val reads = spark.sparkContext.longAccumulator("custom-key-source-reads")
+    val schema = StructType(Seq(StructField("id", IntegerType)))
+    val rows = spark.sparkContext.parallelize(Seq(1, 2), 1).map { id =>
+      reads.add(1L)
+      Row(id)
+    }
+    val df = spark.createDataFrame(rows, schema)
+    MySQLToScyllaValidator.withValidatedSourceJoinKey(df, customKeySettings(), Seq("id")) {
+      assertEquals(df.count(), 2L)
+      assertEquals(reads.value.longValue(), 2L)
+    }
+    assertEquals(df.storageLevel, org.apache.spark.storage.StorageLevel.NONE)
+  }
+
+  test("verified source is released on uniqueness and downstream failures") {
+    import spark.implicits._
+    val duplicate = Seq(1, 1).toDF("id")
+    intercept[RuntimeException] {
+      MySQLToScyllaValidator.withValidatedSourceJoinKey(duplicate, customKeySettings(), Seq("id")) {
+        fail("duplicate keys must abort validation")
+      }
+    }
+    assertEquals(duplicate.storageLevel, org.apache.spark.storage.StorageLevel.NONE)
+    val unique = Seq(1, 2).toDF("id")
+    val expected = new RuntimeException("downstream validation failed")
+    val actual = intercept[RuntimeException] {
+      MySQLToScyllaValidator.withValidatedSourceJoinKey(unique, customKeySettings(), Seq("id")) {
+        throw expected
+      }
+    }
+    assert(actual eq expected)
+    assertEquals(unique.storageLevel, org.apache.spark.storage.StorageLevel.NONE)
+  }
+
+  test(
+    "source validation preserves caller persistence and skips persistence for acknowledged keys"
+  ) {
+    import spark.implicits._
+    val df = Seq(1, 2).toDF("id").cache()
+    val previous = df.storageLevel
+    try {
+      MySQLToScyllaValidator.withValidatedSourceJoinKey(df, customKeySettings(), Seq("id"))(())
+      assertEquals(df.storageLevel, previous)
+    } finally df.unpersist()
+    MySQLToScyllaValidator.withValidatedSourceJoinKey(df, customKeySettings(false), Seq("id")) {
+      assertEquals(df.storageLevel, org.apache.spark.storage.StorageLevel.NONE)
+    }
+  }
+
   // --- addContentHash tests (Spark-local) ---
 
   test("addContentHash adds hash column and drops hashed columns") {
@@ -728,6 +1043,31 @@ class MySQLToScyllaValidatorTest extends munit.FunSuite {
       differingFields,
       Map(Vector[Any](2) -> List("comment (source=same, target=changed)"))
     )
+  }
+
+  test("hash refinement resolves differently cased composite keys with case-sensitive Spark") {
+    import spark.implicits._
+    val previous = spark.conf.get("spark.sql.caseSensitive")
+    spark.conf.set("spark.sql.caseSensitive", "true")
+    try {
+      val source = Seq((1, 9, 11, "left"), (2, 9, 12, "same"))
+        .toDF("ExternalId", "TenantId", "id", "Payload")
+      val target = Seq((1, 9, 11, "right"), (2, 9, 12, "same"))
+        .toDF("externalid", "tenantid", "id", "payload")
+      val differences = MySQLToScyllaValidator.resolveHashBackedDifferences(
+        source,
+        target,
+        Seq("externalid", "TENANTID"),
+        Seq(Vector[Any](1, 9)),
+        Seq("payload"),
+        0L,
+        0.0
+      )(spark)
+      assertEquals(
+        differences,
+        Map(Vector[Any](1, 9) -> List("payload (source=left, target=right)"))
+      )
+    } finally spark.conf.set("spark.sql.caseSensitive", previous)
   }
 
   test("selectColumnsForHashRefinement keeps only PK and hash-backed columns") {
@@ -919,6 +1259,56 @@ class MySQLToScyllaValidatorTest extends munit.FunSuite {
     assertEquals(failures.map(_.rowRepr), List("id=2"))
     assert(sourceReads.value == 1L)
     assert(targetReads.value == 1L)
+  }
+
+  test("hash refinement preserves verified source cache until validation and repair finish") {
+    import spark.implicits._
+    val reads = spark.sparkContext.longAccumulator("verified-refinement-source-reads")
+    val schema = StructType(
+      Seq(
+        StructField("external_id", IntegerType, nullable = false),
+        StructField("id", IntegerType, nullable          = false)
+      )
+    )
+    val rows = spark.sparkContext.parallelize(Seq(Row(1, 11), Row(2, 22)), 1).map { row =>
+      reads.add(1L)
+      row
+    }
+    val source = spark.createDataFrame(rows, schema)
+    val target = Seq((1, 11)).toDF("external_id", "id").cache()
+    val targetStorage = target.storageLevel
+    try {
+      MySQLToScyllaValidator.withValidatedSourceJoinKey(
+        source,
+        customKeySettings(),
+        Seq("external_id")
+      ) {
+        val failures = MySQLToScyllaValidator.collectFailureSample(
+          spark.sparkContext.emptyRDD[MySQLToScyllaValidator.ValidationCandidate],
+          source,
+          target,
+          Seq("external_id"),
+          Seq("id"),
+          0L,
+          0.0,
+          1
+        )(spark)
+        assertEquals(failures, Nil)
+        assert(source.storageLevel != org.apache.spark.storage.StorageLevel.NONE)
+        assertEquals(target.storageLevel, targetStorage)
+        assertEquals(source.count(), 2L)
+        assertEquals(
+          MySQLToScyllaValidator
+            .missingSourceRows(source, target, Seq("external_id"))
+            .collect()
+            .toList,
+          List(Row(2, 22))
+        )
+        assertEquals(reads.value.longValue(), 2L)
+      }
+      assertEquals(source.storageLevel, org.apache.spark.storage.StorageLevel.NONE)
+      assertEquals(target.storageLevel, targetStorage)
+    } finally target.unpersist()
   }
 
   test("detectSchemaTypeMismatches under Lenient returns no mismatches") {
