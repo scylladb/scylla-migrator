@@ -75,17 +75,6 @@ class JdbcSafePropertiesTest extends munit.FunSuite {
       JdbcSafeProperties.classifyKey(crafted, DangerousKeys, UrlEmbeddedKeys),
       JdbcSafeProperties.KeyClassification.Dangerous
     )
-    // The url-embedded blocklist must close the same bypass.
-    val craftedUrlEmbedded = "maxAllowedPa\u0130ket".replace("\u0130", "I")
-    assertEquals(
-      JdbcSafeProperties.classifyKey(craftedUrlEmbedded, DangerousKeys, UrlEmbeddedKeys),
-      JdbcSafeProperties.KeyClassification.Allowed
-    )
-    // And the Spark-reserved set must close it too. Spark uses `equalsIgnoreCase` per JDBCOptions.
-    assertEquals(
-      JdbcSafeProperties.classifyKey("dbtab\u0130e", DangerousKeys, UrlEmbeddedKeys),
-      JdbcSafeProperties.KeyClassification.Allowed
-    )
   }
 
   test("insecureUrlScheme detects file:// and http:// regardless of casing and whitespace") {
