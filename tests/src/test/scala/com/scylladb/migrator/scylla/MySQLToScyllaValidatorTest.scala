@@ -425,6 +425,46 @@ class MySQLToScyllaValidatorTest extends munit.FunSuite {
     assert(error.getMessage.contains("missing in source: checksum"))
   }
 
+  // --- applySourceRenames tests (MIGRATE-4) ---
+
+  test("applySourceRenames renames columns with no collision") {
+    import spark.implicits._
+    val df    = Seq((1, "hello")).toDF("id", "body")
+    val renames = Map("id" -> "note_id")
+    val result  = MySQLToScyllaValidator.applySourceRenames(df, renames)
+    assertEquals(result.columns.toList, List("note_id", "body"))
+    assertEquals(result.collect().head.getInt(0), 1)
+  }
+
+  test("applySourceRenames drops identity column shadowed by an explicit rename") {
+    import spark.implicits._
+    // MySQL has `id` (renamed to note_id) and original `note_id` (dropped in migration).
+    val df = Seq((1, "n1", "hello")).toDF("id", "note_id", "body")
+    val renames = Map("id" -> "note_id")
+    val result  = MySQLToScyllaValidator.applySourceRenames(df, renames)
+    // Original note_id is shadowed; id is renamed to note_id (Int).
+    assertEquals(result.columns.toSet, Set("note_id", "body"))
+    val row = result.collect().head
+    assertEquals(row.getInt(result.schema.fieldIndex("note_id")), 1)
+  }
+
+  test("applySourceRenames errors when two explicit renames target the same column") {
+    import spark.implicits._
+    val df      = Seq((1, "ext", "hello")).toDF("id", "external_id", "body")
+    val renames = Map("id" -> "note_id", "external_id" -> "note_id")
+    val error   = intercept[RuntimeException] {
+      MySQLToScyllaValidator.applySourceRenames(df, renames)
+    }
+    assert(error.getMessage.contains("Column rename collision"))
+  }
+
+  test("applySourceRenames is a no-op when rename map is empty") {
+    import spark.implicits._
+    val df     = Seq((1, "hello")).toDF("id", "body")
+    val result = MySQLToScyllaValidator.applySourceRenames(df, Map.empty)
+    assertEquals(result.columns.toList, List("id", "body"))
+  }
+
   test("buildCaseInsensitiveRenameMap resolves mixed-case rename entries") {
     val renames = MySQLToScyllaValidator.buildCaseInsensitiveRenameMap(
       List(Rename("UserId", "user_id"), Rename("DisplayName", "display_name"))
