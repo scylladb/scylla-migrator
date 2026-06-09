@@ -39,21 +39,25 @@ object ScyllaValidator {
   ): StructType = {
     val primaryKeyFields =
       (sourceTableDef.partitionKey ++ sourceTableDef.clusteringColumns).map { colDef =>
-        DataTypeConverter.toStructField(colDef).copy(name = renameColumn(colDef.columnName))
+        val field =
+          DataTypeConverter.toStructField(colDef).copy(name = renameColumn(colDef.columnName))
+        field.copy(dataType = readers.Cassandra.widenCqlTimestamps(field.dataType))
       }
 
     val regularFields =
       sourceTableDef.regularColumns.flatMap { colDef =>
         val renamedColumn = renameColumn(colDef.columnName)
         val field = DataTypeConverter.toStructField(colDef).copy(name = renamedColumn)
+        val widenedField =
+          field.copy(dataType = readers.Cassandra.widenCqlTimestamps(field.dataType))
 
         if (includePerColumnMetadata)
           Seq(
-            field,
+            widenedField,
             StructField(s"${renamedColumn}_ttl", IntegerType, true),
             StructField(s"${renamedColumn}_writetime", LongType, true)
           )
-        else Seq(field)
+        else Seq(widenedField)
       }
 
     StructType(primaryKeyFields ++ regularFields)
@@ -243,7 +247,9 @@ object ScyllaValidator {
               missingRowsRdd.map { case (sourceRow, _) =>
                 Row.fromSeq(
                   repairFieldNames.map { fieldName =>
-                    readers.Cassandra.convertValue(sourceRow.getRaw(fieldName))
+                    readers.Cassandra.widenTimestampValue(
+                      readers.Cassandra.convertValue(sourceRow.getRaw(fieldName))
+                    )
                   }
                 )
               },
