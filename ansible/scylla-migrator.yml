@@ -137,9 +137,9 @@
         state: link
         force: true
 
-    - name: Check that awscliv2.zip exists
+    - name: Check whether awscliv2.zip exists
       stat:
-        path: awscliv2.zip
+        path: "{{ home_dir }}/awscliv2.zip"
       register: stat_result
 
     - name: Download the awscli bundle.

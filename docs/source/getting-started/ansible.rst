@@ -76,10 +76,12 @@ An `Ansible <https://www.ansible.com/>`_ playbook is provided in the `ansible fo
 10. Ensure the table has been created in the target environment.
 11. Submit the migration by running the appropriate script on the Spark master:
 
+    Use ``nohup`` or a terminal multiplexer such as ``tmux`` when running submit scripts manually, otherwise an SSH disconnection can abort the job.
+
     .. code-block:: bash
 
       cd /home/ubuntu/scylla-migrator
-      ./submit-cql-job.sh
+      nohup ./submit-cql-job.sh > submit-cql-job.log 2>&1 &
 
     For Alternator migrations, run ``./submit-alternator-job.sh`` instead. To run validation, use ``./submit-cql-job-validator.sh`` or ``./submit-alternator-validator.sh``.
 

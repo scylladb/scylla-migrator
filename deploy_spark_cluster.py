@@ -482,6 +482,34 @@ def print_command_error(exc: subprocess.CalledProcessError) -> None:
         print(exc.stderr, file=sys.stderr)
 
 
+def validate_ip_output(value: Any, label: str) -> None:
+    if not isinstance(value, str) or value == "":
+        raise SystemExit(f"Terraform output {label} must be a non-empty IP address.")
+    try:
+        ipaddress.ip_address(value)
+    except ValueError as exc:
+        raise SystemExit(f"Terraform output {label} is not a valid IP address: {value}") from exc
+
+
+def validate_terraform_output_ips(outputs: dict[str, Any]) -> None:
+    master = outputs.get("master")
+    if not isinstance(master, dict):
+        raise SystemExit("Terraform output master must be an object.")
+
+    for field in ("public_ip", "private_ip"):
+        validate_ip_output(master.get(field), f"master.{field}")
+
+    workers = outputs.get("workers")
+    if not isinstance(workers, list):
+        raise SystemExit("Terraform output workers must be a list.")
+
+    for index, worker in enumerate(workers, start=1):
+        if not isinstance(worker, dict):
+            raise SystemExit(f"Terraform output workers[{index}] must be an object.")
+        for field in ("public_ip", "private_ip"):
+            validate_ip_output(worker.get(field), f"workers[{index}].{field}")
+
+
 def terraform_output(state_dir: Path) -> dict[str, Any]:
     completed = run_command(
         ["terraform", "output", "-json"],
@@ -489,7 +517,9 @@ def terraform_output(state_dir: Path) -> dict[str, Any]:
         capture_output=True,
     )
     raw_outputs = json.loads(completed.stdout)
-    return {key: value["value"] for key, value in raw_outputs.items()}
+    outputs = {key: value["value"] for key, value in raw_outputs.items()}
+    validate_terraform_output_ips(outputs)
+    return outputs
 
 
 def write_json(path: Path, content: dict[str, Any]) -> None:
@@ -769,7 +799,10 @@ def config_file_from_args_or_metadata(
     saved_config_file = metadata.get("config_file")
     if not saved_config_file:
         return None
-    return resolve_path(saved_config_file)
+    resolved_config_file = resolve_path(saved_config_file)
+    if resolved_config_file is None or not resolved_config_file.exists():
+        return None
+    return resolved_config_file
 
 
 def remember_config_file(
@@ -980,7 +1013,7 @@ def registered_worker_count(
     private_key: Path,
     known_hosts: Path,
     insecure: bool,
-) -> int:
+) -> int | None:
     master_public_ip = outputs["master"]["public_ip"]
     private_ip = outputs["master"]["private_ip"]
     command = (
@@ -1003,11 +1036,11 @@ def registered_worker_count(
         capture_output=True,
     )
     if completed.returncode != 0:
-        return 0
+        return None
     try:
         return int(completed.stdout.strip())
     except ValueError:
-        return 0
+        return None
 
 
 def start_workers(
@@ -1038,14 +1071,15 @@ def wait_for_spark_workers(
 
     for _attempt in range(1, 25):
         count = registered_worker_count(outputs, private_key, known_hosts, insecure)
-        if count >= expected_workers:
+        if count is not None and count >= expected_workers:
             return
         time.sleep(5)
 
     count = registered_worker_count(outputs, private_key, known_hosts, insecure)
+    registered = "unknown" if count is None else str(count)
     raise SystemExit(
         "Timed out waiting for Spark workers to register "
-        f"({count}/{expected_workers} registered)"
+        f"({registered}/{expected_workers} registered)"
     )
 
 
@@ -1062,7 +1096,19 @@ def ensure_spark_running(
     else:
         expected_workers = len(outputs["workers"])
         current_workers = registered_worker_count(outputs, private_key, known_hosts, insecure)
-        if current_workers < expected_workers:
+        if current_workers is None:
+            print(
+                "Spark master is reachable, but the worker registration count "
+                "could not be read; starting workers..."
+            )
+            start_workers(outputs, private_key, known_hosts, insecure)
+        elif current_workers == 0 and expected_workers > 0:
+            print(
+                "Spark master is reachable, but zero live workers are registered; "
+                "starting workers..."
+            )
+            start_workers(outputs, private_key, known_hosts, insecure)
+        elif current_workers < expected_workers:
             print(
                 "Spark master is reachable, but only "
                 f"{current_workers}/{expected_workers} workers are registered; starting workers..."
@@ -1161,6 +1207,9 @@ def handle_deploy(args: argparse.Namespace) -> None:
     if private_key is None or not private_key.exists():
         raise SystemExit(f"SSH private key does not exist: {private_key}")
     known_hosts = known_hosts_path(state_dir)
+    if not (state_dir / "terraform.tfstate").exists():
+        known_hosts.write_text("")
+        known_hosts.chmod(0o600)
 
     required = ["terraform"]
     if not args.skip_ansible:

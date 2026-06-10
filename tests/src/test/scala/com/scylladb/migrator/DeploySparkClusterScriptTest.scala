@@ -28,11 +28,12 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
          |spec.loader.exec_module(module)
          |print(module.resolve_path("") is None)
          |print(module.config_file_from_args_or_metadata(None, {"config_file": ""}) is None)
+         |print(module.config_file_from_args_or_metadata(None, {"config_file": "/tmp/does-not-exist-scylla-migrator.yml"}) is None)
          |""".stripMargin
     )
 
     assertEquals(result.exitCode, 0, result.output)
-    assertEquals(result.output.linesIterator.toList, List("True", "True"))
+    assertEquals(result.output.linesIterator.toList, List("True", "True", "True"))
   }
 
   test("migration type is persisted without a new config file") {
@@ -82,6 +83,36 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
 
     assertEquals(result.exitCode, 0, result.output)
     assertOutputContains(result.output, s"Invalid JSON in ${badJson}")
+  }
+
+  test("Terraform output IP addresses are validated") {
+    val result = runPython(
+      "-c",
+      s"""import importlib.util
+         |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
+         |module = importlib.util.module_from_spec(spec)
+         |spec.loader.exec_module(module)
+         |module.validate_terraform_output_ips({
+         |    "master": {"public_ip": "203.0.113.10", "private_ip": "10.42.1.10"},
+         |    "workers": [{"public_ip": "203.0.113.11", "private_ip": "10.42.1.11"}],
+         |})
+         |print("valid")
+         |try:
+         |    module.validate_terraform_output_ips({
+         |        "master": {"public_ip": "203.0.113.10", "private_ip": "10.42.1.10"},
+         |        "workers": [{"public_ip": "not an ip", "private_ip": "10.42.1.11"}],
+         |    })
+         |except SystemExit as exc:
+         |    print(exc)
+         |""".stripMargin
+    )
+
+    assertEquals(result.exitCode, 0, result.output)
+    assertOutputContains(result.output, "valid")
+    assertOutputContains(
+      result.output,
+      "Terraform output workers[1].public_ip is not a valid IP address"
+    )
   }
 
   test("top-level help lists supported subcommands") {
@@ -289,6 +320,12 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     val deployScript = Files.readString(script)
 
     assertOutputContains(deployScript, "worker.get('state') == 'ALIVE'")
+    assertOutputContains(deployScript, ") -> int | None:")
+    assertOutputContains(deployScript, "return None")
+    assertOutputContains(deployScript, "registered = \"unknown\" if count is None else str(count)")
+    assertOutputContains(deployScript, "if current_workers is None:")
+    assertOutputContains(deployScript, "elif current_workers == 0 and expected_workers > 0:")
+    assertOutputContains(deployScript, "zero live workers are registered")
     assert(!deployScript.contains("print(len(data.get('workers', [])))"), deployScript)
   }
 
@@ -310,6 +347,15 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(deployScript, "path.chmod(0o600)")
     assertOutputContains(deployScript, "state_dir.chmod(0o700)")
     assertOutputContains(deployScript, "path.parent.chmod(0o700)")
+  }
+
+  test("fresh deploy clears state-local known hosts") {
+    val deployScript = Files.readString(script)
+
+    assertOutputContains(deployScript, "known_hosts = known_hosts_path(state_dir)")
+    assertOutputContains(deployScript, "if not (state_dir / \"terraform.tfstate\").exists():")
+    assertOutputContains(deployScript, "known_hosts.write_text(\"\")")
+    assertOutputContains(deployScript, "known_hosts.chmod(0o600)")
   }
 
   test("Ansible SSH host key checking matches direct SSH behavior") {
@@ -344,6 +390,8 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(ansibleDocs, "config.dynamodb.yml")
     assertOutputContains(ansibleDocs, "http://<spark-master-hostname>:18080")
     assertOutputContains(ansibleDocs, "cd /home/ubuntu/scylla-migrator")
+    assertOutputContains(ansibleDocs, "Use ``nohup`` or a terminal multiplexer such as ``tmux``")
+    assertOutputContains(ansibleDocs, "nohup ./submit-cql-job.sh > submit-cql-job.log 2>&1 &")
     assertOutputContains(ansibleDocs, "./submit-cql-job-validator.sh")
     assert(!ansibleDocs.contains("ansible/inventory/hosts"), ansibleDocs)
     assert(!ansibleDocs.contains("Update ``ansible/ansible.cfg``"), ansibleDocs)
@@ -437,6 +485,14 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assert(!requirements.contains("ansible-core\n"), requirements)
   }
 
+  test("test workflow runs for deploy helper and Ansible changes") {
+    val workflow = Files.readString(repoRoot.resolve(".github/workflows/tests.yml"))
+
+    assertOutputContains(workflow, "'deploy_spark_cluster.py'")
+    assertOutputContains(workflow, "'requirements.txt'")
+    assertOutputContains(workflow, "'ansible/**'")
+  }
+
   test("Ansible derives Spark resource settings from host facts") {
     val playbook = Files.readString(repoRoot.resolve("ansible/scylla-migrator.yml"))
 
@@ -452,6 +508,15 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
 
     assert(!playbook.contains("conf/slaves"), playbook)
     assert(!playbook.contains("Add spark nodes to slaves file"), playbook)
+  }
+
+  test("Ansible checks AWS CLI archive at the download destination") {
+    val playbook = Files.readString(repoRoot.resolve("ansible/scylla-migrator.yml"))
+
+    assertOutputContains(playbook, "Check whether awscliv2.zip exists")
+    assertOutputContains(playbook, "path: \"{{ home_dir }}/awscliv2.zip\"")
+    assertOutputContains(playbook, "dest: \"{{ home_dir }}/awscliv2.zip\"")
+    assert(!playbook.contains("path: awscliv2.zip"), playbook)
   }
 
   test("Ansible validates Spark archive before skipping download") {
