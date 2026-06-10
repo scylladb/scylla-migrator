@@ -1,6 +1,6 @@
 # ScyllaDB Migrator
 
-![ScyllaDB Migrator Logo](monster-hydra.png)
+![ScyllaDB Migrator Logo](monster-hydra.png =120x120)
 
 The ScyllaDB Migrator is a Spark application that migrates data to ScyllaDB from CQL-compatible or DynamoDB-compatible databases.
 
