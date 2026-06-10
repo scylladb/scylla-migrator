@@ -558,6 +558,8 @@ def ssh_options(private_key: Path, known_hosts: Path, insecure: bool) -> list[st
         "BatchMode=yes",
         "-o",
         "IdentitiesOnly=yes",
+        "-o",
+        "ConnectTimeout=10",
     ]
 
     if insecure:
@@ -653,8 +655,6 @@ def wait_for_ssh(
                 [
                     "ssh",
                     *ssh_options(private_key, known_hosts, insecure),
-                    "-o",
-                    "ConnectTimeout=10",
                     f"{user}@{host}",
                     "true",
                 ],
@@ -996,8 +996,6 @@ def registered_worker_count(
         [
             "ssh",
             *ssh_options(private_key, known_hosts, insecure),
-            "-o",
-            "ConnectTimeout=10",
             f"{DEFAULT_USER}@{master_public_ip}",
             command,
         ],

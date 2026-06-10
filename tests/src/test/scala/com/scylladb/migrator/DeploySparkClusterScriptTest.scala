@@ -289,7 +289,6 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     val deployScript = Files.readString(script)
 
     assertOutputContains(deployScript, "worker.get('state') == 'ALIVE'")
-    assertOutputContains(deployScript, "ConnectTimeout=10")
     assert(!deployScript.contains("print(len(data.get('workers', [])))"), deployScript)
   }
 
@@ -318,6 +317,14 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
 
     assertOutputContains(deployScript, "StrictHostKeyChecking=accept-new")
     assert(!deployScript.contains("StrictHostKeyChecking=yes"), deployScript)
+  }
+
+  test("SSH and SCP commands use a shared connection timeout") {
+    val deployScript = Files.readString(script)
+
+    assertOutputContains(deployScript, "def ssh_options")
+    assertOutputContains(deployScript, "ConnectTimeout=10")
+    assertOutputContains(deployScript, "*ssh_options(private_key, known_hosts, insecure)")
   }
 
   test("repository Ansible config enables host key checking by default") {
@@ -477,6 +484,13 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(playbook, "ports.ubuntu.com/ubuntu-ports")
     assertOutputContains(playbook, "Use canonical Ubuntu archive mirror")
     assertOutputContains(playbook, "archive.ubuntu.com/ubuntu")
+    assertOutputContains(playbook, "Install add-apt-repository dependency")
+    assertOutputContains(playbook, "name: software-properties-common")
+    assert(
+      playbook.indexOf("name: software-properties-common") <
+        playbook.indexOf("command: add-apt-repository -y -n universe"),
+      playbook
+    )
     assertOutputContains(playbook, "update_cache_retries: 12")
     assertOutputContains(playbook, "update_cache_retry_max_delay: 30")
   }

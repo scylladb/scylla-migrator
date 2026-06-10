@@ -36,6 +36,16 @@
       with_items: "{{ apt_source_file_stats.results }}"
       when: item.stat.exists
 
+    - name: Install add-apt-repository dependency
+      become: true
+      apt:
+        name: software-properties-common
+        state: present
+        update_cache: yes
+        cache_valid_time: 3600
+        update_cache_retries: 12
+        update_cache_retry_max_delay: 30
+
     - name: Add universe repository
       become: true
       command: add-apt-repository -y -n universe
