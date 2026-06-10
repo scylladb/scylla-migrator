@@ -284,7 +284,8 @@ object SourceSettings {
     zeroDateTimeBehavior: MySQL.ZeroDateTimeBehavior = MySQL.ZeroDateTimeBehavior.Exception,
     fetchSize: Int = MySQL.DefaultFetchSize,
     where: Option[String],
-    connectionProperties: Option[Map[String, String]]
+    connectionProperties: Option[Map[String, String]],
+    skipSourcePrimaryKeyValidation: Boolean = false
   ) extends SourceSettings {
 
     // MySQL reads use Spark JDBC jobs that do not expose durable per-range progress, and
