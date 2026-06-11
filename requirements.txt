@@ -1,0 +1,5 @@
+# Python package dependencies for deploy_spark_cluster.py.
+#
+# Terraform, ssh, and scp are external command-line tools and must be installed
+# separately.
+ansible-core

@@ -7,6 +7,7 @@
     spark_home: /opt/spark
     spark_version: "4.0.2"
     spark_package: "spark-{{ spark_version }}-bin-hadoop3"
+    cqlsh_venv: "{{ home_dir }}/.venvs/scylla-cqlsh"
   tasks: 
     - name: add universe repository
       become: true
@@ -25,11 +26,37 @@
         - openjdk-17-jdk
         - unzip
         - python3-pip
+        - python3-venv
 
-    - name: install cqlsh
+    - name: Discover JAVA_HOME
+      shell: dirname $(dirname $(readlink -f $(which java)))
+      register: java_home_result
+      changed_when: false
+
+    - name: Set JAVA_HOME fact
+      ansible.builtin.set_fact:
+        java_home: "{{ java_home_result.stdout }}"
+
+    - name: Set JAVA_HOME
+      ansible.builtin.lineinfile:
+        path: "{{ home_dir }}/.profile"
+        regexp: '^export JAVA_HOME='
+        line: "export JAVA_HOME={{ java_home }}"
+
+    - name: install cqlsh in a virtualenv
       ansible.builtin.pip:
         name: scylla-cqlsh
         state: present
+        virtualenv: "{{ cqlsh_venv }}"
+        virtualenv_command: python3 -m venv
+
+    - name: expose cqlsh on PATH
+      become: true
+      ansible.builtin.file:
+        src: "{{ cqlsh_venv }}/bin/cqlsh"
+        dest: /usr/local/bin/cqlsh
+        state: link
+        force: true
 
     - name: Check that awscliv2.zip exists
       stat:
@@ -38,7 +65,7 @@
 
     - name: Download the awscli bundle.
       get_url: 
-        url: https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
+        url: "https://awscli.amazonaws.com/awscli-exe-linux-{{ 'aarch64' if ansible_facts['architecture'] in ['aarch64', 'arm64'] else 'x86_64' }}.zip"
         dest: "{{ home_dir }}/awscliv2.zip"
       when: not stat_result.stat.exists
       register: aws_cli_download_bundle
@@ -66,10 +93,12 @@
         state: absent
         path: "{{ home_dir }}/aws"
 
-    - name: Download spark
+    - name: Download spark (poll every 15 seconds)
       get_url: 
         url: "https://archive.apache.org/dist/spark/spark-{{ spark_version }}/{{ spark_package }}.tgz"
         dest: "{{ home_dir }}/{{ spark_package }}.tgz"
+      async: 1800
+      poll: 15
 
     - name: Extract spark
       ansible.builtin.unarchive:
@@ -87,34 +116,28 @@
       become: true
       command: "sudo mv {{ home_dir }}/{{ spark_package }} {{ spark_home }}"
 
-    - name: Set JAVA_HOME
-      ansible.builtin.lineinfile:
-        path: "{{ home_dir }}/.profile"
-        regexp: '^JAVA_HOME='
-        line: export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-
     - name: Add JAVA_HOME to PATH
       ansible.builtin.lineinfile:
         path: "{{ home_dir }}/.profile"
-        regexp: '^:$JAVA_HOME'
-        line: export PATH=$PATH:$JAVA_HOME
+        regexp: '^export PATH=\$PATH:\$JAVA_HOME/bin$'
+        line: export PATH=$PATH:$JAVA_HOME/bin
 
     - name: Set SPARK_HOME
       ansible.builtin.lineinfile:
         path: "{{ home_dir }}/.profile"
-        regexp: '^:SPARK_HOME'
+        regexp: '^export SPARK_HOME='
         line: "export SPARK_HOME={{ spark_home }}"
 
     - name: Add SPARK_HOME/bin to path
       ansible.builtin.lineinfile:
         path: "{{ home_dir }}/.profile"
-        regexp: '^:$SPARK_HOME/bin'
+        regexp: '^export PATH=\$PATH:\$SPARK_HOME/bin$'
         line: export PATH=$PATH:$SPARK_HOME/bin
 
     - name: Add SPARK_HOME/sbin to path
       ansible.builtin.lineinfile:
         path: "{{ home_dir }}/.profile"
-        regexp: '^:$SPARK_HOME/sbin'
+        regexp: '^export PATH=\$PATH:\$SPARK_HOME/sbin$'
         line: export PATH=$PATH:$SPARK_HOME/sbin
 
     - name: Make sure slaves file exists
@@ -155,10 +178,13 @@
   vars:
     home_dir: /home/ubuntu
     spark_home: /opt/spark
+    java_home_arch: "{{ 'arm64' if ansible_facts['architecture'] in ['aarch64', 'arm64'] else 'amd64' }}"
+    java_home_default: "{{ '/usr/lib/jvm/java-17-openjdk-' ~ java_home_arch }}"
+    master_java_home: "{{ hostvars[inventory_hostname].java_home | default(java_home_default) }}"
   environment:
-    JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+    JAVA_HOME: "{{ master_java_home }}"
     SPARK_HOME: /opt/spark
-    PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/ubuntu/.local/share/coursier/bin:/usr/lib/jvm/java-17-openjdk-amd64:/opt/spark/bin:/opt/spark/sbin"
+    PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/ubuntu/.local/share/coursier/bin:{{ master_java_home }}/bin:/opt/spark/bin:/opt/spark/sbin"
 
   tasks:
     - name: Create scylla-migrator directory
@@ -186,6 +212,7 @@
       with_items:
         - spark-env-master-sample
         - submit-alternator-job.sh
+        - submit-alternator-validator.sh
         - submit-cql-job.sh
         - submit-cql-job-validator.sh
 

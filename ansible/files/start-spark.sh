@@ -13,4 +13,8 @@ cd $SPARK_HOME/sbin
 
 ./start-history-server.sh
 
-./start-mesos-shuffle-service.sh
+if [[ -x ./start-mesos-shuffle-service.sh ]]; then
+  ./start-mesos-shuffle-service.sh
+else
+  echo "Mesos shuffle service is not available in this Spark distribution; skipping."
+fi
