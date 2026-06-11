@@ -1,6 +1,6 @@
 package com.scylladb.migrator
 
-import com.scylladb.migrator.config.{ MigratorConfig, SavepointsTarget, SparkSecretRedaction }
+import com.scylladb.migrator.config.MigratorConfig
 import org.apache.hadoop.conf.Configuration
 import org.apache.logging.log4j.LogManager
 import sun.misc.{ Signal, SignalHandler }
@@ -62,7 +62,7 @@ abstract class SavepointsManager(
   private val savepointsPath = migratorConfig.savepoints.storagePath
   private val pathIO = PathIO.forPath(
     savepointsPath,
-    Some(savepointHadoopConfiguration(hadoopConfiguration))
+    Some(SavepointStorage.hadoopConfiguration(migratorConfig, hadoopConfiguration, redactionRegex))
   )
   private val scheduler = new ScheduledThreadPoolExecutor(1)
   private var oldUsr2Handler: SignalHandler = _
@@ -90,59 +90,6 @@ abstract class SavepointsManager(
   seedStateFromExistingSavepoints()
   addUSR2Handler()
   startSavepointSchedule()
-
-  private def savepointHadoopConfiguration(
-    baseConfiguration: Option[Configuration]
-  ): Configuration = {
-    val conf = baseConfiguration.map(new Configuration(_)).getOrElse(new Configuration())
-
-    migratorConfig.savepoints.target.foreach {
-      case s3: SavepointsTarget.S3 =>
-        s3.region.foreach(conf.set("fs.s3a.endpoint.region", _))
-        s3.credentials.foreach { configuredCredentials =>
-          AwsUtils.computeFinalCredentials(Some(configuredCredentials), None, s3.region).foreach {
-            credentials =>
-              val credentialOptions =
-                Seq(
-                  "fs.s3a.access.key" -> credentials.accessKey,
-                  "fs.s3a.secret.key" -> credentials.secretKey
-                ) ++ credentials.maybeSessionToken.toSeq.map { sessionToken =>
-                  "fs.s3a.session.token" -> sessionToken
-                }
-
-              ensureHadoopKeysRedacted(credentialOptions.map(_._1))
-              credentialOptions.foreach { case (key, value) => conf.set(key, value) }
-              credentials.maybeSessionToken match {
-                case Some(_) =>
-                  conf.set("fs.s3a.aws.credentials.provider", S3ATemporaryCredentialsProvider)
-                case None =>
-                  conf.set("fs.s3a.aws.credentials.provider", S3ASimpleCredentialsProvider)
-                  conf.unset("fs.s3a.session.token")
-              }
-          }
-        }
-      case gcs: SavepointsTarget.GCS =>
-        gcs.projectId.foreach(conf.set("fs.gs.project.id", _))
-        gcs.credentials.foreach { credentials =>
-          ensureHadoopKeysRedacted(Seq("fs.gs.auth.service.account.json.keyfile"))
-          conf.set("fs.gs.auth.type", GcsServiceAccountJsonKeyfileAuthType)
-          conf.set(
-            "fs.gs.auth.service.account.json.keyfile",
-            credentials.serviceAccountJsonKeyfile
-          )
-        }
-      case _ => ()
-    }
-
-    conf
-  }
-
-  private def ensureHadoopKeysRedacted(keys: Iterable[String]): Unit =
-    SparkSecretRedaction.ensureKeysRedacted(
-      redactionRegex,
-      keys,
-      "savepoint Hadoop configuration"
-    )
 
   private def createSavepointsDirectory(): Unit = {
     val savepointsDirectory = savepointsPath
@@ -377,7 +324,12 @@ abstract class SavepointsManager(
       savepointFilename(savepointsPath)
 
     val modifiedConfig = updateConfigWithMigrationState()
-    val payload = modifiedConfig.render.getBytes(StandardCharsets.UTF_8)
+    // Persist a redacted copy: savepoint files live in long-lived object storage (GCS/S3) or on
+    // disk and must not leak source/target credentials in the clear. The skip-state fields
+    // (skipTokenRanges/skipSegments/skipParquetFiles) are not secrets and are preserved, so the
+    // startup auto-resume resolver can still recover progress; the live config supplies the real
+    // credentials on resume. See `SavepointsResume`.
+    val payload = modifiedConfig.renderRedacted.getBytes(StandardCharsets.UTF_8)
 
     pathIO.writeUtf8Atomically(finalPath, payload)
 
@@ -445,14 +397,6 @@ object SavepointsManager {
   // after the bounded wait, even if a scheduled dump is wedged on slow/unhealthy storage.
   private[migrator] val SignalDumpLockTimeoutMillis: Long = 5_000L
 
-  private val S3ASimpleCredentialsProvider =
-    "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider"
-
-  private val S3ATemporaryCredentialsProvider =
-    "org.apache.hadoop.fs.s3a.TemporaryAWSCredentialsProvider"
-
-  private val GcsServiceAccountJsonKeyfileAuthType = "SERVICE_ACCOUNT_JSON_KEYFILE"
-
   // Sanity ceiling for values read from filenames during seed. Any field at or above this
   // threshold is treated as hostile / corrupted: ignoring it keeps a single planted file from
   // poisoning `lastSavepointMillis` / `savepointSequence` to within one increment of
@@ -469,4 +413,63 @@ object SavepointsManager {
   // writes.
   private[migrator] val SavepointName: scala.util.matching.Regex =
     """^savepoint_(\d+)(?:_(\d+))?\.yaml$""".r
+
+  /** Parse a savepoint filename into its chronological sort key `(millis, seq)`.
+    *
+    * Returns `None` for names that do not match the savepoint grammar, for numeric fields that
+    * overflow `Long`, and for hostile near-`Long.MAX_VALUE` values (see `MaxReasonableSeedValue`).
+    * Legacy single-component filenames (`savepoint_<epochSeconds>.yaml`) are scaled to millis with
+    * a `0` sequence so they order before the two-component files written within the same second.
+    *
+    * This mirrors the parsing in `seedStateFromExistingSavepoints` so that the startup auto-resume
+    * resolver picks exactly the same "newest" file that seeding accounts for.
+    */
+  private[migrator] def savepointSortKey(name: String): Option[(Long, Long)] =
+    name match {
+      case SavepointName(head, tailOrNull) =>
+        val millisOpt =
+          try
+            Some(
+              if (tailOrNull == null)
+                java.lang.Math.multiplyExact(java.lang.Long.parseLong(head), 1000L)
+              else java.lang.Long.parseLong(head)
+            )
+          catch {
+            case _: NumberFormatException | _: ArithmeticException => None
+          }
+        val seqOpt =
+          if (tailOrNull == null) Some(0L)
+          else
+            try Some(java.lang.Long.parseLong(tailOrNull))
+            catch { case _: NumberFormatException => None }
+        for {
+          millis <- millisOpt
+          seq    <- seqOpt
+          if millis < MaxReasonableSeedValue && seq < MaxReasonableSeedValue
+        } yield (millis, seq)
+      case _ => None
+    }
+
+  /** @return
+    *   the newest savepoint filename from `names` by `(millis, seq)` order, or `None` if none of
+    *   the names match the savepoint grammar.
+    */
+  private[migrator] def latestSavepointName(names: Iterable[String]): Option[String] =
+    savepointNamesNewestFirst(names).headOption
+
+  /** All savepoint names from `names` that match the grammar, ordered newest-first by
+    * `(millis, seq)`.
+    *
+    * Single source of truth for "newest savepoint" selection: the startup auto-resume resolver
+    * iterates this order to fall back to an older savepoint when the newest one cannot be read or
+    * parsed (corruption, an in-flight/partial object-store write), and `latestSavepointName` is
+    * just its head. Keeping one ordering here prevents the resolver from ever disagreeing with the
+    * seed logic about which file is newest.
+    */
+  private[migrator] def savepointNamesNewestFirst(names: Iterable[String]): Seq[String] =
+    names.iterator
+      .flatMap(name => savepointSortKey(name).map(key => key -> name))
+      .toSeq
+      .sortBy(_._1)(Ordering[(Long, Long)].reverse)
+      .map(_._2)
 }

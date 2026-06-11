@@ -521,6 +521,16 @@ writes so that re-running the migration is safe.
     path: /app/savepoints
     # Interval at which savepoints will be created
     intervalSeconds: 300
+    # Optional. When true (the default), the migrator scans this location on startup and resumes
+    # from the most recent savepoint automatically. Set to false to always start from the
+    # configuration as written.
+    autoResume: true
+
+Savepoint files are written with credentials redacted (secrets are replaced with
+``<redacted>``), so they are safe to keep in shared or long-lived storage. Because of this,
+a savepoint file cannot be used directly as a standalone configuration file; rely on
+``autoResume`` to continue an interrupted migration. See
+:doc:`resume an interrupted migration </resume-interrupted-migration>`.
 
 The legacy ``path`` field is shorthand for an explicit local filesystem target:
 
