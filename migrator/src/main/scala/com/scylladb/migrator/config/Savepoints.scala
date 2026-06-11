@@ -202,12 +202,19 @@ object SavepointsTarget {
   * @param target
   *   Optional typed savepoint destination. When omitted, the legacy `path` field is interpreted as
   *   a filesystem/Hadoop URI destination.
+  * @param autoResume
+  *   When `true` (the default), the migrator scans this savepoints location on startup and merges
+  *   the skip-state (`skipTokenRanges`/`skipSegments`/`skipParquetFiles`) of the most recent
+  *   savepoint into the running configuration, so re-running the same config resumes where the
+  *   previous run left off. Set to `false` to always start from the configuration as written (for
+  *   example, to force a full re-migration while reusing the same savepoints directory).
   */
 case class Savepoints(
   intervalSeconds: Int,
   path: String,
   enableParquetFileTracking: Boolean = true,
-  target: Option[SavepointsTarget] = None
+  target: Option[SavepointsTarget] = None,
+  autoResume: Boolean = true
 ) {
   def effectiveTarget: SavepointsTarget.StoragePathTarget =
     target match {
@@ -227,6 +234,7 @@ object Savepoints {
         intervalSeconds <- cursor.get[Int]("intervalSeconds")
         enableParquetFileTracking <-
           cursor.getOrElse[Boolean]("enableParquetFileTracking")(true)
+        autoResume  <- cursor.getOrElse[Boolean]("autoResume")(true)
         maybePath   <- cursor.get[Option[String]]("path")
         maybeTarget <- cursor.get[Option[SavepointsTarget]]("target")
         _ <- Either.cond(
@@ -257,7 +265,7 @@ object Savepoints {
                         )
                       )
                 }
-      } yield Savepoints(intervalSeconds, path, enableParquetFileTracking, maybeTarget)
+      } yield Savepoints(intervalSeconds, path, enableParquetFileTracking, maybeTarget, autoResume)
     }
 
   implicit val encoder: Encoder[Savepoints] =
@@ -268,11 +276,17 @@ object Savepoints {
           case None         => List("path" -> savepoints.path.asJson)
         }
 
+      // Only emit `autoResume` when it diverges from the default so that configurations that do
+      // not set it (the vast majority) round-trip byte-for-byte as before.
+      val autoResumeField =
+        if (savepoints.autoResume) Nil
+        else List("autoResume" -> savepoints.autoResume.asJson)
+
       Json.obj(
         (
           List("intervalSeconds" -> savepoints.intervalSeconds.asJson) ++ targetField ++ List(
             "enableParquetFileTracking" -> savepoints.enableParquetFileTracking.asJson
-          )
+          ) ++ autoResumeField
         ): _*
       )
     }
