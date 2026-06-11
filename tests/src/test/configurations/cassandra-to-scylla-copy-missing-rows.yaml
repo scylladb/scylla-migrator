@@ -39,4 +39,5 @@ validation:
   failuresToFetch: 100
   floatingPointTolerance: 0.001
   timestampMsTolerance: 0
-  copyMissingRows: false
+  copyMissingRows: true
+  repairWritetimeStrategy: coordinator

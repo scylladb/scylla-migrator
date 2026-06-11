@@ -528,6 +528,23 @@ savepoints:
 #   floatingPointTolerance: 0.001
 #   # What difference in ms should we allow between timestamps?
 #   timestampMsTolerance: 0
+#   # If true, rows that exist in the source but are missing in the target will be
+#   # copied to the target during validation. Only missing rows are copied — rows
+#   # with value differences are still only reported, never overwritten.
+#   # WARNING: the validator cannot distinguish rows that were never migrated from
+#   # rows deleted on the target after migration. Enabling this may resurrect rows
+#   # that were intentionally deleted on the target only (e.g. during dual writes).
+#   # Defaults to false.
+#   copyMissingRows: false
+#   # Controls the CQL TIMESTAMP used for repair writes when copyMissingRows is true
+#   # and preserveTimestamps is enabled (Cassandra/Scylla only). Ignored otherwise.
+#   #   source (default): use original source writetime. Preserves fidelity but the
+#   #     write may be silently shadowed by a newer delete tombstone on the target.
+#   #   coordinator: use current coordinator wall-clock time (µs). Beats most
+#   #     tombstones but may resurrect rows deleted only on the target.
+#   #   config: use the fixed value from target.writeWritetimestampInuS. That setting
+#   #     must be present in the target configuration.
+#   repairWritetimeStrategy: source
 #   # Optional - columns to hash for MySQL-to-ScyllaDB validation (use source-side names;
 #   # renames are applied automatically). This reduces Spark-side join/shuffle volume,
 #   # but the validator still reads the original payload columns before hashing.

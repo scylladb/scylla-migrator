@@ -11,15 +11,25 @@ import com.scylladb.migrator.config.{
 import com.scylladb.migrator.readers.{ ParquetSavepointsManager, TimestampColumns }
 import com.scylladb.migrator.{ readers, writers }
 import org.apache.logging.log4j.LogManager
-import org.apache.spark.sql.{ DataFrame, SparkSession }
+import org.apache.spark.rdd.RDD
+import org.apache.spark.sql.{ DataFrame, Row, SparkSession }
+import org.apache.spark.sql.types.StructType
 
 import scala.util.Using
 import scala.util.control.NonFatal
 
+/** @param cassandraExplodedWrite
+  *   When set, [[migrate]] writes this `RDD[Row]` with [[writers.Scylla.writeRowRDD]] instead of
+  *   [[writers.Scylla.writeDataframe]], so exploded rows can carry
+  *   [[com.datastax.spark.connector.types.CassandraOption]] on regular columns (explicit CQL null
+  *   vs unset). [[dataFrame]] stays the pre-explosion frame (e.g. wide Cassandra read) for
+  *   partition metadata and logging.
+  */
 case class SourceDataFrame(
   dataFrame: DataFrame,
   timestampColumns: Option[TimestampColumns],
-  savepointsSupported: Boolean
+  savepointsSupported: Boolean,
+  cassandraExplodedWrite: Option[(RDD[Row], StructType)] = None
 )
 
 trait ScyllaMigratorBase {
@@ -41,15 +51,23 @@ trait ScyllaMigratorBase {
   )(implicit spark: SparkSession): Unit = {
 
     log.info("Created source dataframe; resulting schema:")
-    sourceDF.dataFrame.printSchema()
+    sourceDF.cassandraExplodedWrite match {
+      case Some((_, writeSchema)) =>
+        log.info("Exploded write path (cells may include CassandraOption); logical write schema:")
+        writeSchema.printTreeString()
+      case None =>
+        sourceDF.dataFrame.printSchema()
+    }
 
     val maybeSavepointsManager = externalSavepointsManager.orElse(
       createSavepointsManager(migratorConfig, sourceDF)
     )
 
-    log.info(
-      "We need to transfer: " + sourceDF.dataFrame.rdd.getNumPartitions + " partitions in total"
-    )
+    val partitionCount = sourceDF.cassandraExplodedWrite match {
+      case Some((rdd, _)) => rdd.getNumPartitions
+      case None           => sourceDF.dataFrame.rdd.getNumPartitions
+    }
+    log.info(s"We need to transfer: $partitionCount partitions in total")
 
     // Cassandra-specific token-range diff logging lives inside `CqlSavepointsManager` (invoked
     // from `savepointsManagerForSource`) so this central `migrate` method has zero
@@ -64,14 +82,27 @@ trait ScyllaMigratorBase {
         case cqlManager: CqlSavepointsManager => Some(cqlManager.accumulator)
         case _                                => None
       }
-      writers.Scylla.writeDataframe(
-        target,
-        migratorConfig.getRenamesOrNil,
-        sourceDF.dataFrame,
-        sourceDF.timestampColumns,
-        tokenRangeAccumulator,
-        migratorConfig.source
-      )
+      sourceDF.cassandraExplodedWrite match {
+        case Some((explodedRdd, writeSchema)) =>
+          writers.Scylla.writeRowRDD(
+            target,
+            migratorConfig.getRenamesOrNil,
+            explodedRdd,
+            writeSchema,
+            sourceDF.timestampColumns,
+            tokenRangeAccumulator,
+            migratorConfig.source
+          )
+        case None =>
+          writers.Scylla.writeDataframe(
+            target,
+            migratorConfig.getRenamesOrNil,
+            sourceDF.dataFrame,
+            sourceDF.timestampColumns,
+            tokenRangeAccumulator,
+            migratorConfig.source
+          )
+      }
     } catch {
       case NonFatal(e) => // Catching everything on purpose to try and dump the accumulator state
         log.error(
