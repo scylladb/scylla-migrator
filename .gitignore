@@ -1,6 +1,11 @@
 *.class
 *.log
+*.swp
 build.sbt_back
+
+config.yaml
+config.dynamodb.yaml
+config.dynamodb.yml
 
 # sbt specific
 dist/*
@@ -182,6 +187,12 @@ CLAUDE.md
 
 # Benchmark results
 benchmarks/results/
+
+# Generated Spark cluster deployment state
+.deploy_spark_cluster/
+
+# Local Ansible inventory
+ansible/inventory/*.ini
 
 # Auto-generated test config files (created by CassandraVersion.configForSource)
 tests/src/test/configurations/cassandra[0-9]*-to-*.yaml

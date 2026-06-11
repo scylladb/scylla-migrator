@@ -1,21 +1,62 @@
 ---
 
-- name: Install spark on scylla-migrator servers
+- name: Install Spark on Scylla Migrator servers
   hosts: spark
   vars:
     home_dir: /home/ubuntu
     spark_home: /opt/spark
     spark_version: "4.0.2"
     spark_package: "spark-{{ spark_version }}-bin-hadoop3"
+    cqlsh_venv: "{{ home_dir }}/.venvs/scylla-cqlsh"
+    apt_source_files:
+      - /etc/apt/sources.list
+      - /etc/apt/sources.list.d/ubuntu.sources
   tasks: 
-    - name: add universe repository
+    - name: Check apt source files
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      with_items: "{{ apt_source_files }}"
+      register: apt_source_file_stats
+
+    - name: Use canonical Ubuntu ports mirror
       become: true
-      shell: sudo add-apt-repository universe -y
+      ansible.builtin.replace:
+        path: "{{ item.item }}"
+        regexp: 'https?://[A-Za-z0-9.-]+\.ec2\.ports\.ubuntu\.com/ubuntu-ports'
+        replace: 'http://ports.ubuntu.com/ubuntu-ports'
+      with_items: "{{ apt_source_file_stats.results }}"
+      when: item.stat.exists
+
+    - name: Use canonical Ubuntu archive mirror
+      become: true
+      ansible.builtin.replace:
+        path: "{{ item.item }}"
+        regexp: 'https?://[A-Za-z0-9.-]+\.ec2\.archive\.ubuntu\.com/ubuntu'
+        replace: 'http://archive.ubuntu.com/ubuntu'
+      with_items: "{{ apt_source_file_stats.results }}"
+      when: item.stat.exists
+
+    - name: Install add-apt-repository dependency
+      become: true
+      apt:
+        name: software-properties-common
+        state: present
+        update_cache: yes
+        cache_valid_time: 3600
+        update_cache_retries: 12
+        update_cache_retry_max_delay: 30
+
+    - name: Add universe repository
+      become: true
+      command: add-apt-repository -y -n universe
 
     - name: Update apt-cache
       become: true
       apt:
         update_cache: yes
+        cache_valid_time: 3600
+        update_cache_retries: 12
+        update_cache_retry_max_delay: 30
 
     - name: Install package dependencies.
       become: true
@@ -25,20 +66,85 @@
         - openjdk-17-jdk
         - unzip
         - python3-pip
+        - python3-venv
+        - curl
 
-    - name: install cqlsh
+    - name: Discover JAVA_HOME
+      shell: dirname $(dirname $(readlink -f $(which java)))
+      register: java_home_result
+      changed_when: false
+
+    - name: Set JAVA_HOME fact
+      ansible.builtin.set_fact:
+        java_home: "{{ java_home_result.stdout }}"
+
+    - name: Set JAVA_HOME
+      ansible.builtin.lineinfile:
+        path: "{{ home_dir }}/.profile"
+        regexp: '^export JAVA_HOME='
+        line: "export JAVA_HOME={{ java_home }}"
+
+    - name: Derive Spark hardware settings
+      ansible.builtin.set_fact:
+        spark_worker_cores: "{{ [ansible_facts.get('processor_vcpus', ansible_facts.get('processor_nproc', 1)) | int, 1] | max }}"
+        spark_worker_memory_mb: "{{ [((ansible_facts['memtotal_mb'] | int) * 85 // 100), 1024] | max }}"
+        spark_local_base: "{{ '/mnt' if (ansible_facts['mounts'] | selectattr('mount', 'equalto', '/mnt') | list | length > 0) else '/tmp' }}"
+
+    - name: Derive Spark executor cores
+      ansible.builtin.set_fact:
+        spark_executor_cores: "{{ 10 if (spark_worker_cores | int) >= 10 and (spark_worker_cores | int) % 10 == 0 else 9 if (spark_worker_cores | int) >= 9 and (spark_worker_cores | int) % 9 == 0 else 8 if (spark_worker_cores | int) >= 8 and (spark_worker_cores | int) % 8 == 0 else 7 if (spark_worker_cores | int) >= 7 and (spark_worker_cores | int) % 7 == 0 else 6 if (spark_worker_cores | int) >= 6 and (spark_worker_cores | int) % 6 == 0 else 5 if (spark_worker_cores | int) >= 5 and (spark_worker_cores | int) % 5 == 0 else 4 if (spark_worker_cores | int) >= 4 and (spark_worker_cores | int) % 4 == 0 else 3 if (spark_worker_cores | int) >= 3 and (spark_worker_cores | int) % 3 == 0 else 2 if (spark_worker_cores | int) >= 2 and (spark_worker_cores | int) % 2 == 0 else 1 }}"
+
+    - name: Derive Spark memory and local directories
+      ansible.builtin.set_fact:
+        spark_executor_instances_per_worker: "{{ [((spark_worker_cores | int) // (spark_executor_cores | int)), 1] | max }}"
+        spark_executor_memory_mb: "{{ [(((spark_worker_memory_mb | int) // ([((spark_worker_cores | int) // (spark_executor_cores | int)), 1] | max)) * 90 // 100), 1024] | max }}"
+        spark_worker_memory: "{{ ((spark_worker_memory_mb | int) // 1024) | string }}G"
+        spark_local_dirs: "{{ spark_local_base }}/spark-local"
+        spark_worker_dir: "{{ spark_local_base }}/spark-work"
+
+    - name: Derive Spark executor memory
+      ansible.builtin.set_fact:
+        spark_executor_memory: "{{ ((spark_executor_memory_mb | int) // 1024) | string }}G"
+
+    - name: Create Spark local directories
+      become: true
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: "0775"
+      with_items:
+        - "{{ spark_local_dirs }}"
+        - "{{ spark_worker_dir }}"
+
+    - name: Show derived Spark settings
+      ansible.builtin.debug:
+        msg: "Spark settings: worker_cores={{ spark_worker_cores }}, worker_memory={{ spark_worker_memory }}, executor_cores={{ spark_executor_cores }}, executor_memory={{ spark_executor_memory }}, local_dirs={{ spark_local_dirs }}"
+
+    - name: Install cqlsh in a virtualenv
       ansible.builtin.pip:
         name: scylla-cqlsh
         state: present
+        virtualenv: "{{ cqlsh_venv }}"
+        virtualenv_command: python3 -m venv
 
-    - name: Check that awscliv2.zip exists
+    - name: Expose cqlsh on PATH
+      become: true
+      ansible.builtin.file:
+        src: "{{ cqlsh_venv }}/bin/cqlsh"
+        dest: /usr/local/bin/cqlsh
+        state: link
+        force: true
+
+    - name: Check whether awscliv2.zip exists
       stat:
-        path: awscliv2.zip
+        path: "{{ home_dir }}/awscliv2.zip"
       register: stat_result
 
     - name: Download the awscli bundle.
       get_url: 
-        url: https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
+        url: "https://awscli.amazonaws.com/awscli-exe-linux-{{ 'aarch64' if ansible_facts['architecture'] in ['aarch64', 'arm64'] else 'x86_64' }}.zip"
         dest: "{{ home_dir }}/awscliv2.zip"
       when: not stat_result.stat.exists
       register: aws_cli_download_bundle
@@ -52,9 +158,9 @@
       when: aws_cli_download_bundle.changed
       register: aws_cli_unarchive_installer
 
-    - name: install awscli v2
+    - name: Install awscli v2
       become: true
-      shell: "sudo {{ home_dir }}/aws/install --update"
+      shell: "{{ home_dir }}/aws/install --update"
 
     - name: Delete aws zip file
       ansible.builtin.file:
@@ -66,99 +172,136 @@
         state: absent
         path: "{{ home_dir }}/aws"
 
-    - name: Download spark
-      get_url: 
-        url: "https://archive.apache.org/dist/spark/spark-{{ spark_version }}/{{ spark_package }}.tgz"
-        dest: "{{ home_dir }}/{{ spark_package }}.tgz"
+    - name: Check whether Spark archive exists
+      stat:
+        path: "{{ home_dir }}/{{ spark_package }}.tgz"
+      register: spark_archive
+
+    - name: Check whether Spark package is already extracted
+      stat:
+        path: "{{ home_dir }}/{{ spark_package }}"
+      register: spark_extracted
+
+    - name: Check whether Spark is already installed
+      stat:
+        path: "{{ spark_home }}/RELEASE"
+      register: spark_installed
+
+    - name: Check whether Spark archive is complete
+      shell: |
+        set -euo pipefail
+        tar -tzf "{{ home_dir }}/{{ spark_package }}.tgz" >/dev/null
+      args:
+        executable: /bin/bash
+      register: spark_archive_valid
+      changed_when: false
+      failed_when: false
+      when: spark_archive.stat.exists and not spark_installed.stat.exists
+
+    - name: Download spark archive with resume and progress
+      shell: |
+        set -euo pipefail
+        curl --fail --location --continue-at - --progress-bar \
+          --retry 10 --retry-delay 10 --retry-all-errors \
+          --output "{{ home_dir }}/{{ spark_package }}.tgz" \
+          "https://archive.apache.org/dist/spark/spark-{{ spark_version }}/{{ spark_package }}.tgz"
+      args:
+        executable: /bin/bash
+      async: 7200
+      poll: 30
+      when: not spark_installed.stat.exists and (not spark_archive.stat.exists or (spark_archive_valid.rc | default(1)) != 0)
+
+    - name: Verify Spark archive
+      shell: |
+        set -euo pipefail
+        tar -tzf "{{ home_dir }}/{{ spark_package }}.tgz" >/dev/null
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: not spark_installed.stat.exists
 
     - name: Extract spark
       ansible.builtin.unarchive:
         src: "{{ home_dir }}/{{ spark_package }}.tgz"
         dest: "{{ home_dir }}"
         remote_src: yes
+      when: not spark_extracted.stat.exists and not spark_installed.stat.exists
 
     - name: Empty spark home
       become: true
       ansible.builtin.file:
         state: absent
         path: "{{ spark_home }}"
+      when: not spark_installed.stat.exists
 
     - name: Move spark to opt/spark
       become: true
-      command: "sudo mv {{ home_dir }}/{{ spark_package }} {{ spark_home }}"
-
-    - name: Set JAVA_HOME
-      ansible.builtin.lineinfile:
-        path: "{{ home_dir }}/.profile"
-        regexp: '^JAVA_HOME='
-        line: export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+      command: "mv {{ home_dir }}/{{ spark_package }} {{ spark_home }}"
+      when: not spark_installed.stat.exists
 
     - name: Add JAVA_HOME to PATH
       ansible.builtin.lineinfile:
         path: "{{ home_dir }}/.profile"
-        regexp: '^:$JAVA_HOME'
-        line: export PATH=$PATH:$JAVA_HOME
+        regexp: '^export PATH=\$PATH:\$JAVA_HOME/bin$'
+        line: export PATH=$PATH:$JAVA_HOME/bin
 
     - name: Set SPARK_HOME
       ansible.builtin.lineinfile:
         path: "{{ home_dir }}/.profile"
-        regexp: '^:SPARK_HOME'
+        regexp: '^export SPARK_HOME='
         line: "export SPARK_HOME={{ spark_home }}"
 
     - name: Add SPARK_HOME/bin to path
       ansible.builtin.lineinfile:
         path: "{{ home_dir }}/.profile"
-        regexp: '^:$SPARK_HOME/bin'
+        regexp: '^export PATH=\$PATH:\$SPARK_HOME/bin$'
         line: export PATH=$PATH:$SPARK_HOME/bin
 
     - name: Add SPARK_HOME/sbin to path
       ansible.builtin.lineinfile:
         path: "{{ home_dir }}/.profile"
-        regexp: '^:$SPARK_HOME/sbin'
+        regexp: '^export PATH=\$PATH:\$SPARK_HOME/sbin$'
         line: export PATH=$PATH:$SPARK_HOME/sbin
 
-    - name: Make sure slaves file exists
-      become: true
-      ansible.builtin.file:
-        state: touch
-        path: "{{ spark_home }}/conf/slaves"
-
-    - name: Add spark nodes to slaves file
-      lineinfile:
-        dest: "{{ spark_home }}/conf/slaves"
-        state: present
-        line:  "{{ hostvars[item].ansible_host }}"
-      with_items: "{{ groups['spark'] }}"
-
-    - name: copy worker start/stop convenience scripts
-      copy:
-        src: "{{ item }}"
-        dest: "{{ home_dir }}"
-        mode: 0755
-      when: inventory_hostname in groups['worker']
-      with_items:
-        - start-slave.sh
-        - stop-slave.sh
-
-    - name: copy template
+    - name: Install Spark worker environment
       template:
-        src: spark-env-worker-sample
-        dest: "{{ home_dir }}"
+        src: spark-env-worker
+        dest: "{{ home_dir }}/spark-env"
+        mode: 0644
       when: inventory_hostname in groups['worker']
 
-    - name: rename spark-env
-      shell: mv spark-env-worker-sample spark-env
+    - name: Install Spark worker systemd service
+      become: true
+      template:
+        src: spark-worker.service
+        dest: /etc/systemd/system/spark-worker.service
+        mode: 0644
       when: inventory_hostname in groups['worker']
 
-- name: Install scylla migrator on master
+    - name: Enable Spark worker service
+      become: true
+      ansible.builtin.systemd:
+        name: spark-worker
+        enabled: true
+        daemon_reload: true
+      when: inventory_hostname in groups['worker']
+
+- name: Install Scylla Migrator on master
   hosts: master
   vars:
     home_dir: /home/ubuntu
     spark_home: /opt/spark
+    java_home_arch: "{{ 'arm64' if ansible_facts['architecture'] in ['aarch64', 'arm64'] else 'amd64' }}"
+    java_home_default: "{{ '/usr/lib/jvm/java-17-openjdk-' ~ java_home_arch }}"
+    master_java_home: "{{ hostvars[inventory_hostname].java_home | default(java_home_default) }}"
+    spark_reference_worker: "{{ groups['worker'] | first | default(inventory_hostname) }}"
+    master_spark_local_dirs: "{{ hostvars[inventory_hostname].spark_local_dirs | default('/tmp/spark-local') }}"
+    master_executor_cores: "{{ hostvars[spark_reference_worker].spark_executor_cores | default(4) }}"
+    master_executor_memory: "{{ hostvars[spark_reference_worker].spark_executor_memory | default('8G') }}"
   environment:
-    JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+    JAVA_HOME: "{{ master_java_home }}"
     SPARK_HOME: /opt/spark
-    PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/ubuntu/.local/share/coursier/bin:/usr/lib/jvm/java-17-openjdk-amd64:/opt/spark/bin:/opt/spark/sbin"
+    PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/ubuntu/.local/share/coursier/bin:{{ master_java_home }}/bin:/opt/spark/bin:/opt/spark/sbin"
 
   tasks:
     - name: Create scylla-migrator directory
@@ -166,43 +309,53 @@
         path: "{{ home_dir }}/scylla-migrator"
         state: directory
 
-    - name: copy master start/stop convenience scripts
-      copy:
-        src: "{{ item }}"
-        dest: "{{ home_dir }}/scylla-migrator"
-        mode: 0755
-      with_items:
-        - start-spark.sh
-        - stop-spark.sh
-        - start-slave.sh
-        - stop-slave.sh
-        - config.dynamodb.yml
-    
-    - name: copy template
+    - name: Install Spark master environment
+      template:
+        src: spark-env-master
+        dest: "{{ home_dir }}/scylla-migrator/spark-env"
+        mode: 0644
+
+    - name: Install Spark submit scripts
       template:
         src: "{{ item }}"
         dest: "{{ home_dir }}/scylla-migrator"
         mode: 0755
       with_items:
-        - spark-env-master-sample
         - submit-alternator-job.sh
+        - submit-alternator-validator.sh
         - submit-cql-job.sh
         - submit-cql-job-validator.sh
 
-    - name: rename spark-env
-      shell: cd "{{ home_dir }}/scylla-migrator" && mv spark-env-master-sample spark-env
-
-    - name: change file permissions - spark-env and config.dynamodb.yml
+    - name: Create Spark event log directory
       ansible.builtin.file:
-        mode: 0655
-        state: file
-        path: "{{ home_dir }}/scylla-migrator/{{ item }}"
-      with_items:
-        - spark-env
-        - config.dynamodb.yml
+        path: /tmp/spark-events
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: "0775"
 
-    - name: download scylla-migrator
+    - name: Download Scylla Migrator
       get_url:
         url: https://github.com/scylladb/scylla-migrator/releases/latest/download/scylla-migrator-assembly.jar
         dest: "{{ home_dir }}/scylla-migrator/scylla-migrator-assembly.jar"
+
+    - name: Install Spark master systemd services
+      become: true
+      template:
+        src: "{{ item }}"
+        dest: "/etc/systemd/system/{{ item }}"
+        mode: 0644
+      with_items:
+        - spark-master.service
+        - spark-history-server.service
+
+    - name: Enable Spark master systemd services
+      become: true
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        daemon_reload: true
+      with_items:
+        - spark-master
+        - spark-history-server
 ...

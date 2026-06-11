@@ -1,0 +1,16 @@
+[Unit]
+Description=Apache Spark history server
+After=network-online.target spark-master.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory={{ spark_home }}
+Restart=on-failure
+RestartSec=10
+ExecStart=/bin/bash -lc 'source {{ home_dir }}/scylla-migrator/spark-env && exec "$SPARK_HOME/bin/spark-class" org.apache.spark.deploy.history.HistoryServer'
+
+[Install]
+WantedBy=multi-user.target
