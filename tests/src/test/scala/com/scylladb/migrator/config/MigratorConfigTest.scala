@@ -67,7 +67,7 @@ class MigratorConfigTest extends munit.FunSuite {
         table                       = "DstTable",
         writeThroughput             = Some(200),
         throughputWritePercent      = Some(0.8f),
-        streamChanges               = false,
+        streamChanges               = StreamChangesSetting.Disabled,
         skipInitialSnapshotTransfer = None,
         removeConsumedCapacity      = true,
         billingMode                 = None,
@@ -478,7 +478,10 @@ class MigratorConfigTest extends munit.FunSuite {
     val cfg = result.toOption.get
     assert(cfg.source.isInstanceOf[SourceSettings.DynamoDB])
     assert(cfg.target.isInstanceOf[TargetSettings.Alternator])
-    assert(cfg.target.asInstanceOf[TargetSettings.Alternator].streamChanges)
+    assertEquals(
+      cfg.target.asInstanceOf[TargetSettings.Alternator].streamChanges,
+      StreamChangesSetting.DynamoDBStreams
+    )
   }
 
   test("dynamodb-s3-export source with streamChanges false is accepted") {
@@ -559,7 +562,10 @@ class MigratorConfigTest extends munit.FunSuite {
     val cfg = result.toOption.get
     assert(cfg.source.isInstanceOf[SourceSettings.DynamoDB])
     assert(cfg.target.isInstanceOf[TargetSettings.DynamoDB])
-    assert(cfg.target.asInstanceOf[TargetSettings.DynamoDB].streamChanges)
+    assertEquals(
+      cfg.target.asInstanceOf[TargetSettings.DynamoDB].streamChanges,
+      StreamChangesSetting.DynamoDBStreams
+    )
   }
 
   test("MySQL config round-trips without savepoints block (supportsSavepoints = false)") {
@@ -639,7 +645,7 @@ class MigratorConfigTest extends munit.FunSuite {
         table                       = "DstTable",
         writeThroughput             = None,
         throughputWritePercent      = None,
-        streamChanges               = false,
+        streamChanges               = StreamChangesSetting.Disabled,
         skipInitialSnapshotTransfer = None
       ),
       renames          = None,
@@ -677,7 +683,7 @@ class MigratorConfigTest extends munit.FunSuite {
         table                       = "DstTable",
         writeThroughput             = None,
         throughputWritePercent      = None,
-        streamChanges               = false,
+        streamChanges               = StreamChangesSetting.Disabled,
         skipInitialSnapshotTransfer = None
       ),
       renames    = None,
