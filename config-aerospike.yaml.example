@@ -1,0 +1,105 @@
+# Example configuration for migrating from Aerospike to Scylla
+# Requires JDK 17+ (the Aerospike reader uses java.util.HexFormat, a JDK 17 API).
+# See also: config.yaml.example for Cassandra/DynamoDB/Parquet source examples
+source:
+  type: aerospike
+  hosts:
+    - aerospike-server
+  # Optional - default port for hosts that don't specify one inline (default: 3000)
+  # port: 3000
+  namespace: test
+  set: users
+  # Optional - specific bins to read (if not specified, all bins are read)
+  # bins:
+  #   - name
+  #   - email
+  #   - age
+  # Optional - number of splits for parallel reads (default: Spark parallelism * 4, max 4096)
+  # For small datasets, consider setting splitCount to a lower value to avoid empty partitions.
+  # splitCount: 256
+  # Optional - number of records to sample for schema discovery (default: 1000).
+  # Aerospike is schema-less, so bins that only appear in records beyond this sample will be skipped.
+  # schemaSampleSize: 1000
+  # Optional - capacity of the blocking queue between scan thread and iterator (default: 1024)
+  # queueSize: 1024
+  # The Aerospike record key is exposed as the 'aero_key' column.
+  # Keys can be String, Long, or byte[] - the type is auto-detected during schema discovery.
+  # Optional - Aerospike authentication credentials
+  # credentials:
+  #   username: <user>
+  #   password: <pass>
+  # Optional - connection and socket timeouts in milliseconds
+  # connectTimeoutMs: 10000
+  # socketTimeoutMs: 10000  # default: 10000
+  # Optional - TLS name for secure connections. Setting this enables TLS.
+  # The JVM default trust store is used; configure via -Djavax.net.ssl.trustStore JVM arguments.
+  # tlsName: <tls-name>
+  # Optional - total timeout in milliseconds for Aerospike operations. If not set,
+  # defaults to 3x socketTimeoutMs. Set this to override the 3x multiplier.
+  # totalTimeoutMs: 90000
+  # Optional - maximum number of retries for transient scan errors (TIMEOUT,
+  # SERVER_NOT_AVAILABLE, DEVICE_OVERLOAD) before failing the Spark partition (default: 3).
+  # maxScanRetries: 3
+  # Optional - poll timeout in seconds for the blocking queue between scan thread and
+  # iterator. If you see "scan thread died" errors, increase this value (default: 120).
+  # pollTimeoutSeconds: 120
+  # Optional - maximum consecutive poll timeouts before failing a Spark partition (default: 5).
+  # With pollTimeoutSeconds=120 and maxPollRetries=5, a partition can wait up to 10 minutes.
+  # maxPollRetries: 5
+  # Optional - maximum number of connections per Aerospike node (default: Aerospike client default).
+  # Increase for high-throughput migrations with many concurrent scans.
+  # maxConnsPerNode: 300
+  # Optional - number of connection pools per Aerospike node (default: Aerospike client default).
+  # connPoolsPerNode: 1
+  # Optional - schema discovery strategy (default: progressive).
+  # "progressive": scans 8 -> 64 -> all partitions, stopping after finding records.
+  # "single": scans only 8 partitions (fastest startup, may miss bins in sparse data).
+  # "full": scans all partitions (most thorough, may be slow on large clusters).
+  # schemaDiscoveryStrategy: progressive
+  # Optional - explicit schema override. When set, schema discovery is skipped entirely.
+  # Useful for evolving schemas where sample-based discovery might miss bins.
+  # Supported types: string, text, long, bigint, int, integer, double, binary, blob
+  # schema:
+  #   name: string
+  #   age: long
+  #   score: double
+  #   data: binary
+  #
+  # Optional - preserve Aerospike record metadata as additional columns.
+  # preserveTTL: when true, adds an 'aero_ttl' column (INT) with the record's remaining
+  # TTL in seconds. Records with no expiration will have TTL = -1. (default: false)
+  # preserveTTL: false
+  # preserveGeneration: when true, adds an 'aero_generation' column (INT) with the record's
+  # generation (version) counter. (default: false)
+  # preserveGeneration: false
+  #
+  # Note: Credentials are serialized as part of the Spark job closure and may be written to
+  # disk during Spark shuffle operations. For sensitive environments, set the
+  # AEROSPIKE_USERNAME and AEROSPIKE_PASSWORD environment variables on executor nodes instead.
+  # When these env vars are present, credentials are read from the environment at runtime
+  # and are not broadcast as part of the Spark job closure.
+  #
+  # Aerospike-to-Spark type mapping (auto-detected during schema discovery):
+  #   Integer/Long  -> LongType  (bigint)
+  #   Double/Float  -> DoubleType
+  #   String        -> StringType (text)
+  #   byte[]        -> BinaryType (blob)
+  #   List          -> ArrayType
+  #   Map           -> MapType
+  #   GeoJSON       -> StringType (arrives as JSON text from the Aerospike client)
+  #   HLL           -> BinaryType (raw bytes)
+  #   Other/unknown -> StringType (via .toString fallback)
+
+target:
+  type: scylla
+  host: scylla
+  port: 9042
+  keyspace: test
+  table: users
+  consistencyLevel: LOCAL_QUORUM
+  connections: 16
+  stripTrailingZerosForDecimals: false
+
+savepoints:
+  path: /app/savepoints
+  intervalSeconds: 300

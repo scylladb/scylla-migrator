@@ -11,6 +11,9 @@ on:
       - 'dockerfiles/**'
       - 'docker-compose-*.yml'
       - '.github/workflows/**'
+      - 'tests/configurations/**'
+      - 'tests/docker/**'
+      - 'config*.yaml.example'
 
   pull_request:
     paths:
@@ -21,11 +24,15 @@ on:
       - 'dockerfiles/**'
       - 'docker-compose-*.yml'
       - '.github/workflows/**'
+      - 'tests/configurations/**'
+      - 'tests/docker/**'
+      - 'config*.yaml.example'
 
 jobs:
   lint:
     name: Check formatting
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
@@ -44,6 +51,7 @@ jobs:
   test-unit:
     name: Unit tests
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
@@ -70,6 +78,7 @@ jobs:
   test-integration-scylla:
     name: Integration tests (Scylla)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
@@ -104,6 +113,9 @@ jobs:
       - name: Run E2E sanity tests (Scylla only)
         if: success()
         run: make test-benchmark-e2e-sanity-scylla
+      - name: Dump container logs on test failure
+        if: failure()
+        run: make dump-logs
       - name: Stop services
         if: always()
         run: make stop-services-scylla
@@ -119,6 +131,7 @@ jobs:
   test-integration-dynamodb:
     name: Integration tests (DynamoDB ${{ matrix.name }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -181,9 +194,105 @@ jobs:
             tests/target/scala-2.13/scoverage-report/
             migrator/target/scala-2.13/scoverage-report/
 
+  test-integration-aerospike:
+    name: Integration tests (Aerospike)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: sbt
+      - uses: sbt/setup-sbt@af116cce31c00823d3903ce687f9cda3a4f19f1b # v1.2.1
+      - name: Cache SBT compilation artifacts
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            target/
+            migrator/target/scala-2.13/classes/
+            tests/target/scala-2.13/classes/
+            spark-kinesis-dynamodb/target/scala-2.13/classes/
+            project/target/
+          key: sbt-target-${{ runner.os }}-${{ hashFiles('**/*.scala', '**/*.sbt', 'project/build.properties') }}
+          restore-keys: |
+            sbt-target-${{ runner.os }}-
+      - name: Start services
+        run: make start-services-aerospike
+      - name: Wait for services
+        run: make wait-for-services-aerospike
+      - name: Dump container logs on failure
+        if: failure()
+        run: make dump-logs
+      - name: Run Aerospike integration tests
+        run: make test-integration-aerospike
+        env:
+          COVERAGE: ${{ github.event_name == 'push' && 'true' || 'false' }}
+      - name: Run E2E sanity tests (Aerospike)
+        if: success()
+        run: make test-benchmark-e2e-sanity-aerospike
+      - name: Dump container logs on test failure
+        if: failure()
+        run: make dump-logs
+      - name: Stop services
+        if: always()
+        run: make stop-services
+      - name: Upload coverage report
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-report-aerospike
+          path: |
+            tests/target/scala-2.13/scoverage-report/
+            migrator/target/scala-2.13/scoverage-report/
+
+  test-aerospike-compat:
+    name: Aerospike 6.x compat
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: sbt
+      - uses: sbt/setup-sbt@af116cce31c00823d3903ce687f9cda3a4f19f1b # v1.2.1
+      - name: Cache SBT compilation artifacts
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            target/
+            migrator/target/scala-2.13/classes/
+            tests/target/scala-2.13/classes/
+            spark-kinesis-dynamodb/target/scala-2.13/classes/
+            project/target/
+          key: sbt-target-${{ runner.os }}-${{ hashFiles('**/*.scala', '**/*.sbt', 'project/build.properties') }}
+          restore-keys: |
+            sbt-target-${{ runner.os }}-
+      - name: Start services
+        run: make start-services-aerospike-compat AEROSPIKE_VERSION=6
+      - name: Wait for services
+        run: make wait-for-services-aerospike-compat AEROSPIKE_VERSION=6
+      - name: Dump container logs on failure
+        if: failure()
+        run: make dump-logs
+      - name: Run Aerospike 6.x integration tests
+        run: make test-integration-aerospike-compat AEROSPIKE_VERSION=6
+        env:
+          AEROSPIKE_PORT: 3001
+      - name: Dump container logs on test failure
+        if: failure()
+        run: make dump-logs
+      - name: Stop services
+        if: always()
+        run: make stop-services
+
   test-integration-cassandra:
     name: Integration tests (Cassandra ${{ matrix.version }}.x)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -217,6 +326,9 @@ jobs:
         run: make dump-logs-scylla
       - name: Run Cassandra ${{ matrix.version }}.x tests
         run: make test-integration-cassandra CASSANDRA_VERSION=${{ matrix.version }}
+      - name: Dump container logs on test failure
+        if: failure()
+        run: make dump-logs
       - name: Stop services
         if: always()
         run: make stop-services-scylla

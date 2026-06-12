@@ -74,6 +74,10 @@ object Migrator {
         log.info("Starting MySQL to ScyllaDB migration")
         val sourceDF = readers.MySQL.readDataframe(spark, mysqlSource)
         ScyllaMigrator.migrate(config, scyllaTarget, sourceDF)
+      case (aerospikeSource: SourceSettings.Aerospike, scyllaTarget: TargetSettings.Scylla) =>
+        log.info("Starting Aerospike to ScyllaDB migration")
+        val sourceDF = readers.Aerospike.readDataframe(spark, aerospikeSource)
+        ScyllaMigrator.migrate(config, scyllaTarget, sourceDF)
       case (parquetSource: SourceSettings.Parquet, scyllaTarget: TargetSettings.Scylla) =>
         readers.Parquet.migrateToScylla(config, parquetSource, scyllaTarget)
       case (cqlSource: SourceSettings.Cassandra, parquetTarget: TargetSettings.Parquet) =>
