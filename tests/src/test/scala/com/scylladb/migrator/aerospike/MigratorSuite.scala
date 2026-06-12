@@ -109,9 +109,8 @@ abstract class MigratorSuite extends munit.FunSuite {
       }
     }
     assert(!found, s"Timed out waiting for truncate of set $setName after ${maxWaitMs}ms")
-    // Verify the set is writable (including TTL writes) — Aerospike may briefly
-    // reject writes while finalizing truncation or initializing a new set.
-    // Use TTL=1 so the probe record self-expires before any scan picks it up.
+    // Verify the set is writable — Aerospike may briefly reject writes while finalizing
+    // truncation or initializing a new set.
     // Two consecutive successful writes confirm the set is stable — Aerospike 7.x may
     // transiently re-enter FORBIDDEN state after a single successful probe write.
     val writeDeadline = System.currentTimeMillis() + 20000
@@ -121,7 +120,7 @@ abstract class MigratorSuite extends munit.FunSuite {
     while (consecutiveSuccesses < 2 && System.currentTimeMillis() < writeDeadline)
       try {
         val ttlPolicy = new com.aerospike.client.policy.WritePolicy()
-        ttlPolicy.expiration = 1 // 1 second — self-expires before migration scan
+        ttlPolicy.expiration = 1 // 1 second — short-lived backstop in case the delete below fails
         sourceAerospike().put(ttlPolicy, testKey, new com.aerospike.client.Bin("_c", 1))
         consecutiveSuccesses += 1
         if (consecutiveSuccesses < 2) Thread.sleep(200)
@@ -132,6 +131,13 @@ abstract class MigratorSuite extends munit.FunSuite {
           Thread.sleep(writeSleepMs)
           writeSleepMs = math.min(writeSleepMs * 2, 3000L)
       }
+
+    // Delete the probe record deterministically. Relying on the 1s TTL alone is not safe:
+    // on Aerospike 6.x the migration's schema-discovery scan can run within the TTL window
+    // and return the not-yet-evicted probe (bin "_c"), polluting the discovered schema and
+    // breaking the Scylla write with "Columns not found in table ...: _c".
+    try sourceAerospike().delete(new WritePolicy(), testKey)
+    catch { case e: Exception => log.debug("waitForTruncate: probe delete failed (ignored)", e) }
   }
 
   def withSet(setName: String): FunFixture[String] =
