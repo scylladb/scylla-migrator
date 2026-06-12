@@ -113,4 +113,34 @@ class SourceSettingsCapabilityTest extends munit.FunSuite {
     )
     assert(!source.supportsSavepoints)
   }
+
+  test(
+    "Aerospike does not support savepoints (custom partition-range RDD lacks durable progress)"
+  ) {
+    val source = SourceSettings.Aerospike(
+      hosts                   = Seq("aerospike.example.com"),
+      port                    = None,
+      namespace               = "test",
+      set                     = "users",
+      bins                    = None,
+      splitCount              = None,
+      schemaSampleSize        = None,
+      queueSize               = None,
+      credentials             = None,
+      connectTimeoutMs        = None,
+      socketTimeoutMs         = None,
+      tlsName                 = None,
+      schema                  = None,
+      pollTimeoutSeconds      = None,
+      preserveTTL             = None,
+      preserveGeneration      = None,
+      totalTimeoutMs          = None,
+      maxScanRetries          = None,
+      schemaDiscoveryStrategy = None,
+      maxPollRetries          = None,
+      maxConnsPerNode         = None,
+      connPoolsPerNode        = None
+    )
+    assert(!source.supportsSavepoints)
+  }
 }

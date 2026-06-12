@@ -1,0 +1,27 @@
+# Set name must match BinsFilterSetName in BasicMigrationTest.scala
+source:
+  type: aerospike
+  hosts:
+    - aerospike
+  namespace: test
+  set: binsfilter
+  bins:
+    - foo
+
+target:
+  type: scylla
+  host: scylla
+  port: 9042
+  localDC: datacenter1
+  credentials:
+    username: dummy
+    password: dummy
+  keyspace: test
+  table: binsfilter
+  consistencyLevel: LOCAL_QUORUM
+  connections: 16
+  stripTrailingZerosForDecimals: false
+
+savepoints:
+  path: /app/savepoints
+  intervalSeconds: 300

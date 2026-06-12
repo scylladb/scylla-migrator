@@ -7,6 +7,7 @@ val hadoopVersion = "3.4.1"
 val circeVersion = "0.14.7"
 val connectorVersion = "4.1.3"
 val gcsConnectorVersion = "hadoop3-2.2.26"
+val aerospikeClientVersion = "8.1.1"
 val dynamodbStreamsKinesisAdapterVersion =
   "1.5.4" // Note This version still depends on AWS SDK 1.x, but there is no more recent version that supports AWS SDK v2.
 
@@ -14,6 +15,7 @@ inThisBuild(
   List(
     organization := "com.scylladb",
     scalaVersion := "2.13.14",
+    // -release:17 is required: java.util.HexFormat (used in Aerospike reader) needs JDK 17+
     scalacOptions ++= Seq("-release:17", "-deprecation", "-unchecked", "-feature")
   )
 )
@@ -61,6 +63,7 @@ lazy val migrator = (project in file("migrator"))
       "com.scylladb"          %% "spark-scylladb-connector" % connectorVersion,
       "com.github.jnr" % "jnr-posix" % "3.1.19", // Needed by the Spark ScyllaDB connector
       "com.scylladb.alternator" % "emr-dynamodb-hadoop"  % "5.8.0",
+      "com.aerospike"           % "aerospike-client-jdk8" % aerospikeClientVersion, // jdk8 variant works on JDK 8+; jdk21 variant requires JDK 21+ (adds virtual threads)
       "com.scylladb.alternator" % "load-balancing"       % "2.0.3",
       "com.mysql"              % "mysql-connector-j"     % "9.7.0",
       "io.circe"               %% "circe-generic"        % circeVersion,
@@ -108,12 +111,13 @@ lazy val tests = project
         "shaded"
       ),
       "com.google.cloud.bigdataoss" % "util-hadoop" % gcsConnectorVersion,
+      "com.aerospike"             % "aerospike-client-jdk8"     % aerospikeClientVersion % Test,
       "org.scalameta"            %% "munit"                     % "1.0.1"
     ),
     Test / parallelExecution := false,
     // Needed to build a Spark session on Java 17+, see https://stackoverflow.com/questions/73465937/apache-spark-3-3-0-breaks-on-java-17-with-cannot-access-class-sun-nio-ch-direct
     Test / javaOptions ++= {
-      val e2eProps = Seq("e2e.cql.rows", "e2e.ddb.rows").flatMap { key =>
+      val e2eProps = Seq("e2e.cql.rows", "e2e.ddb.rows", "e2e.aerospike.rows").flatMap { key =>
         sys.props.get(key).map(v => s"-D${key}=${v}")
       }
       Seq("--add-exports", "java.base/sun.nio.ch=ALL-UNNAMED") ++ e2eProps
