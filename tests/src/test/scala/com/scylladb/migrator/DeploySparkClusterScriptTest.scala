@@ -19,6 +19,21 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertEquals(result.exitCode, 0, result.output)
   }
 
+  test("deploy helper reports unsupported Python versions clearly") {
+    val deployScript = Files.readString(script)
+
+    assertOutputContains(deployScript, "if sys.version_info < (3, 10):")
+    assertOutputContains(
+      deployScript,
+      "deploy_spark_cluster.py requires Python 3.10 or later."
+    )
+    assert(
+      deployScript.indexOf("if sys.version_info < (3, 10):") <
+        deployScript.indexOf("import argparse"),
+      deployScript
+    )
+  }
+
   test("empty config metadata path resolves as absent") {
     val result = runPython(
       "-c",
@@ -88,6 +103,41 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertEquals(lines(0), "SSH private key is required. Pass --ssh-private-key.")
     assertEquals(lines(1), "SSH private key is required. Pass --ssh-private-key.")
     assertEquals(lines(2), s"SSH private key does not exist: ${lines(3)}")
+  }
+
+  test("Terraform file generation rejects SSH public key directories") {
+    val result = runPython(
+      "-c",
+      s"""import importlib.util, tempfile
+         |from pathlib import Path
+         |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
+         |module = importlib.util.module_from_spec(spec)
+         |spec.loader.exec_module(module)
+         |with tempfile.TemporaryDirectory() as temp_dir:
+         |    temp_path = Path(temp_dir)
+         |    public_key_dir = temp_path / "id_rsa.pub"
+         |    public_key_dir.mkdir()
+         |    args = module.build_parser().parse_args([
+         |        "deploy",
+         |        "--state-dir",
+         |        str(temp_path / "state"),
+         |        "--skip-ansible",
+         |        "--allowed-ssh-cidr",
+         |        "203.0.113.10/32",
+         |        "--allowed-web-cidr",
+         |        "203.0.113.10/32",
+         |        "--ssh-public-key",
+         |        str(public_key_dir),
+         |    ])
+         |    try:
+         |        module.write_terraform_files(args, temp_path / "state")
+         |    except SystemExit as exc:
+         |        print(exc)
+         |""".stripMargin
+    )
+
+    assertEquals(result.exitCode, 0, result.output)
+    assertOutputContains(result.output, "SSH public key path is not a file:")
   }
 
   test("invalid JSON state files report a clear CLI error") {

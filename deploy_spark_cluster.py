@@ -8,6 +8,14 @@ created EC2 instances.
 
 from __future__ import annotations
 
+import sys
+
+if sys.version_info < (3, 10):
+    raise SystemExit(
+        "deploy_spark_cluster.py requires Python 3.10 or later. "
+        f"Current version: {sys.version.split()[0]}"
+    )
+
 import argparse
 import ipaddress
 import json
@@ -15,7 +23,6 @@ import os
 import shlex
 import shutil
 import subprocess
-import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -895,6 +902,8 @@ def write_terraform_files(args: argparse.Namespace, state_dir: Path) -> None:
 
     if not public_key.exists():
         raise SystemExit(f"SSH public key does not exist: {public_key}")
+    if not public_key.is_file():
+        raise SystemExit(f"SSH public key path is not a file: {public_key}")
 
     tfvars = {
         "region": args.region,
