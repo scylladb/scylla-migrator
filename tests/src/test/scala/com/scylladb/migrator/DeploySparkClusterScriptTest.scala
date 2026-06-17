@@ -586,7 +586,6 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
          |with tempfile.TemporaryDirectory() as state_dir:
          |    inventory = module.write_ansible_inventory(
          |        outputs,
-         |        private_key=Path("/tmp/key with spaces"),
          |        state_dir=Path(state_dir),
          |    )
          |    print(inventory.read_text())
@@ -594,6 +593,10 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     )
 
     assertEquals(result.exitCode, 0, result.output)
+    assertOutputContains(
+      Files.readString(script),
+      "def write_ansible_inventory(\n    outputs: dict[str, Any],\n    *,\n    state_dir: Path,"
+    )
     assertOutputContains(
       result.output,
       "spark_master ansible_host=203.0.113.10 ansible_user=ubuntu"
@@ -777,6 +780,19 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(deployScript, "use_existing_network")
     assertOutputContains(deployScript, "local.vpc_id")
     assertOutputContains(deployScript, "local.subnet_id")
+    assertOutputContains(deployScript, "resource \"aws_security_group\" \"spark_master_ui\"")
+    assertOutputContains(
+      deployScript,
+      "vpc_security_group_ids      = [aws_security_group.spark.id, aws_security_group.spark_master_ui.id]"
+    )
+    assertOutputContains(
+      deployScript,
+      "vpc_security_group_ids      = [aws_security_group.spark.id]"
+    )
+    assertOutputContains(deployScript, "output \"cluster_security_group_id\"")
+    assertOutputContains(deployScript, "output \"master_ui_security_group_id\"")
+    assertOutputContains(deployScript, "Master UI security group")
+    assert(!deployScript.contains("output \"security_group_id\""), deployScript)
   }
 
   private def runScript(args: String*): CommandResult =

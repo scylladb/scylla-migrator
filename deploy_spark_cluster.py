@@ -241,7 +241,7 @@ resource "aws_route_table_association" "public" {
 
 resource "aws_security_group" "spark" {
   name        = "${var.name_prefix}-sg"
-  description = "Spark cluster access for ScyllaDB Migrator"
+  description = "Shared Spark cluster access for ScyllaDB Migrator"
   vpc_id      = local.vpc_id
 
   ingress {
@@ -251,6 +251,32 @@ resource "aws_security_group" "spark" {
     protocol    = "tcp"
     cidr_blocks = [var.allowed_ssh_cidr]
   }
+
+  ingress {
+    description = "Cluster-internal traffic"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    self        = true
+  }
+
+  egress {
+    description = "All outbound traffic"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${var.name_prefix}-sg"
+  }
+}
+
+resource "aws_security_group" "spark_master_ui" {
+  name        = "${var.name_prefix}-master-ui-sg"
+  description = "Spark master web UI access for ScyllaDB Migrator"
+  vpc_id      = local.vpc_id
 
   ingress {
     description = "Spark master UI"
@@ -276,24 +302,8 @@ resource "aws_security_group" "spark" {
     cidr_blocks = [var.allowed_web_cidr]
   }
 
-  ingress {
-    description = "Cluster-internal traffic"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    self        = true
-  }
-
-  egress {
-    description = "All outbound traffic"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   tags = {
-    Name = "${var.name_prefix}-sg"
+    Name = "${var.name_prefix}-master-ui-sg"
   }
 }
 
@@ -301,7 +311,7 @@ resource "aws_instance" "spark_master" {
   ami                         = data.aws_ami.ubuntu_master.id
   instance_type               = var.master_instance_type
   subnet_id                   = local.subnet_id
-  vpc_security_group_ids      = [aws_security_group.spark.id]
+  vpc_security_group_ids      = [aws_security_group.spark.id, aws_security_group.spark_master_ui.id]
   key_name                    = aws_key_pair.spark.key_name
   associate_public_ip_address = true
   iam_instance_profile        = var.iam_instance_profile == "" ? null : var.iam_instance_profile
@@ -364,8 +374,12 @@ output "public_subnet_id" {
   value = local.subnet_id
 }
 
-output "security_group_id" {
+output "cluster_security_group_id" {
   value = aws_security_group.spark.id
+}
+
+output "master_ui_security_group_id" {
+  value = aws_security_group.spark_master_ui.id
 }
 
 output "key_name" {
@@ -895,7 +909,6 @@ def write_terraform_files(args: argparse.Namespace, state_dir: Path) -> None:
 def write_ansible_inventory(
     outputs: dict[str, Any],
     *,
-    private_key: Path,
     state_dir: Path,
 ) -> Path:
     inventory_path = state_dir / "inventory.ini"
@@ -1308,7 +1321,6 @@ def handle_deploy(args: argparse.Namespace) -> None:
 
     inventory_path = write_ansible_inventory(
         outputs,
-        private_key=private_key,
         state_dir=state_dir,
     )
     run_ansible(inventory_path, private_key, known_hosts, args.insecure_ssh)
@@ -1355,7 +1367,8 @@ def print_cluster_details(outputs: dict[str, Any], *, metadata: dict[str, Any]) 
     print("Infrastructure")
     print(f"  VPC: {outputs['vpc_id']}")
     print(f"  Public subnet: {outputs['public_subnet_id']}")
-    print(f"  Security group: {outputs['security_group_id']}")
+    print(f"  Cluster security group: {outputs['cluster_security_group_id']}")
+    print(f"  Master UI security group: {outputs['master_ui_security_group_id']}")
     print(f"  Key pair: {outputs['key_name']}")
     print("")
     print("Instances")
@@ -1449,7 +1462,6 @@ def handle_redeploy(args: argparse.Namespace) -> None:
 
     inventory_path = write_ansible_inventory(
         outputs,
-        private_key=private_key,
         state_dir=state_dir,
     )
 

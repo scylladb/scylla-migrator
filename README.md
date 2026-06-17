@@ -106,7 +106,7 @@ The deployment creates an AWS key pair from the local public key. The EC2 instan
      --allowed-web-cidr "$MY_CIDR"
    ```
 
-   The existing subnet must have outbound internet access so Ansible can download packages, Spark, AWS CLI, and the Migrator assembly. The script still creates a security group in the provided VPC.
+   The existing subnet must have outbound internet access so Ansible can download packages, Spark, AWS CLI, and the Migrator assembly. The script still creates shared cluster and master UI security groups in the provided VPC.
 
 4. Inspect the created infrastructure and Spark endpoints:
 
@@ -114,7 +114,7 @@ The deployment creates an AWS key pair from the local public key. The EC2 instan
    ./deploy_spark_cluster.py show
    ```
 
-   The output includes the VPC, subnet, security group, EC2 instance IDs, Spark master URL, Spark UI, application UI, and history server UI.
+   The output includes the VPC, subnet, cluster and master UI security groups, EC2 instance IDs, Spark master URL, Spark UI, application UI, and history server UI.
 
 5. Rerun the Ansible configuration when you need to apply local playbook or script changes to the current nodes:
 
