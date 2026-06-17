@@ -654,6 +654,12 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(playbook, "spark_worker_memory")
     assertOutputContains(playbook, "spark_executor_cores")
     assertOutputContains(playbook, "spark_executor_memory")
+    assertOutputContains(
+      playbook,
+      "spark_executor_core_candidates: [10, 9, 8, 7, 6, 5, 4, 3, 2, 1]"
+    )
+    assertOutputContains(playbook, "for candidate in spark_executor_core_candidates")
+    assert(!playbook.contains("10 if (spark_worker_cores | int)"), playbook)
     assert(!playbook.contains("spark_executor_instances_per_worker"), playbook)
   }
 

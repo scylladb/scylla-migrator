@@ -8,6 +8,7 @@
     spark_version: "4.0.2"
     spark_package: "spark-{{ spark_version }}-bin-hadoop3"
     cqlsh_venv: "{{ home_dir }}/.venvs/scylla-cqlsh"
+    spark_executor_core_candidates: [10, 9, 8, 7, 6, 5, 4, 3, 2, 1]
     apt_source_files:
       - /etc/apt/sources.list
       - /etc/apt/sources.list.d/ubuntu.sources
@@ -92,7 +93,15 @@
 
     - name: Derive Spark executor cores
       ansible.builtin.set_fact:
-        spark_executor_cores: "{{ 10 if (spark_worker_cores | int) >= 10 and (spark_worker_cores | int) % 10 == 0 else 9 if (spark_worker_cores | int) >= 9 and (spark_worker_cores | int) % 9 == 0 else 8 if (spark_worker_cores | int) >= 8 and (spark_worker_cores | int) % 8 == 0 else 7 if (spark_worker_cores | int) >= 7 and (spark_worker_cores | int) % 7 == 0 else 6 if (spark_worker_cores | int) >= 6 and (spark_worker_cores | int) % 6 == 0 else 5 if (spark_worker_cores | int) >= 5 and (spark_worker_cores | int) % 5 == 0 else 4 if (spark_worker_cores | int) >= 4 and (spark_worker_cores | int) % 4 == 0 else 3 if (spark_worker_cores | int) >= 3 and (spark_worker_cores | int) % 3 == 0 else 2 if (spark_worker_cores | int) >= 2 and (spark_worker_cores | int) % 2 == 0 else 1 }}"
+        spark_executor_cores: >-
+          {%- set selected = namespace(value=1) -%}
+          {%- set worker_cores = spark_worker_cores | int -%}
+          {%- for candidate in spark_executor_core_candidates -%}
+          {%- if selected.value == 1 and worker_cores >= candidate and worker_cores % candidate == 0 -%}
+          {%- set selected.value = candidate -%}
+          {%- endif -%}
+          {%- endfor -%}
+          {{ selected.value }}
 
     - name: Derive Spark memory and local directories
       ansible.builtin.set_fact:
