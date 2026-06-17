@@ -66,6 +66,7 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     val result = runPython(
       "-c",
       s"""import importlib.util
+         |from pathlib import Path
          |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
          |module = importlib.util.module_from_spec(spec)
          |spec.loader.exec_module(module)
@@ -75,21 +76,18 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
          |    except SystemExit as exc:
          |        print(exc)
          |try:
-         |    module.resolve_ssh_private_key("/tmp/does-not-exist-scylla-migrator-key")
+         |    module.resolve_ssh_private_key("~/does-not-exist-scylla-migrator-key")
          |except SystemExit as exc:
          |    print(exc)
+         |print(Path("~/does-not-exist-scylla-migrator-key").expanduser().resolve())
          |""".stripMargin
     )
 
     assertEquals(result.exitCode, 0, result.output)
-    assertEquals(
-      result.output.linesIterator.toList,
-      List(
-        "SSH private key is required. Pass --ssh-private-key.",
-        "SSH private key is required. Pass --ssh-private-key.",
-        "SSH private key does not exist: /tmp/does-not-exist-scylla-migrator-key"
-      )
-    )
+    val lines = result.output.linesIterator.toList
+    assertEquals(lines(0), "SSH private key is required. Pass --ssh-private-key.")
+    assertEquals(lines(1), "SSH private key is required. Pass --ssh-private-key.")
+    assertEquals(lines(2), s"SSH private key does not exist: ${lines(3)}")
   }
 
   test("invalid JSON state files report a clear CLI error") {
@@ -126,11 +124,17 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
          |with tempfile.TemporaryDirectory() as temp_dir:
          |    state_dir = Path(temp_dir) / ".deploy_spark_cluster"
          |    state_dir.mkdir()
+         |    module.write_state_dir_marker(state_dir)
          |    (state_dir / "terraform.tfstate").write_text("{}")
          |    (state_dir / "main.tf").write_text("# generated")
          |    module.write_json(state_dir / "metadata.json", {"state_dir": str(state_dir.resolve())})
          |    module.validate_state_dir_safe_to_delete(state_dir)
          |    print("safe")
+         |    (state_dir / "user-file.txt").write_text("do not delete")
+         |    try:
+         |        module.validate_state_dir_safe_to_delete(state_dir)
+         |    except SystemExit as exc:
+         |        print(exc)
          |try:
          |    module.validate_state_dir_safe_to_delete(Path("${repoRoot}"))
          |except SystemExit as exc:
@@ -140,6 +144,7 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
 
     assertEquals(result.exitCode, 0, result.output)
     assertOutputContains(result.output, "safe")
+    assertOutputContains(result.output, "unexpected files are present: user-file.txt")
     assertOutputContains(result.output, "Refusing to delete unsafe state directory")
   }
 
