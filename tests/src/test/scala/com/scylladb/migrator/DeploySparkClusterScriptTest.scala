@@ -630,9 +630,12 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
 
   test("deploy script Python dependencies are pinned") {
     val requirements = Files.readString(repoRoot.resolve("requirements.txt"))
+    val readme = Files.readString(repoRoot.resolve("README.md"))
 
     assertOutputContains(requirements, "ansible-core==")
     assert(!requirements.contains("ansible-core\n"), requirements)
+    assertOutputContains(readme, "pip install -r requirements.txt")
+    assertOutputContains(readme, "`ansible-core` is pinned")
   }
 
   test("test workflow runs for deploy helper and Ansible changes") {

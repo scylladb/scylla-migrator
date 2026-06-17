@@ -44,8 +44,8 @@ The script uses Terraform for AWS infrastructure and Ansible for Spark/Migrator 
 Install and configure the following on the machine where you run the script:
 
 - Python 3.10 or later.
+- Python dependencies installed with `pip install -r requirements.txt` (`ansible-core` is pinned there for the deploy helper).
 - Terraform.
-- Ansible.
 - `ssh` and `scp`.
 - AWS credentials that can create EC2 instances, VPC networking, security groups, and key pairs in the target region.
 - An SSH private key and matching public key. By default the script uses `~/.ssh/id_rsa` and `~/.ssh/id_rsa.pub`.
