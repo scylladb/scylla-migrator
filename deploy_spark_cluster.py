@@ -907,8 +907,7 @@ def write_ansible_inventory(
         (
             "spark_master "
             f"ansible_host={master['public_ip']} "
-            f"ansible_user={DEFAULT_USER} "
-            f"ansible_ssh_private_key_file={private_key}"
+            f"ansible_user={DEFAULT_USER}"
         ),
     ]
 
@@ -916,8 +915,7 @@ def write_ansible_inventory(
         lines.append(
             f"spark_worker{index} "
             f"ansible_host={worker['public_ip']} "
-            f"ansible_user={DEFAULT_USER} "
-            f"ansible_ssh_private_key_file={private_key}"
+            f"ansible_user={DEFAULT_USER}"
         )
 
     lines.extend(["", "[master]", "spark_master", "", "[worker]"])

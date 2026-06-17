@@ -571,6 +571,41 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assert(!deployScript.contains("metadata.get(\"terraform_outputs\")"), deployScript)
   }
 
+  test("generated Ansible inventory does not embed private key path") {
+    val result = runPython(
+      "-c",
+      s"""import importlib.util, tempfile
+         |from pathlib import Path
+         |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
+         |module = importlib.util.module_from_spec(spec)
+         |spec.loader.exec_module(module)
+         |outputs = {
+         |    "master": {"public_ip": "203.0.113.10"},
+         |    "workers": [{"public_ip": "203.0.113.11"}],
+         |}
+         |with tempfile.TemporaryDirectory() as state_dir:
+         |    inventory = module.write_ansible_inventory(
+         |        outputs,
+         |        private_key=Path("/tmp/key with spaces"),
+         |        state_dir=Path(state_dir),
+         |    )
+         |    print(inventory.read_text())
+         |""".stripMargin
+    )
+
+    assertEquals(result.exitCode, 0, result.output)
+    assertOutputContains(
+      result.output,
+      "spark_master ansible_host=203.0.113.10 ansible_user=ubuntu"
+    )
+    assertOutputContains(
+      result.output,
+      "spark_worker1 ansible_host=203.0.113.11 ansible_user=ubuntu"
+    )
+    assert(!result.output.contains("ansible_ssh_private_key_file"), result.output)
+    assert(!result.output.contains("/tmp/key with spaces"), result.output)
+  }
+
   test("Ansible installs the Alternator validator submit script") {
     val playbook = Files.readString(repoRoot.resolve("ansible/scylla-migrator.yml"))
 
