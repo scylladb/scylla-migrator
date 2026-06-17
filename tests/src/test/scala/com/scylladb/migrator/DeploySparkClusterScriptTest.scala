@@ -77,6 +77,32 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertEquals(result.output.linesIterator.toList, List("alternator", "/tmp/config.yaml"))
   }
 
+  test("migration type from metadata is validated before use") {
+    val result = runPython(
+      "-c",
+      s"""import importlib.util
+         |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
+         |module = importlib.util.module_from_spec(spec)
+         |spec.loader.exec_module(module)
+         |try:
+         |    module.resolve_migration_type(None, {"migration_type": "bad-type"})
+         |except SystemExit as exc:
+         |    print(exc)
+         |print(module.resolve_migration_type("cql", {"migration_type": "bad-type"}))
+         |print(module.resolve_migration_type(None, {"migration_type": ""}))
+         |""".stripMargin
+    )
+
+    assertEquals(result.exitCode, 0, result.output)
+    val lines = result.output.linesIterator.toList
+    assertEquals(
+      lines(0),
+      "Unsupported migration type from metadata.json: 'bad-type'. Expected one of: cql, alternator."
+    )
+    assertEquals(lines(1), "cql")
+    assertEquals(lines(2), "cql")
+  }
+
   test("SSH private key resolver reports empty values clearly") {
     val result = runPython(
       "-c",

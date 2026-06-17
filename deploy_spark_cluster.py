@@ -33,6 +33,7 @@ DEFAULT_STATE_DIR = ".deploy_spark_cluster"
 DEFAULT_USER = "ubuntu"
 STATE_DIR_MARKER = ".scylla-migrator-state"
 REMOTE_MIGRATOR_DIR = "/home/ubuntu/scylla-migrator"
+MIGRATION_TYPES = ("cql", "alternator")
 
 
 TERRAFORM_MAIN = """terraform {
@@ -766,6 +767,22 @@ def submit_script_name(migration_type: str, validator: bool) -> str:
     raise ValueError(f"Unsupported migration type: {migration_type}")
 
 
+def resolve_migration_type(
+    explicit_value: str | None,
+    metadata: dict[str, Any],
+) -> str:
+    saved_value = metadata.get("migration_type")
+    migration_type = explicit_value if explicit_value is not None else saved_value or "cql"
+    if migration_type not in MIGRATION_TYPES:
+        source = "--migration-type" if explicit_value is not None else "metadata.json"
+        allowed = ", ".join(MIGRATION_TYPES)
+        raise SystemExit(
+            f"Unsupported migration type from {source}: {migration_type!r}. "
+            f"Expected one of: {allowed}."
+        )
+    return migration_type
+
+
 def remote_submit_command(submit_script: str) -> str:
     log_stem = Path(submit_script).stem
     remote_dir = shlex.quote(REMOTE_MIGRATOR_DIR)
@@ -1445,6 +1462,7 @@ def handle_run(args: argparse.Namespace) -> None:
     require_terraform_state(state_dir)
     require_commands(["terraform", "ssh", "scp"])
     metadata = load_metadata(state_dir)
+    migration_type = resolve_migration_type(args.migration_type, metadata)
     outputs = terraform_output(state_dir)
 
     private_key = resolve_ssh_private_key(args.ssh_private_key, metadata)
@@ -1453,7 +1471,6 @@ def handle_run(args: argparse.Namespace) -> None:
 
     ensure_spark_running(outputs, private_key, known_hosts, insecure)
 
-    migration_type = args.migration_type or metadata.get("migration_type") or "cql"
     run_config_file = config_file_from_args_or_metadata(args.config_file, metadata)
     upload_config_if_requested(
         run_config_file,
@@ -1492,12 +1509,12 @@ def handle_redeploy(args: argparse.Namespace) -> None:
     require_terraform_state(state_dir)
     require_commands(["terraform", "ansible-playbook", "ssh", "scp"])
     metadata = load_metadata(state_dir)
+    migration_type = resolve_migration_type(args.migration_type, metadata)
 
     private_key = resolve_ssh_private_key(args.ssh_private_key, metadata)
 
     known_hosts = known_hosts_path(state_dir)
     insecure = args.insecure_ssh
-    migration_type = args.migration_type or metadata.get("migration_type") or "cql"
     redeploy_config_file = config_file_from_args_or_metadata(args.config_file, metadata)
     outputs = terraform_output(state_dir)
     metadata["terraform_outputs"] = outputs
@@ -1647,7 +1664,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="Optional Owner tag value to apply to the Spark master and worker EC2 instances.",
     )
-    deploy.add_argument("--migration-type", choices=["cql", "alternator"], default="cql")
+    deploy.add_argument("--migration-type", choices=MIGRATION_TYPES, default="cql")
     deploy.add_argument(
         "--config-file",
         default=None,
@@ -1681,7 +1698,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the configured Migrator Spark job on the master node.",
     )
     run.add_argument("--ssh-private-key", default=None)
-    run.add_argument("--migration-type", choices=["cql", "alternator"], default=None)
+    run.add_argument("--migration-type", choices=MIGRATION_TYPES, default=None)
     run.add_argument("--config-file", default=None)
     run.add_argument("--validator", action="store_true")
     run.add_argument(
@@ -1702,7 +1719,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Rerun Ansible on the current Terraform-managed nodes.",
     )
     redeploy.add_argument("--ssh-private-key", default=None)
-    redeploy.add_argument("--migration-type", choices=["cql", "alternator"], default=None)
+    redeploy.add_argument("--migration-type", choices=MIGRATION_TYPES, default=None)
     redeploy.add_argument(
         "--config-file",
         default=None,
