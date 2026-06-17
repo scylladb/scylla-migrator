@@ -62,6 +62,36 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertEquals(result.output.linesIterator.toList, List("alternator", "/tmp/config.yaml"))
   }
 
+  test("SSH private key resolver reports empty values clearly") {
+    val result = runPython(
+      "-c",
+      s"""import importlib.util
+         |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
+         |module = importlib.util.module_from_spec(spec)
+         |spec.loader.exec_module(module)
+         |for value in (None, ""):
+         |    try:
+         |        module.resolve_ssh_private_key(value)
+         |    except SystemExit as exc:
+         |        print(exc)
+         |try:
+         |    module.resolve_ssh_private_key("/tmp/does-not-exist-scylla-migrator-key")
+         |except SystemExit as exc:
+         |    print(exc)
+         |""".stripMargin
+    )
+
+    assertEquals(result.exitCode, 0, result.output)
+    assertEquals(
+      result.output.linesIterator.toList,
+      List(
+        "SSH private key is required. Pass --ssh-private-key.",
+        "SSH private key is required. Pass --ssh-private-key.",
+        "SSH private key does not exist: /tmp/does-not-exist-scylla-migrator-key"
+      )
+    )
+  }
+
   test("invalid JSON state files report a clear CLI error") {
     val badJson = repoRoot.resolve("target/deploy-script-test/invalid.json")
     Files.createDirectories(badJson.getParent)
@@ -141,6 +171,29 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
       result.output,
       "Terraform output workers[1].public_ip is not a valid IP address"
     )
+  }
+
+  test("Terraform output JSON parse and schema errors are CLI errors") {
+    val result = runPython(
+      "-c",
+      s"""import importlib.util
+         |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
+         |module = importlib.util.module_from_spec(spec)
+         |spec.loader.exec_module(module)
+         |try:
+         |    module.parse_terraform_output_json("{not valid json")
+         |except SystemExit as exc:
+         |    print(exc)
+         |try:
+         |    module.parse_terraform_output_json('{"master": {"type": "object"}}')
+         |except SystemExit as exc:
+         |    print(exc)
+         |""".stripMargin
+    )
+
+    assertEquals(result.exitCode, 0, result.output)
+    assertOutputContains(result.output, "Invalid JSON from terraform output -json")
+    assertOutputContains(result.output, "output 'master' must be an object with a value field")
   }
 
   test("top-level help lists supported subcommands") {

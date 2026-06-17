@@ -510,14 +510,33 @@ def validate_terraform_output_ips(outputs: dict[str, Any]) -> None:
             validate_ip_output(worker.get(field), f"workers[{index}].{field}")
 
 
+def parse_terraform_output_json(stdout: str) -> dict[str, Any]:
+    try:
+        raw_outputs = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"Invalid JSON from terraform output -json: {exc}") from exc
+
+    if not isinstance(raw_outputs, dict):
+        raise SystemExit("Unexpected Terraform output JSON schema: expected an object.")
+
+    outputs: dict[str, Any] = {}
+    for key, output in raw_outputs.items():
+        if not isinstance(output, dict) or "value" not in output:
+            raise SystemExit(
+                "Unexpected Terraform output JSON schema: "
+                f"output {key!r} must be an object with a value field."
+            )
+        outputs[key] = output["value"]
+    return outputs
+
+
 def terraform_output(state_dir: Path) -> dict[str, Any]:
     completed = run_command(
         ["terraform", "output", "-json"],
         cwd=state_dir,
         capture_output=True,
     )
-    raw_outputs = json.loads(completed.stdout)
-    outputs = {key: value["value"] for key, value in raw_outputs.items()}
+    outputs = parse_terraform_output_json(completed.stdout)
     validate_terraform_output_ips(outputs)
     return outputs
 
@@ -816,6 +835,23 @@ def remember_config_file(
     if config_file is not None:
         metadata["config_file"] = str(config_file)
     write_json(state_dir / "metadata.json", metadata)
+
+
+def resolve_ssh_private_key(
+    explicit_value: str | None,
+    metadata: dict[str, Any] | None = None,
+) -> Path:
+    saved_value = metadata.get("ssh_private_key") if metadata else None
+    selected_value = explicit_value if explicit_value is not None else saved_value
+    if selected_value is None or selected_value == "":
+        raise SystemExit("SSH private key is required. Pass --ssh-private-key.")
+
+    private_key = resolve_path(selected_value)
+    if private_key is None or not private_key.exists():
+        raise SystemExit(f"SSH private key does not exist: {selected_value}")
+    if not private_key.is_file():
+        raise SystemExit(f"SSH private key path is not a file: {private_key}")
+    return private_key
 
 
 def write_terraform_files(args: argparse.Namespace, state_dir: Path) -> None:
@@ -1246,9 +1282,7 @@ def handle_deploy(args: argparse.Namespace) -> None:
     deploy_config_file = resolve_path(args.config_file)
     validate_local_config_file(deploy_config_file)
 
-    private_key = resolve_path(args.ssh_private_key)
-    if private_key is None or not private_key.exists():
-        raise SystemExit(f"SSH private key does not exist: {private_key}")
+    private_key = resolve_ssh_private_key(args.ssh_private_key)
     known_hosts = known_hosts_path(state_dir)
     if not (state_dir / "terraform.tfstate").exists():
         known_hosts.write_text("")
@@ -1359,9 +1393,7 @@ def handle_run(args: argparse.Namespace) -> None:
     metadata = load_metadata(state_dir)
     outputs = terraform_output(state_dir)
 
-    private_key = resolve_path(args.ssh_private_key or metadata.get("ssh_private_key"))
-    if private_key is None or not private_key.exists():
-        raise SystemExit("Could not find SSH private key. Pass --ssh-private-key.")
+    private_key = resolve_ssh_private_key(args.ssh_private_key, metadata)
     known_hosts = known_hosts_path(state_dir)
     insecure = args.insecure_ssh
 
@@ -1407,9 +1439,7 @@ def handle_redeploy(args: argparse.Namespace) -> None:
     require_commands(["terraform", "ansible-playbook", "ssh", "scp"])
     metadata = load_metadata(state_dir)
 
-    private_key = resolve_path(args.ssh_private_key or metadata.get("ssh_private_key"))
-    if private_key is None or not private_key.exists():
-        raise SystemExit("Could not find SSH private key. Pass --ssh-private-key.")
+    private_key = resolve_ssh_private_key(args.ssh_private_key, metadata)
 
     known_hosts = known_hosts_path(state_dir)
     insecure = args.insecure_ssh
