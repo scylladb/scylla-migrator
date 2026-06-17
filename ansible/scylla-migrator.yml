@@ -1,6 +1,6 @@
 ---
 
-- name: Install Spark on Scylla Migrator servers
+- name: Install Spark on ScyllaDB Migrator servers
   hosts: spark
   vars:
     home_dir: /home/ubuntu
@@ -295,7 +295,7 @@
         daemon_reload: true
       when: inventory_hostname in groups['worker']
 
-- name: Install Scylla Migrator on master
+- name: Install ScyllaDB Migrator on master
   hosts: master
   vars:
     home_dir: /home/ubuntu
@@ -343,7 +343,7 @@
         group: ubuntu
         mode: "0775"
 
-    - name: Download Scylla Migrator
+    - name: Download ScyllaDB Migrator
       get_url:
         url: https://github.com/scylladb/scylla-migrator/releases/latest/download/scylla-migrator-assembly.jar
         dest: "{{ home_dir }}/scylla-migrator/scylla-migrator-assembly.jar"
