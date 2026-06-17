@@ -137,16 +137,16 @@
         state: link
         force: true
 
-    - name: Check whether awscliv2.zip exists
+    - name: Check whether AWS CLI is installed
       stat:
-        path: "{{ home_dir }}/awscliv2.zip"
-      register: stat_result
+        path: /usr/local/bin/aws
+      register: aws_cli_installed
 
     - name: Download the awscli bundle.
       get_url: 
         url: "https://awscli.amazonaws.com/awscli-exe-linux-{{ 'aarch64' if ansible_facts['architecture'] in ['aarch64', 'arm64'] else 'x86_64' }}.zip"
         dest: "{{ home_dir }}/awscliv2.zip"
-      when: not stat_result.stat.exists
+      when: not aws_cli_installed.stat.exists
       register: aws_cli_download_bundle
 
     - name: Unarchive the installer.
@@ -155,22 +155,25 @@
         dest: "{{ home_dir }}"
         remote_src: yes
         
-      when: aws_cli_download_bundle.changed
+      when: not aws_cli_installed.stat.exists
       register: aws_cli_unarchive_installer
 
     - name: Install awscli v2
       become: true
       shell: "{{ home_dir }}/aws/install --update"
+      when: not aws_cli_installed.stat.exists
 
     - name: Delete aws zip file
       ansible.builtin.file:
         state: absent
         path: "{{ home_dir }}/awscliv2.zip"
+      when: not aws_cli_installed.stat.exists
 
     - name: Delete aws install directory
       ansible.builtin.file:
         state: absent
         path: "{{ home_dir }}/aws"
+      when: not aws_cli_installed.stat.exists
 
     - name: Check whether Spark archive exists
       stat:

@@ -85,6 +85,34 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(result.output, s"Invalid JSON in ${badJson}")
   }
 
+  test("state directory deletion refuses unsafe paths") {
+    val result = runPython(
+      "-c",
+      s"""import importlib.util, tempfile
+         |from pathlib import Path
+         |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
+         |module = importlib.util.module_from_spec(spec)
+         |spec.loader.exec_module(module)
+         |with tempfile.TemporaryDirectory() as temp_dir:
+         |    state_dir = Path(temp_dir) / ".deploy_spark_cluster"
+         |    state_dir.mkdir()
+         |    (state_dir / "terraform.tfstate").write_text("{}")
+         |    (state_dir / "main.tf").write_text("# generated")
+         |    module.write_json(state_dir / "metadata.json", {"state_dir": str(state_dir.resolve())})
+         |    module.validate_state_dir_safe_to_delete(state_dir)
+         |    print("safe")
+         |try:
+         |    module.validate_state_dir_safe_to_delete(Path("${repoRoot}"))
+         |except SystemExit as exc:
+         |    print(exc)
+         |""".stripMargin
+    )
+
+    assertEquals(result.exitCode, 0, result.output)
+    assertOutputContains(result.output, "safe")
+    assertOutputContains(result.output, "Refusing to delete unsafe state directory")
+  }
+
   test("Terraform output IP addresses are validated") {
     val result = runPython(
       "-c",
@@ -413,6 +441,8 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(deployScript, "Terraform stdout:")
     assertOutputContains(deployScript, "Terraform stderr:")
     assertOutputContains(deployScript, "raise SystemExit(exc.returncode)")
+    assertOutputContains(deployScript, "validate_state_dir_safe_to_delete(state_dir)")
+    assertOutputContains(deployScript, "shutil.rmtree(state_dir)")
   }
 
   test("main reports captured subprocess output on command failures") {
@@ -512,13 +542,19 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assert(!playbook.contains("Add spark nodes to slaves file"), playbook)
   }
 
-  test("Ansible checks AWS CLI archive at the download destination") {
+  test("Ansible skips AWS CLI install when binary already exists") {
     val playbook = Files.readString(repoRoot.resolve("ansible/scylla-migrator.yml"))
 
-    assertOutputContains(playbook, "Check whether awscliv2.zip exists")
-    assertOutputContains(playbook, "path: \"{{ home_dir }}/awscliv2.zip\"")
+    assertOutputContains(playbook, "Check whether AWS CLI is installed")
+    assertOutputContains(playbook, "path: /usr/local/bin/aws")
+    assertOutputContains(playbook, "aws_cli_installed")
     assertOutputContains(playbook, "dest: \"{{ home_dir }}/awscliv2.zip\"")
+    assertOutputContains(playbook, "Delete aws zip file")
+    assertOutputContains(playbook, "Delete aws install directory")
+    assertOutputContains(playbook, "when: not aws_cli_installed.stat.exists")
+    assert(playbook.split("when: not aws_cli_installed.stat.exists", -1).length - 1 >= 5, playbook)
     assert(!playbook.contains("path: awscliv2.zip"), playbook)
+    assert(!playbook.contains("stat_result"), playbook)
   }
 
   test("Ansible validates Spark archive before skipping download") {

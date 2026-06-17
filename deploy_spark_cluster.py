@@ -1158,6 +1158,31 @@ def require_terraform_state(state_dir: Path) -> None:
         raise SystemExit(f"Terraform state file does not exist: {terraform_state}")
 
 
+def validate_state_dir_safe_to_delete(state_dir: Path) -> None:
+    state_dir = state_dir.resolve()
+    repository = repo_root()
+    filesystem_root = Path(state_dir.anchor).resolve()
+    home = Path.home().resolve()
+
+    if state_dir in {filesystem_root, home, repository} or repository.is_relative_to(state_dir):
+        raise SystemExit(f"Refusing to delete unsafe state directory: {state_dir}")
+
+    for required_file in ("terraform.tfstate", "main.tf", "metadata.json"):
+        path = state_dir / required_file
+        if not path.is_file():
+            raise SystemExit(
+                f"Refusing to delete {state_dir}: required state file is missing: {path}"
+            )
+
+    metadata = read_json(state_dir / "metadata.json")
+    recorded_state_dir = resolve_path(metadata.get("state_dir"))
+    if recorded_state_dir != state_dir:
+        raise SystemExit(
+            "Refusing to delete "
+            f"{state_dir}: metadata state_dir does not match this directory."
+        )
+
+
 def validate_access_cidrs(args: argparse.Namespace) -> None:
     public_cidrs = {
         "--allowed-ssh-cidr": args.allowed_ssh_cidr,
@@ -1417,6 +1442,8 @@ def handle_destroy(args: argparse.Namespace) -> None:
     state_dir = resolve_state_dir(args.state_dir)
     require_terraform_state(state_dir)
     require_commands(["terraform"])
+    if args.delete_state_dir:
+        validate_state_dir_safe_to_delete(state_dir)
 
     if not args.yes:
         answer = input(f"Destroy Spark cluster managed in {state_dir}? Type 'yes': ")
