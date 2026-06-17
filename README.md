@@ -263,7 +263,7 @@ Networking and infrastructure arguments:
 
 Operational arguments:
 
-- `--skip-ansible`: Create infrastructure but skip Ansible configuration. To configure the nodes later, run `redeploy`; it refreshes Terraform outputs and regenerates the inventory before running Ansible.
+- `--skip-ansible`: Create infrastructure but skip Ansible configuration. With `--ssh-public-key`, this does not require the matching private key to exist locally. To configure the nodes later, run `redeploy`; it refreshes Terraform outputs and regenerates the inventory before running Ansible.
 - `--skip-start`: Configure the nodes but do not restart Spark systemd services.
 - `--insecure-ssh`: Disable SSH host key verification. Use only in trusted test environments.
 

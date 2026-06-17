@@ -1200,7 +1200,7 @@ def save_metadata(
     args: argparse.Namespace,
     *,
     state_dir: Path,
-    private_key: Path,
+    private_key: Path | None,
     outputs: dict[str, Any],
 ) -> None:
     metadata = {
@@ -1216,7 +1216,7 @@ def save_metadata(
         "subnet_id": args.subnet_id or "",
         "migration_type": args.migration_type,
         "config_file": str(resolve_path(args.config_file)) if args.config_file else "",
-        "ssh_private_key": str(private_key),
+        "ssh_private_key": str(private_key) if private_key is not None else "",
         "ssh_known_hosts": str(known_hosts_path(state_dir)),
         "state_dir": str(state_dir),
         "terraform_outputs": outputs,
@@ -1327,7 +1327,7 @@ def handle_deploy(args: argparse.Namespace) -> None:
     deploy_config_file = resolve_path(args.config_file)
     validate_local_config_file(deploy_config_file)
 
-    private_key = resolve_ssh_private_key(args.ssh_private_key)
+    private_key = None if args.skip_ansible else resolve_ssh_private_key(args.ssh_private_key)
     known_hosts = known_hosts_path(state_dir)
     if not (state_dir / "terraform.tfstate").exists():
         known_hosts.write_text("")

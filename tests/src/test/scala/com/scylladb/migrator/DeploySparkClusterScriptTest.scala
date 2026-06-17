@@ -341,6 +341,67 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assert(!result.output.contains("SSH private key does not exist"), result.output)
   }
 
+  test("skip-ansible deploy accepts a public key without resolving a private key") {
+    val result = runPython(
+      "-c",
+      s"""import importlib.util, tempfile
+         |from pathlib import Path
+         |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
+         |module = importlib.util.module_from_spec(spec)
+         |spec.loader.exec_module(module)
+         |outputs = {
+         |    "master": {
+         |        "instance_id": "i-master",
+         |        "public_ip": "203.0.113.10",
+         |        "private_ip": "10.42.1.10",
+         |    },
+         |    "workers": [],
+         |    "spark_master_url": "spark://10.42.1.10:7077",
+         |    "spark_master_ui": "http://203.0.113.10:8080",
+         |    "spark_application_ui": "http://203.0.113.10:4040",
+         |    "spark_history_ui": "http://203.0.113.10:18080",
+         |    "vpc_id": "vpc-0123456789abcdef0",
+         |    "public_subnet_id": "subnet-0123456789abcdef0",
+         |    "cluster_security_group_id": "sg-0123456789abcdef0",
+         |    "master_ui_security_group_id": "sg-0123456789abcdef1",
+         |    "key_name": "scylla-migrator-spark-key",
+         |}
+         |def fail_private_key_resolution(*_args, **_kwargs):
+         |    raise AssertionError("private key should not be resolved")
+         |module.resolve_ssh_private_key = fail_private_key_resolution
+         |module.require_commands = lambda commands: print("required=" + ",".join(commands))
+         |module.run_command = lambda *args, **kwargs: print("run=" + " ".join(args[0]))
+         |module.terraform_output = lambda state_dir: outputs
+         |with tempfile.TemporaryDirectory() as temp_dir:
+         |    state_dir = Path(temp_dir) / "state"
+         |    public_key = Path(temp_dir) / "id_rsa.pub"
+         |    public_key.write_text("ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCtest user@example\\n")
+         |    args = module.build_parser().parse_args([
+         |        "deploy",
+         |        "--state-dir",
+         |        str(state_dir),
+         |        "--skip-ansible",
+         |        "--allowed-ssh-cidr",
+         |        "203.0.113.10/32",
+         |        "--allowed-web-cidr",
+         |        "203.0.113.10/32",
+         |        "--ssh-public-key",
+         |        str(public_key),
+         |    ])
+         |    module.handle_deploy(args)
+         |    metadata = module.read_json(state_dir / "metadata.json")
+         |    print("metadata_private_key=" + repr(metadata["ssh_private_key"]))
+         |""".stripMargin
+    )
+
+    assertEquals(result.exitCode, 0, result.output)
+    assertOutputContains(result.output, "required=terraform")
+    assertOutputContains(result.output, "Skipping Ansible configuration.")
+    assertOutputContains(result.output, "metadata_private_key=''")
+    assert(!result.output.contains("private key should not be resolved"), result.output)
+    assert(!result.output.contains("ansible-playbook"), result.output)
+  }
+
   test("AWS architecture inference keeps x86 GPU families distinct from Graviton") {
     val result = runPython(
       "-c",
@@ -374,7 +435,7 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     )
 
     assertNotEquals(result.exitCode, 0, result.output)
-    assertOutputContains(result.output, "SSH private key does not exist")
+    assertOutputContains(result.output, "SSH public key does not exist")
     assert(!result.output.contains("opens access to the public internet"), result.output)
   }
 
