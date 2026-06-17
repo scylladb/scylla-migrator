@@ -2,7 +2,10 @@
 Resume an Interrupted Migration Where it Left Off
 =================================================
 
-.. note:: This feature is currently supported only when migrating from Apache Cassandra or DynamoDB.
+.. note:: Savepoints (and automatic resume) are available for sources that track migration
+   progress: Apache Cassandra, DynamoDB (including Scylla Alternator), and Parquet. They are not
+   available for MySQL sources or the DynamoDB S3-export source, which must be restarted from
+   scratch if interrupted.
 
 If, for some reason, the migration is interrupted (e.g., because of a networking issue, or if you need to manually stop it for some reason), the migrator is able to resume it from a “savepoint”.
 

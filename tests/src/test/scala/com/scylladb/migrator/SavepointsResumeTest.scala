@@ -65,7 +65,9 @@ class SavepointsResumeTest extends munit.FunSuite {
 
   private def deleteRecursively(dir: Path): Unit =
     if (Files.exists(dir))
-      Files.walk(dir).sorted(java.util.Comparator.reverseOrder()).forEach(Files.delete)
+      Using.resource(Files.walk(dir)) { stream =>
+        stream.sorted(java.util.Comparator.reverseOrder()).forEach(Files.delete)
+      }
 
   private def withTempDir(name: String)(f: Path => Unit): Unit = {
     val dir = Files.createTempDirectory(name)
