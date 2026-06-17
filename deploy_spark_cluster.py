@@ -613,6 +613,11 @@ def known_hosts_path(state_dir: Path) -> Path:
     return path
 
 
+def quote_ssh_option_value(value: Path) -> str:
+    escaped_value = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped_value}"'
+
+
 def ssh_options(private_key: Path, known_hosts: Path, insecure: bool) -> list[str]:
     options = [
         "-i",
@@ -639,7 +644,7 @@ def ssh_options(private_key: Path, known_hosts: Path, insecure: bool) -> list[st
         "-o",
         "StrictHostKeyChecking=accept-new",
         "-o",
-        f"UserKnownHostsFile={known_hosts}",
+        f"UserKnownHostsFile={quote_ssh_option_value(known_hosts)}",
     ]
 
 
@@ -955,7 +960,7 @@ def ansible_ssh_common_args(known_hosts: Path, insecure: bool) -> str:
             "-o",
             "StrictHostKeyChecking=accept-new",
             "-o",
-            f"UserKnownHostsFile={known_hosts}",
+            f"UserKnownHostsFile={quote_ssh_option_value(known_hosts)}",
         ]
     )
 

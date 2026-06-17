@@ -456,6 +456,7 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
          |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
          |module = importlib.util.module_from_spec(spec)
          |spec.loader.exec_module(module)
+         |print(module.ssh_options(Path("/tmp/key"), Path("/tmp/known hosts;rm -rf/known_hosts"), False))
          |print(module.ansible_ssh_common_args(Path("/tmp/known hosts;rm -rf/known_hosts"), False))
          |print(module.ansible_ssh_common_args(Path("/tmp/ignored"), True))
          |""".stripMargin
@@ -464,7 +465,11 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertEquals(result.exitCode, 0, result.output)
     assertOutputContains(
       result.output,
-      "'UserKnownHostsFile=/tmp/known hosts;rm -rf/known_hosts'"
+      "'UserKnownHostsFile=\"/tmp/known hosts;rm -rf/known_hosts\"'"
+    )
+    assertOutputContains(
+      result.output,
+      "UserKnownHostsFile=\"/tmp/known hosts;rm -rf/known_hosts\""
     )
     assertOutputContains(result.output, "StrictHostKeyChecking=accept-new")
     assertOutputContains(result.output, "UserKnownHostsFile=/dev/null")
