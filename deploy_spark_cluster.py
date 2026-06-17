@@ -1362,9 +1362,9 @@ def handle_deploy(args: argparse.Namespace) -> None:
     required = ["terraform"]
     if not args.skip_ansible:
         required.extend(["ansible-playbook", "ssh", "scp"])
-    require_commands(required)
 
     write_terraform_files(args, state_dir)
+    require_commands(required)
     run_command(["terraform", "init", "-input=false"], cwd=state_dir)
     run_command(["terraform", "apply", "-auto-approve"], cwd=state_dir)
     outputs = terraform_output(state_dir)
