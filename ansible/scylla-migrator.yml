@@ -96,7 +96,6 @@
 
     - name: Derive Spark memory and local directories
       ansible.builtin.set_fact:
-        spark_executor_instances_per_worker: "{{ [((spark_worker_cores | int) // (spark_executor_cores | int)), 1] | max }}"
         spark_executor_memory_mb: "{{ [(((spark_worker_memory_mb | int) // ([((spark_worker_cores | int) // (spark_executor_cores | int)), 1] | max)) * 90 // 100), 1024] | max }}"
         spark_worker_memory: "{{ ((spark_worker_memory_mb | int) // 1024) | string }}G"
         spark_local_dirs: "{{ spark_local_base }}/spark-local"
@@ -147,7 +146,6 @@
         url: "https://awscli.amazonaws.com/awscli-exe-linux-{{ 'aarch64' if ansible_facts['architecture'] in ['aarch64', 'arm64'] else 'x86_64' }}.zip"
         dest: "{{ home_dir }}/awscliv2.zip"
       when: not aws_cli_installed.stat.exists
-      register: aws_cli_download_bundle
 
     - name: Unarchive the installer.
       unarchive: 
@@ -156,7 +154,6 @@
         remote_src: yes
         
       when: not aws_cli_installed.stat.exists
-      register: aws_cli_unarchive_installer
 
     - name: Install awscli v2
       become: true

@@ -395,6 +395,28 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assert(!deployScript.contains("StrictHostKeyChecking=yes"), deployScript)
   }
 
+  test("Ansible SSH common args quote known hosts path") {
+    val result = runPython(
+      "-c",
+      s"""import importlib.util
+         |from pathlib import Path
+         |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
+         |module = importlib.util.module_from_spec(spec)
+         |spec.loader.exec_module(module)
+         |print(module.ansible_ssh_common_args(Path("/tmp/known hosts;rm -rf/known_hosts"), False))
+         |print(module.ansible_ssh_common_args(Path("/tmp/ignored"), True))
+         |""".stripMargin
+    )
+
+    assertEquals(result.exitCode, 0, result.output)
+    assertOutputContains(
+      result.output,
+      "'UserKnownHostsFile=/tmp/known hosts;rm -rf/known_hosts'"
+    )
+    assertOutputContains(result.output, "StrictHostKeyChecking=accept-new")
+    assertOutputContains(result.output, "UserKnownHostsFile=/dev/null")
+  }
+
   test("SSH and SCP commands use a shared connection timeout") {
     val deployScript = Files.readString(script)
 
@@ -533,6 +555,7 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(playbook, "spark_worker_memory")
     assertOutputContains(playbook, "spark_executor_cores")
     assertOutputContains(playbook, "spark_executor_memory")
+    assert(!playbook.contains("spark_executor_instances_per_worker"), playbook)
   }
 
   test("Ansible does not maintain legacy Spark slaves file") {
@@ -555,6 +578,8 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assert(playbook.split("when: not aws_cli_installed.stat.exists", -1).length - 1 >= 5, playbook)
     assert(!playbook.contains("path: awscliv2.zip"), playbook)
     assert(!playbook.contains("stat_result"), playbook)
+    assert(!playbook.contains("aws_cli_download_bundle"), playbook)
+    assert(!playbook.contains("aws_cli_unarchive_installer"), playbook)
   }
 
   test("Ansible validates Spark archive before skipping download") {

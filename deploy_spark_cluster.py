@@ -892,6 +892,27 @@ def write_ansible_inventory(
     return inventory_path
 
 
+def ansible_ssh_common_args(known_hosts: Path, insecure: bool) -> str:
+    if insecure:
+        return shlex.join(
+            [
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+            ]
+        )
+
+    return shlex.join(
+        [
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-o",
+            f"UserKnownHostsFile={known_hosts}",
+        ]
+    )
+
+
 def run_ansible(
     inventory_path: Path,
     private_key: Path,
@@ -901,12 +922,9 @@ def run_ansible(
     ansible_dir = repo_root() / "ansible"
     if insecure:
         host_key_checking = "False"
-        ssh_common_args = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
     else:
         host_key_checking = "True"
-        ssh_common_args = (
-            f"-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile={known_hosts}"
-        )
+    ssh_common_args = ansible_ssh_common_args(known_hosts, insecure)
 
     run_command(
         [
