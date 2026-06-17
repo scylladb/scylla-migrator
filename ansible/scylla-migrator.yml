@@ -23,7 +23,7 @@
       ansible.builtin.replace:
         path: "{{ item.item }}"
         regexp: 'https?://[A-Za-z0-9.-]+\.ec2\.ports\.ubuntu\.com/ubuntu-ports'
-        replace: 'http://ports.ubuntu.com/ubuntu-ports'
+        replace: 'https://ports.ubuntu.com/ubuntu-ports'
       with_items: "{{ apt_source_file_stats.results }}"
       when: item.stat.exists
 
@@ -32,7 +32,7 @@
       ansible.builtin.replace:
         path: "{{ item.item }}"
         regexp: 'https?://[A-Za-z0-9.-]+\.ec2\.archive\.ubuntu\.com/ubuntu'
-        replace: 'http://archive.ubuntu.com/ubuntu'
+        replace: 'https://archive.ubuntu.com/ubuntu'
       with_items: "{{ apt_source_file_stats.results }}"
       when: item.stat.exists
 

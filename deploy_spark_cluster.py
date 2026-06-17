@@ -1319,7 +1319,7 @@ def handle_run(args: argparse.Namespace) -> None:
     private_key = resolve_path(args.ssh_private_key or metadata.get("ssh_private_key"))
     if private_key is None or not private_key.exists():
         raise SystemExit("Could not find SSH private key. Pass --ssh-private-key.")
-    known_hosts = resolve_path(metadata.get("ssh_known_hosts")) or known_hosts_path(state_dir)
+    known_hosts = known_hosts_path(state_dir)
     insecure = args.insecure_ssh
 
     ensure_spark_running(outputs, private_key, known_hosts, insecure)
@@ -1368,7 +1368,7 @@ def handle_redeploy(args: argparse.Namespace) -> None:
     if private_key is None or not private_key.exists():
         raise SystemExit("Could not find SSH private key. Pass --ssh-private-key.")
 
-    known_hosts = resolve_path(metadata.get("ssh_known_hosts")) or known_hosts_path(state_dir)
+    known_hosts = known_hosts_path(state_dir)
     insecure = args.insecure_ssh
     migration_type = args.migration_type or metadata.get("migration_type") or "cql"
     redeploy_config_file = config_file_from_args_or_metadata(args.config_file, metadata)

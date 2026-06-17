@@ -353,6 +353,8 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     val deployScript = Files.readString(script)
 
     assertOutputContains(deployScript, "known_hosts = known_hosts_path(state_dir)")
+    assertOutputContains(deployScript, "\"ssh_known_hosts\": str(known_hosts_path(state_dir))")
+    assert(!deployScript.contains("metadata.get(\"ssh_known_hosts\")"), deployScript)
     assertOutputContains(deployScript, "if not (state_dir / \"terraform.tfstate\").exists():")
     assertOutputContains(deployScript, "known_hosts.write_text(\"\")")
     assertOutputContains(deployScript, "known_hosts.chmod(0o600)")
@@ -546,9 +548,11 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     val playbook = Files.readString(repoRoot.resolve("ansible/scylla-migrator.yml"))
 
     assertOutputContains(playbook, "Use canonical Ubuntu ports mirror")
-    assertOutputContains(playbook, "ports.ubuntu.com/ubuntu-ports")
+    assertOutputContains(playbook, "https://ports.ubuntu.com/ubuntu-ports")
     assertOutputContains(playbook, "Use canonical Ubuntu archive mirror")
-    assertOutputContains(playbook, "archive.ubuntu.com/ubuntu")
+    assertOutputContains(playbook, "https://archive.ubuntu.com/ubuntu")
+    assert(!playbook.contains("replace: 'http://ports.ubuntu.com/ubuntu-ports'"), playbook)
+    assert(!playbook.contains("replace: 'http://archive.ubuntu.com/ubuntu'"), playbook)
     assertOutputContains(playbook, "Install add-apt-repository dependency")
     assertOutputContains(playbook, "name: software-properties-common")
     assert(
