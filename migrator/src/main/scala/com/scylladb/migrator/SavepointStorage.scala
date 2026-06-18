@@ -7,9 +7,9 @@ import org.apache.hadoop.conf.Configuration
   *
   * The credentials and connector settings for the savepoints bucket are derived from
   * `savepoints.target` (S3/GCS). Both [[SavepointsManager]] (which writes savepoints) and the
-  * startup auto-resume resolver ([[com.scylladb.migrator.SavepointsResume]], which reads the
-  * latest savepoint) must build an identical configuration to reach the same store, so the logic
-  * lives here in one place.
+  * startup auto-resume resolver ([[com.scylladb.migrator.SavepointsResume]], which reads
+  * the latest savepoint) must build an identical configuration to reach the same store, so the
+  * logic lives here in one place.
   */
 private[migrator] object SavepointStorage {
   private val S3ASimpleCredentialsProvider =
