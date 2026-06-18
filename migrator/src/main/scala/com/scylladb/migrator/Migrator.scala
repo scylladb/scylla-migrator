@@ -31,10 +31,20 @@ object Migrator {
 
     log.info(s"ScyllaDB Migrator ${BuildInfo.version}")
 
-    val migratorConfig =
+    val loadedConfig =
       MigratorConfig.loadFrom(
         spark.conf.get("spark.scylla.config"),
         spark.sparkContext.hadoopConfiguration
+      )
+
+    // Auto-resume: fold the skip-state of the latest savepoint (if any) into the configuration so
+    // that re-running the same config continues where a previous run left off. Credentials always
+    // come from the loaded config, never from the (redacted) savepoint file.
+    val migratorConfig =
+      SavepointsResume.resume(
+        loadedConfig,
+        Some(spark.sparkContext.hadoopConfiguration),
+        SparkSecretRedaction.redactionRegex(spark)
       )
 
     log.info(s"Loaded config:\n${migratorConfig.renderRedacted}")
