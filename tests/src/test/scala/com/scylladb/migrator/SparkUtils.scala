@@ -3,8 +3,8 @@ package com.scylladb.migrator
 import com.scylladb.migrator.config.{
   DynamoDBEndpoint,
   MigratorConfig,
+  SavepointTarget,
   Savepoints,
-  SavepointsTarget,
   SourceSettings,
   TargetSettings
 }
@@ -173,7 +173,7 @@ object SparkUtils {
     ("http://s3", 4566)       -> ("http://localhost", 4566)
   )
 
-  private def remapForLocalExecution(config: MigratorConfig): MigratorConfig = {
+  private[migrator] def remapForLocalExecution(config: MigratorConfig): MigratorConfig = {
     val newSource = config.source match {
       case c: SourceSettings.Cassandra if c.cloud.isEmpty =>
         c.copy(host = "localhost", port = cqlHostPortMap.getOrElse(c.host, c.port))
@@ -214,8 +214,8 @@ object SparkUtils {
 
   private def remapSavepoints(savepoints: Savepoints): Savepoints = {
     val remappedTarget = savepoints.target.map {
-      case SavepointsTarget.Filesystem(path) =>
-        SavepointsTarget.Filesystem(remapContainerPath(path))
+      case SavepointTarget.Filesystem(path) =>
+        SavepointTarget.Filesystem(remapContainerPath(path))
       case other => other
     }
 

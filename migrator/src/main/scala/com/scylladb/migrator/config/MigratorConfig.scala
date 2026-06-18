@@ -65,11 +65,30 @@ object MigratorConfig {
         // this decoder.
         val savepointsRequired = decoded.source.supportsSavepoints
 
-        if (!savepointsProvided && savepointsRequired)
+        val savepointErrors = Savepoints.validate(decoded.savepoints)
+
+        if (savepointErrors.nonEmpty)
+          Left(
+            DecodingFailure(
+              s"Invalid savepoints configuration: ${savepointErrors.mkString(" ")}",
+              cursor.history
+            )
+          )
+        else if (!savepointsProvided && savepointsRequired)
           Left(
             DecodingFailure(
               "Missing required field: savepoints. This field is optional only for sources " +
                 "that do not support savepoints.",
+              cursor.history
+            )
+          )
+        else if (
+          decoded.savepoints.resolvedTarget.isInstanceOf[SavepointTarget.TargetTable] &&
+          !decoded.target.isInstanceOf[TargetSettings.Scylla]
+        )
+          Left(
+            DecodingFailure(
+              "savepoints.target.type: target-table is supported only when target.type is 'scylla'.",
               cursor.history
             )
           )
@@ -135,7 +154,7 @@ object MigratorConfig {
     value.isString && (SensitiveKeys
       .isSensitiveKey(key) || key == "where")
 
-  private[config] def redactSecrets(json: Json): Json =
+  private[migrator] def redactSecrets(json: Json): Json =
     json.arrayOrObject(
       json,
       arr => Json.fromValues(arr.map(redactSecrets)),
@@ -164,10 +183,13 @@ object MigratorConfig {
   ): MigratorConfig = {
     val configData = PathIO.forPath(path, hadoopConfiguration).readUtf8(path)
 
+    loadFromString(configData)
+  }
+
+  def loadFromString(configData: String): MigratorConfig =
     parser
       .parse(configData)
       .leftWiden[Error]
       .flatMap(_.as[MigratorConfig])
       .valueOr(throw _)
-  }
 }

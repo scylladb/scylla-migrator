@@ -49,11 +49,13 @@ object Migrator {
     * `main` (spark-submit). The caller is responsible for creating and stopping the SparkSession.
     */
   def migrate(config: MigratorConfig)(implicit spark: SparkSession): Unit = {
+    val effectiveConfig = resumeFromLatestIfRequested(config)
+
     // Backend-neutral warning. Any source whose `supportsSavepoints` is `false` (MySQL, DynamoDB
     // S3 export, future non-resumable backends) gets the same up-front notice without per-source
     // `case` branches. Source-specific reader caveats (e.g. MySQL JDBC partitioning semantics)
     // are emitted from the reader itself.
-    if (!config.source.supportsSavepoints) {
+    if (!effectiveConfig.source.supportsSavepoints) {
       log.warn(
         "Source does not support savepoints; any configured savepoints settings are ignored. " +
           "If this migration is interrupted, it must be restarted from scratch. " +
@@ -61,35 +63,35 @@ object Migrator {
       )
     }
 
-    (config.source, config.target) match {
+    (effectiveConfig.source, effectiveConfig.target) match {
       case (cqlSource: SourceSettings.Cassandra, scyllaTarget: TargetSettings.Scylla) =>
         val sourceDF = readers.Cassandra.readDataframe(
           spark,
           cqlSource,
           cqlSource.preserveTimestamps,
-          config.getSkipTokenRangesOrEmptySet
+          effectiveConfig.getSkipTokenRangesOrEmptySet
         )
-        ScyllaMigrator.migrate(config, scyllaTarget, sourceDF)
+        ScyllaMigrator.migrate(effectiveConfig, scyllaTarget, sourceDF)
       case (mysqlSource: SourceSettings.MySQL, scyllaTarget: TargetSettings.Scylla) =>
         log.info("Starting MySQL to ScyllaDB migration")
         val sourceDF = readers.MySQL.readDataframe(spark, mysqlSource)
-        ScyllaMigrator.migrate(config, scyllaTarget, sourceDF)
+        ScyllaMigrator.migrate(effectiveConfig, scyllaTarget, sourceDF)
       case (parquetSource: SourceSettings.Parquet, scyllaTarget: TargetSettings.Scylla) =>
-        readers.Parquet.migrateToScylla(config, parquetSource, scyllaTarget)
+        readers.Parquet.migrateToScylla(effectiveConfig, parquetSource, scyllaTarget)
       case (cqlSource: SourceSettings.Cassandra, parquetTarget: TargetSettings.Parquet) =>
-        ScyllaMigrator.migrateToParquet(cqlSource, parquetTarget, config)
+        ScyllaMigrator.migrateToParquet(cqlSource, parquetTarget, effectiveConfig)
       case (dynamoSource: SourceSettings.DynamoDBLike, dynamoTarget: TargetSettings.DynamoDBLike) =>
-        AlternatorMigrator.migrateFromDynamoDB(dynamoSource, dynamoTarget, config)
+        AlternatorMigrator.migrateFromDynamoDB(dynamoSource, dynamoTarget, effectiveConfig)
       case (
             dynamoSource: SourceSettings.DynamoDB,
             s3ExportTarget: TargetSettings.DynamoDBS3Export
           ) =>
-        AlternatorMigrator.migrateToS3Export(dynamoSource, s3ExportTarget, config)
+        AlternatorMigrator.migrateToS3Export(dynamoSource, s3ExportTarget, effectiveConfig)
       case (
             s3Source: SourceSettings.DynamoDBS3Export,
             dynamoTarget: TargetSettings.DynamoDBLike
           ) =>
-        AlternatorMigrator.migrateFromS3Export(s3Source, dynamoTarget, config)
+        AlternatorMigrator.migrateFromS3Export(s3Source, dynamoTarget, effectiveConfig)
       case (source, target) =>
         sys.error(
           s"Unsupported combination of source and target: " +
@@ -97,5 +99,24 @@ object Migrator {
         )
     }
   }
+
+  private[migrator] def resumeFromLatestIfRequested(
+    config: MigratorConfig
+  )(implicit spark: SparkSession): MigratorConfig =
+    if (!config.savepoints.resumeFromLatest) config
+    else if (!config.source.supportsSavepoints) {
+      log.warn(
+        "savepoints.resumeFromLatest is true, but the source does not support savepoints; " +
+          "ignoring the resume request."
+      )
+      config
+    } else {
+      log.info("savepoints.resumeFromLatest is true; loading the newest valid savepoint.")
+      val store = SavepointStore.forConfig(config, Some(spark.sparkContext))
+      store.prepare()
+      val resumed = store.latestConfig()
+      log.info(s"Loaded config from latest savepoint:\n${resumed.renderRedacted}")
+      resumed
+    }
 
 }
