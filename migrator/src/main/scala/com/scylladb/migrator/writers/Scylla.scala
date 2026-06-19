@@ -33,13 +33,9 @@ object Scylla {
     renames: List[Rename],
     dfSchema: StructType
   ): PrimaryKeyResolution = {
-    // Target PK names come from the connector (CQL identifiers fold to lowercase unless quoted),
-    // so reverse-map the rename `to` side case-insensitively to match the configured rename
-    // regardless of the case the user typed. Source-side lookup below is already case-insensitive.
-    val reverseRenames =
-      renames.map(r => r.to.toLowerCase(Locale.ROOT) -> r.from).toMap
+    val reverseRenames = renames.map(r => r.to -> r.from).toMap
     val sourcePkNames =
-      targetPkNames.map(name => reverseRenames.getOrElse(name.toLowerCase(Locale.ROOT), name))
+      targetPkNames.map(name => reverseRenames.getOrElse(name, name))
     val fields = dfSchema.fieldNames
     val resolution = sourcePkNames.map { sourcePkName =>
       sourcePkName -> SchemaResolver.findFieldName(fields, sourcePkName)
