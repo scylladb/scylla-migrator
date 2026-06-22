@@ -125,4 +125,55 @@ class ScyllaPrimaryKeyFilteringTest extends munit.FunSuite {
 
     assert(error.getMessage.contains("[UserId, userid]"))
   }
+
+  // Regression guard: the reverse-rename lookup in resolvePrimaryKeyColumns must match target
+  // primary-key names CASE-SENSITIVELY. CQL identifiers are case-sensitive when quoted, so a
+  // table may legitimately contain two distinct columns whose names differ only in case
+  // (e.g. "UserId" and "userid"). Lowercasing the rename `to` side (as a previously reverted
+  // change did) silently collides such renames and conflates the two columns. See PR #346.
+  test("resolvePrimaryKeyColumns keeps case-sensitive (quoted) primary key columns distinct") {
+    val schema = StructType(
+      Seq(
+        StructField("src_a", StringType, nullable = true),
+        StructField("src_b", StringType, nullable = true),
+        StructField("value", StringType, nullable = true)
+      )
+    )
+
+    // Two distinct target PK columns that differ only in case, each fed by its own rename.
+    val targetPkNames = Set("UserId", "userid")
+    val renames = List(Rename("src_a", "UserId"), Rename("src_b", "userid"))
+
+    val resolution = Scylla.resolvePrimaryKeyColumns(targetPkNames, renames, schema)
+
+    assertEquals(resolution.unresolvedSourcePkNames, Set.empty[String])
+    assertEquals(resolution.resolvedSourcePkNames, Set("src_a", "src_b"))
+    assertEquals(
+      resolution.fieldIndices.toSet,
+      Set(schema.fieldIndex("src_a"), schema.fieldIndex("src_b"))
+    )
+  }
+
+  // Regression guard: a rename whose `to` differs only in case from the actual target PK name
+  // must NOT be applied (exact-case match). Making it case-insensitive would change behavior for
+  // quoted CQL identifiers, so this pins the contract restored after reverting that change.
+  test("resolvePrimaryKeyColumns matches rename targets case-sensitively") {
+    val schema = StructType(
+      Seq(
+        StructField("source_col", StringType, nullable = true),
+        StructField("ck", IntegerType, nullable        = true)
+      )
+    )
+
+    // Rename targets "MyId", but the target PK is the case-different "myid".
+    val targetPkNames = Set("myid", "ck")
+    val renames = List(Rename("source_col", "MyId"))
+
+    val resolution = Scylla.resolvePrimaryKeyColumns(targetPkNames, renames, schema)
+
+    // "myid" does not match the rename target "MyId" (case-sensitive) and has no source column,
+    // so it stays unresolved; "ck" resolves directly.
+    assertEquals(resolution.unresolvedSourcePkNames, Set("myid"))
+    assertEquals(resolution.resolvedSourcePkNames, Set("ck"))
+  }
 }
