@@ -112,13 +112,34 @@ object ScyllaValidator {
         Schema.tableFromCassandra(_, sourceSettings.keyspace, sourceSettings.table)
       )
 
+    val hasNonFrozenCollections =
+      readers.Cassandra.nonFrozenCollectionColumns(sourceTableDef).nonEmpty
+
     val includePerColumnMetadata =
-      readers.Cassandra
-        .determineCopyType(sourceTableDef, sourceSettings.preserveTimestamps)
-        .fold(
-          err => throw err,
-          copyType => copyType == CopyType.WithTimestampPreservation
+      if (
+        sourceSettings.preserveTimestamps &&
+        sourceSettings.preserveCollectionTimestamps &&
+        hasNonFrozenCollections
+      ) {
+        // Per-element collection TTL/WRITETIME come back as arrays, which the scalar per-column
+        // metadata comparison (`compareCassandraRows`) and repair paths (`buildRepairSchema`,
+        // `explodeRowsFromPerColumnMeta`) cannot handle. Element-level collection timestamp
+        // validation is a planned follow-up; until then, fall back to value-only comparison so
+        // these tables validate instead of crashing. (Without this, determineCopyType below throws
+        // for non-frozen collection tables when preserveTimestamps is on.)
+        log.warn(
+          "preserveCollectionTimestamps is enabled: per-element collection TTL/WRITETIME " +
+            "validation is not yet supported. Falling back to value-only comparison for this " +
+            "run; scalar column timestamps will not be validated either."
         )
+        false
+      } else
+        readers.Cassandra
+          .determineCopyType(sourceTableDef, sourceSettings.preserveTimestamps)
+          .fold(
+            err => throw err,
+            copyType => copyType == CopyType.WithTimestampPreservation
+          )
 
     val source = {
       val regularColumnsProjection =

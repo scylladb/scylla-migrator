@@ -327,8 +327,13 @@ object Scylla {
     * (positionally aligned with `rowSchema`, whose last two fields are `ttl`/`writetime`). The
     * collection column is written with `col = col + ?` (CQL append) so only the elements carried by
     * that row are added, while the per-row `USING TTL ? AND TIMESTAMP ?` restores each element's
-    * original TTL/WRITETIME. Because appends are idempotent, this pass does not accumulate token
-    * ranges for savepoints.
+    * original TTL/WRITETIME.
+    *
+    * `tokenRangeAccumulator` must be supplied ONLY for the final write pass of a migration (the
+    * last collection-append column). Because passes run sequentially, a token range is only truly
+    * complete after this last pass finishes it, at which point the base write and all earlier
+    * append passes have already committed that range. Ranges reprocessed on resume are idempotent
+    * (INSERT/append with `USING TIMESTAMP`), so partially-written ranges converge on re-run.
     */
   def writeCollectionAppendRDD(
     target: TargetSettings.Scylla,
@@ -336,11 +341,18 @@ object Scylla {
     columnName: String,
     rdd: RDD[Row],
     rowSchema: StructType,
+    tokenRangeAccumulator: Option[TokenRangeAccumulator],
     source: SourceSettings
   )(implicit spark: SparkSession): Unit = {
     val renamedSchema = renameSchemaFields(rowSchema, renames)
+    // Resolve the target column name with the SAME transitive fold as `renameSchemaFields`
+    // (renames apply sequentially: a->b then b->c yields "c"). A `collectFirst` on the first hop
+    // would stop at "b", mismatch the renamed field "c" in the selector below, and silently fall
+    // back to a plain ColumnRef (overwrite) instead of CollectionAppend.
     val renamedCollectionName =
-      renames.collectFirst { case Rename(`columnName`, to) => to }.getOrElse(columnName)
+      renames.foldLeft(columnName) { case (current, Rename(from, to)) =>
+        if (current == from) to else current
+      }
 
     requireNoCaseInsensitiveColumnNameCollisions(
       renamedSchema.fieldNames.toSeq,
@@ -376,7 +388,8 @@ object Scylla {
       target.keyspace,
       target.table,
       columnSelector,
-      writeConf
+      writeConf,
+      tokenRangeAccumulator = tokenRangeAccumulator
     )(connector, SqlRowWriter.Factory)
   }
 

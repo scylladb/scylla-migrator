@@ -100,6 +100,16 @@ trait ScyllaMigratorBase {
         case cqlManager: CqlSavepointsManager => Some(cqlManager.accumulator)
         case _                                => None
       }
+      // Savepoint correctness for multi-pass collection preservation (Approach 2): when there are
+      // collection-append passes, the base write and all but the FINAL append pass must not feed
+      // the token-range accumulator. Passes run sequentially, so a range is only truly complete
+      // after the final append pass finishes it — attaching the accumulator solely to that pass
+      // makes a recorded "range done" mean "base + every append committed for that range". Ranges
+      // reprocessed on resume are idempotent (INSERT/append with USING TIMESTAMP), so partial
+      // ranges converge. With no append passes, the base write keeps the accumulator as before.
+      val hasCollectionAppends = sourceDF.collectionAppendWrites.nonEmpty
+      val baseAccumulator = if (hasCollectionAppends) None else tokenRangeAccumulator
+
       sourceDF.cassandraExplodedWrite match {
         case Some((explodedRdd, writeSchema)) =>
           writers.Scylla.writeRowRDD(
@@ -108,7 +118,7 @@ trait ScyllaMigratorBase {
             explodedRdd,
             writeSchema,
             sourceDF.timestampColumns,
-            tokenRangeAccumulator,
+            baseAccumulator,
             migratorConfig.source
           )
         case None =>
@@ -117,27 +127,30 @@ trait ScyllaMigratorBase {
             migratorConfig.getRenamesOrNil,
             sourceDF.dataFrame,
             sourceDF.timestampColumns,
-            tokenRangeAccumulator,
+            baseAccumulator,
             migratorConfig.source
           )
       }
 
       // Per-element collection timestamp preservation: after the base row write (scalars + frozen
       // collections), replay each non-frozen collection column with `col = col + ?` and per-row
-      // TTL/WRITETIME. These appends are idempotent (set/map add), so they are safe to re-run and
-      // deliberately do not participate in token-range savepoints.
-      if (sourceDF.collectionAppendWrites.nonEmpty) {
+      // TTL/WRITETIME. Only the last pass carries the token-range accumulator (see above).
+      if (hasCollectionAppends) {
         log.info(
           s"Applying ${sourceDF.collectionAppendWrites.size} per-element collection-append " +
             s"pass(es): ${sourceDF.collectionAppendWrites.map(_.columnName).mkString(", ")}"
         )
-        sourceDF.collectionAppendWrites.foreach { caw =>
+        val lastIndex = sourceDF.collectionAppendWrites.size - 1
+        sourceDF.collectionAppendWrites.zipWithIndex.foreach { case (caw, index) =>
+          val accumulatorForPass =
+            if (index == lastIndex) tokenRangeAccumulator else None
           writers.Scylla.writeCollectionAppendRDD(
             target,
             migratorConfig.getRenamesOrNil,
             caw.columnName,
             caw.rdd,
             caw.schema,
+            accumulatorForPass,
             migratorConfig.source
           )
         }
@@ -209,6 +222,12 @@ object ScyllaMigrator extends ScyllaMigratorBase {
     target: TargetSettings.Parquet,
     migratorConfig: MigratorConfig
   )(implicit spark: SparkSession): Unit = {
+    require(
+      !source.preserveCollectionTimestamps,
+      "preserveCollectionTimestamps is not supported with a Parquet target: per-element " +
+        "collection TTL/WRITETIME are written as array sidecars that the Parquet restore path " +
+        "cannot round-trip. Disable preserveCollectionTimestamps for Parquet migrations."
+    )
     val sourceDF = readers.Cassandra.readDataframe(
       spark,
       source,

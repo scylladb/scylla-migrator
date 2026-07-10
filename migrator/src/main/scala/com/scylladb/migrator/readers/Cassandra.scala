@@ -1,7 +1,7 @@
 package com.scylladb.migrator.readers
 
 import com.datastax.spark.connector._
-import com.datastax.spark.connector.cql.{ ColumnDef, Schema, TableDef }
+import com.datastax.spark.connector.cql.{ CassandraConnector, ColumnDef, Schema, TableDef }
 import com.datastax.spark.connector.rdd.ReadConf
 import com.datastax.spark.connector.rdd.partitioner.dht.Token
 import com.datastax.spark.connector.types.{
@@ -40,10 +40,17 @@ import com.scylladb.migrator.scylla.{ CollectionAppendWrite, SourceDataFrame }
 
 import scala.collection.immutable.ArraySeq
 import scala.collection.mutable.ArrayBuffer
+import scala.util.control.NonFatal
 import java.nio.charset.StandardCharsets
 
 object Cassandra {
   val log = LogManager.getLogger("com.scylladb.migrator.readers.Cassandra")
+
+  /** Above this element count, a single non-frozen collection cell is logged as a potential
+    * memory/throughput hot spot: per-element TTL/WRITETIME preservation may expand it into up to
+    * this many separate collection-append updates (one per distinct TTL/WRITETIME group).
+    */
+  private val LargeCollectionWarnThreshold = 100000
 
   case class Selection(
     columnRefs: List[ColumnRef],
@@ -57,6 +64,37 @@ object Cassandra {
     */
   def nonFrozenCollectionColumns(tableDef: TableDef): Seq[ColumnDef] =
     tableDef.regularColumns.filter(c => c.columnType.isCollection && c.columnType.isMultiCell)
+
+  private def quoteCqlIdentifier(id: String): String =
+    "\"" + id.replace("\"", "\"\"") + "\""
+
+  /** Fail fast if the source server cannot return per-element `WRITETIME()`/`TTL()` for a
+    * non-frozen collection column. We only PREPARE the statement (no execution, no data read); on
+    * servers older than Cassandra 5.0 / older ScyllaDB this fails at semantic validation, letting
+    * us surface a clear, actionable error before launching the distributed read.
+    */
+  private def assertNonFrozenCollectionMetadataReadable(
+    connector: CassandraConnector,
+    keyspace: String,
+    table: String,
+    nonFrozen: Seq[ColumnDef]
+  ): Unit =
+    nonFrozen.headOption.foreach { col =>
+      val c = quoteCqlIdentifier(col.columnName)
+      val cql =
+        s"SELECT WRITETIME($c), TTL($c) FROM " +
+          s"${quoteCqlIdentifier(keyspace)}.${quoteCqlIdentifier(table)} LIMIT 1"
+      try connector.withSessionDo(_.prepare(cql))
+      catch {
+        case NonFatal(e) =>
+          throw new IllegalStateException(
+            s"preserveCollectionTimestamps is enabled, but the source cannot read per-element " +
+              s"WRITETIME()/TTL() on non-frozen collection column '${col.columnName}'. This " +
+              s"requires Cassandra 5.0+ or a modern ScyllaDB. Underlying error: ${e.getMessage}",
+            e
+          )
+      }
+    }
 
   /** Unsigned lexicographic ordering over byte arrays, matching Cassandra's `UTF8Type`/`AsciiType`
     * comparator for text map keys.
@@ -346,7 +384,20 @@ object Cassandra {
       if (i < wtSeq.length && wtSeq(i) != null) Some(wtSeq(i).asInstanceOf[Number].longValue())
       else None
 
-    def rowsFrom(elements: IndexedSeq[Any], rebuild: Seq[Any] => Any): Seq[Row] =
+    def rowsFrom(elements: IndexedSeq[Any], rebuild: Seq[Any] => Any): Seq[Row] = {
+      require(
+        wtSeq.length == elements.length && (ttlSeq.isEmpty || ttlSeq.length == elements.length),
+        s"Collection metadata length mismatch for a per-element collection column: " +
+          s"${elements.length} elements but ${wtSeq.length} writetimes / ${ttlSeq.length} ttls. " +
+          "Element<->timestamp alignment cannot be guaranteed; aborting to avoid silent data loss."
+      )
+      if (elements.length > LargeCollectionWarnThreshold)
+        log.warn(
+          s"Non-frozen collection cell has ${elements.length} elements; per-element TTL/WRITETIME " +
+            "preservation may expand it into up to that many separate collection-append updates " +
+            "(one per distinct TTL/WRITETIME group). Very large collections can cause high " +
+            "executor memory/GC pressure and slow writes."
+        )
       elements.indices
         .groupBy(i => (ttlAt(i), wtAt(i)))
         .toSeq
@@ -362,6 +413,7 @@ object Cassandra {
             )
           }
         }
+    }
 
     // Both the connector's decoded set and map lose their server (sorted) order, while the
     // WRITETIME()/TTL() lists arrive in that sorted order. Re-sort the elements/entries with the
@@ -647,6 +699,14 @@ object Cassandra {
     val selection =
       createSelection(tableDef, origSchema, preserveTimes, source.preserveCollectionTimestamps)
         .fold(throw _, identity)
+
+    if (preserveTimes && source.preserveCollectionTimestamps)
+      assertNonFrozenCollectionMetadataReadable(
+        connector,
+        source.keyspace,
+        source.table,
+        nonFrozenCollectionColumns(tableDef)
+      )
 
     val selectCassandraRDD = spark.sparkContext
       .cassandraTable[CassandraSQLRow](
