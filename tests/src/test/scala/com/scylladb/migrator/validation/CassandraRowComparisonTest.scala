@@ -175,6 +175,86 @@ class CassandraRowComparisonTest extends munit.FunSuite {
     )
   }
 
+  test("Per-element collection WRITETIMEs match when element-aligned lists are equal") {
+    val left = CassandraRow.fromMap(
+      Map(
+        "id"             -> "r1",
+        "tags"           -> Set(10, 20, 30),
+        "tags_ttl"       -> List(0, 0, 0),
+        "tags_writetime" -> List(1000L, 2000L, 3000L)
+      )
+    )
+    val right = CassandraRow.fromMap(
+      Map(
+        "id"             -> "r1",
+        "tags"           -> Set(10, 20, 30),
+        "tags_ttl"       -> List(0, 0, 0),
+        "tags_writetime" -> List(1000L, 2000L, 3000L)
+      )
+    )
+    assertEquals(compareItems(left, Some(right)), None)
+  }
+
+  test("Per-element collection WRITETIME mismatch is reported for the differing column") {
+    val left = CassandraRow.fromMap(
+      Map(
+        "id"             -> "r1",
+        "tags"           -> Set(10, 20, 30),
+        "tags_writetime" -> List(1000L, 2000L, 3000L)
+      )
+    )
+    val right = CassandraRow.fromMap(
+      Map(
+        "id"             -> "r1",
+        "tags"           -> Set(10, 20, 30),
+        "tags_writetime" -> List(1000L, 2000L, 9999L) // last element differs beyond tolerance
+      )
+    )
+    val result = compareItems(left, Some(right), writetimeToleranceMillis = 0L)
+    assert(
+      result.exists(_.items.exists(_.isInstanceOf[Item.DifferingWritetimes])),
+      s"expected a DifferingWritetimes failure, got ${result}"
+    )
+  }
+
+  test("Per-element collection metadata length mismatch is reported") {
+    val left = CassandraRow.fromMap(
+      Map("id" -> "r1", "tags_writetime" -> List(1000L, 2000L, 3000L))
+    )
+    val right = CassandraRow.fromMap(
+      Map("id" -> "r1", "tags_writetime" -> List(1000L, 2000L))
+    )
+    val result = compareItems(left, Some(right))
+    assert(
+      result.exists(_.items.exists(_.isInstanceOf[Item.DifferingWritetimes])),
+      s"expected a DifferingWritetimes failure for length mismatch, got ${result}"
+    )
+  }
+
+  test("Per-element metadata comparison skipped when compareTimestamps is false") {
+    val left = CassandraRow.fromMap(
+      Map("id" -> "r1", "tags" -> Set(1), "tags_writetime" -> List(1000L))
+    )
+    val right = CassandraRow.fromMap(
+      Map("id" -> "r1", "tags" -> Set(1), "tags_writetime" -> List(9999L))
+    )
+    assertEquals(compareItems(left, Some(right), compareTimestamps = false), None)
+  }
+
+  test("metadataAsLongs handles scalar, list, and null metadata") {
+    val row = CassandraRow.fromMap(
+      Map(
+        "scalar_writetime" -> 1234L,
+        "list_writetime"   -> List(1L, 2L, 3L),
+        "null_writetime"   -> null
+      )
+    )
+    assertEquals(RowComparisonFailure.metadataAsLongs(row, "scalar_writetime"), Some(Seq(1234L)))
+    assertEquals(RowComparisonFailure.metadataAsLongs(row, "list_writetime"), Some(Seq(1L, 2L, 3L)))
+    // A null metadata value (e.g. empty/null collection) yields None.
+    assertEquals(RowComparisonFailure.metadataAsLongs(row, "null_writetime"), None)
+  }
+
   test("Direct areDifferent flags Float(1.5f) vs Double(1.5d) before hash comparison") {
     val floatVal: Option[Any] = Some(java.lang.Float.valueOf(1.5f))
     val doubleVal: Option[Any] = Some(java.lang.Double.valueOf(1.5))

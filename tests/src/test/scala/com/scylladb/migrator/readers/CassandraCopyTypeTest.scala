@@ -139,4 +139,46 @@ class CassandraCopyTypeTest extends munit.FunSuite {
       Right(CopyType.NoTimestampPreservation)
     )
   }
+
+  test("column named 'ttl' or 'writetime' collides with reserved metadata names and is rejected") {
+    for (name <- Seq("ttl", "writetime")) {
+      val tableDef = tableWith(ColumnDef(name, RegularColumn, IntType))
+      val result = Cassandra.determineCopyType(tableDef, preserveTimesRequest = true)
+      assert(
+        result.isLeft,
+        s"Expected reserved-name column '${name}' to be rejected, got: ${result}"
+      )
+      assert(
+        result.left.exists(_.getMessage.contains("reserves the internal column names")),
+        s"Unexpected error message for '${name}': ${result}"
+      )
+    }
+  }
+
+  test("column shaped like a '<col>_ttl'/'<col>_writetime' sidecar is rejected") {
+    for (name <- Seq("foo_ttl", "foo_writetime")) {
+      val tableDef =
+        tableWith(
+          ColumnDef("foo", RegularColumn, VarCharType),
+          ColumnDef(name, RegularColumn, IntType)
+        )
+      val result = Cassandra.determineCopyType(tableDef, preserveTimesRequest = true)
+      assert(
+        result.isLeft,
+        s"Expected sidecar-colliding column '${name}' to be rejected, got: ${result}"
+      )
+      assert(
+        result.left.exists(_.getMessage.contains("reserves the internal column names")),
+        s"Unexpected error message for '${name}': ${result}"
+      )
+    }
+  }
+
+  test("reserved-name column is harmless when preserveTimestamps is disabled") {
+    val tableDef = tableWith(ColumnDef("ttl", RegularColumn, IntType))
+    assertEquals(
+      Cassandra.determineCopyType(tableDef, preserveTimesRequest = false),
+      Right(CopyType.NoTimestampPreservation)
+    )
+  }
 }

@@ -107,6 +107,16 @@ trait ScyllaMigratorBase {
       // makes a recorded "range done" mean "base + every append committed for that range". Ranges
       // reprocessed on resume are idempotent (INSERT/append with USING TIMESTAMP), so partial
       // ranges converge. With no append passes, the base write keeps the accumulator as before.
+      //
+      // M4 (accepted trade-off, not a correctness bug): the final append pass's RDD only contains
+      // rows whose last collection column is non-null, so token ranges in which every row has a
+      // null/empty last collection are NOT recorded even though they were fully written. On resume
+      // those ranges are reprocessed. This only ever OVER-processes (idempotent), never skips, so
+      // there is no data loss. The tempting alternative — recording ranges from the base write,
+      // which visits every range — would mark ranges done BEFORE the append passes run and thus
+      // reintroduce the C1/F1 data-loss-on-resume bug this design exists to prevent. Recording all
+      // ranges accurately AND only after every pass commits would need a dedicated final sweep pass
+      // over all partition keys; deferred as an efficiency-only improvement.
       val hasCollectionAppends = sourceDF.collectionAppendWrites.nonEmpty
       val baseAccumulator = if (hasCollectionAppends) None else tokenRangeAccumulator
 
@@ -154,6 +164,19 @@ trait ScyllaMigratorBase {
             migratorConfig.source
           )
         }
+
+        // C8/M4 visibility: the accumulator rides only the final append pass, which emits no rows
+        // for ranges whose last collection column is null/empty. If it recorded nothing, resume
+        // will reprocess the whole input (safe & idempotent, but with no savepoint speedup) — say
+        // so rather than let operators be surprised by a full re-run.
+        tokenRangeAccumulator.foreach { acc =>
+          if (acc.value.get.isEmpty)
+            log.warn(
+              "Collection-append savepoint pass recorded no token ranges (e.g. the last collection " +
+                "column was null/empty for every row). A resume will reprocess the whole input: " +
+                "safe and idempotent, but without savepoint speedup."
+            )
+        }
       }
     } catch {
       case NonFatal(e) => // Catching everything on purpose to try and dump the accumulator state
@@ -162,7 +185,12 @@ trait ScyllaMigratorBase {
           e
         )
         caughtError = Some(e)
-    } finally
+    } finally {
+      // Release the source frame cache (see F5 in readers.Cassandra.readDataframe). All write
+      // passes are eager actions that have run by now, so nothing still reads it. No-op when the
+      // frame was never persisted (e.g. single-pass or non-Cassandra sources).
+      try sourceDF.dataFrame.unpersist()
+      catch { case NonFatal(_) => () }
       for (savePointsManger <- maybeSavepointsManager) {
         try
           savePointsManger.dumpMigrationState("final")
@@ -181,6 +209,7 @@ trait ScyllaMigratorBase {
           }
         }
       }
+    }
     caughtError.foreach(throw _)
   }
 }
@@ -222,12 +251,9 @@ object ScyllaMigrator extends ScyllaMigratorBase {
     target: TargetSettings.Parquet,
     migratorConfig: MigratorConfig
   )(implicit spark: SparkSession): Unit = {
-    require(
-      !source.preserveCollectionTimestamps,
-      "preserveCollectionTimestamps is not supported with a Parquet target: per-element " +
-        "collection TTL/WRITETIME are written as array sidecars that the Parquet restore path " +
-        "cannot round-trip. Disable preserveCollectionTimestamps for Parquet migrations."
-    )
+    // Per-element collection TTL/WRITETIME are exported as array sidecars
+    // (`__migrator_meta_<col>_ttl/_writetime`) and re-hydrated into collection-append passes on
+    // the Parquet restore path (see `explodeRowsFromPerColumnMetaCollectionAware`).
     val sourceDF = readers.Cassandra.readDataframe(
       spark,
       source,
@@ -248,6 +274,7 @@ object ScyllaMigrator extends ScyllaMigratorBase {
         SparkSecretRedaction.redactionRegex(spark)
       )
     ) { savepointsManager =>
+      var caughtError: Option[Throwable] = None
       try
         writers.Parquet.writeDataframe(target, dfForParquet)
       catch {
@@ -256,8 +283,18 @@ object ScyllaMigrator extends ScyllaMigratorBase {
             "Caught error while writing Parquet. Will create a savepoint before exiting",
             e
           )
+          caughtError = Some(e)
       } finally
-        savepointsManager.dumpMigrationState("final")
+        try savepointsManager.dumpMigrationState("final")
+        catch {
+          case NonFatal(finallyEx) =>
+            caughtError.foreach(_.addSuppressed(finallyEx))
+            if (caughtError.isEmpty) caughtError = Some(finallyEx)
+        }
+      // Re-throw so the process exits non-zero on a failed/partial Parquet export (including the
+      // per-element collection array sidecars). Mirrors `ScyllaMigratorBase.migrate`; without this
+      // a truncated export would be silently restored as complete on the Parquet import path.
+      caughtError.foreach(throw _)
     }
   }
 }

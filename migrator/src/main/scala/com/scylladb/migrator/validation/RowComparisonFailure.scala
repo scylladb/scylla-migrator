@@ -148,36 +148,41 @@ object RowComparisonFailure {
             for {
               name <- names
               if name.endsWith("_ttl")
-              leftTtl  = left.getLongOption(name)
-              rightTtl = right.getLongOption(name)
-              result <- (leftTtl, rightTtl) match {
-                          case (Some(l), Some(r)) if math.abs(l - r) > ttlToleranceMillis =>
-                            Some(name -> math.abs(l - r))
-                          case (Some(l), None)    => Some(name -> l)
-                          case (None, Some(r))    => Some(name -> r)
-                          case (Some(l), Some(r)) => None
-                          case (None, None)       => None
-                        }
+              baseName = name.stripSuffix("_ttl")
+              // CQL TTL() is expressed in SECONDS, but the tolerance is configured in millis and the
+              // failure is reported "(… millis)". Scale each per-element TTL diff to millis so the
+              // comparison, the config unit, and the label all agree (previously seconds were
+              // compared against a millis tolerance, i.e. 1000x too lenient).
+              result <- diffTimestampMetadata(
+                          left,
+                          right,
+                          name,
+                          ttlToleranceMillis,
+                          leftMap.get(baseName),
+                          rightMap.get(baseName),
+                          valueScaleToMillis = 1000L
+                        )
             } yield result
 
-        // WRITETIME is expressed in microseconds
-        val writetimeToleranceMicros = writetimeToleranceMillis * 1000
+        // WRITETIME is expressed in microseconds. `multiplyExact` so an absurd tolerance config
+        // fails loudly instead of silently wrapping to a negative value (which would make every
+        // element "exceed" and produce spurious diffs).
+        val writetimeToleranceMicros = Math.multiplyExact(writetimeToleranceMillis, 1000L)
         val differingWritetimes =
           if (!compareTimestamps) Nil
           else
             for {
               name <- names
               if name.endsWith("_writetime")
-              leftWritetime  = left.getLongOption(name)
-              rightWritetime = right.getLongOption(name)
-              result <- (leftWritetime, rightWritetime) match {
-                          case (Some(l), Some(r)) if math.abs(l - r) > writetimeToleranceMicros =>
-                            Some(name -> math.abs(l - r))
-                          case (Some(l), None)    => Some(name -> l)
-                          case (None, Some(r))    => Some(name -> r)
-                          case (Some(l), Some(r)) => None
-                          case (None, None)       => None
-                        }
+              baseName = name.stripSuffix("_writetime")
+              result <- diffTimestampMetadata(
+                          left,
+                          right,
+                          name,
+                          writetimeToleranceMicros,
+                          leftMap.get(baseName),
+                          rightMap.get(baseName)
+                        )
             } yield result
 
         if (
@@ -259,6 +264,105 @@ object RowComparisonFailure {
             )
           )
     }
+
+  /** Extract a `_ttl`/`_writetime` metadata value as a sequence of `Long`s.
+    *
+    * Scalar metadata (scalar columns and frozen collections) becomes a single-element sequence;
+    * per-element collection metadata (non-frozen maps/sets under `preserveCollectionTimestamps`)
+    * arrives as a list, one value per collection element in server (sorted) order. Returns `None`
+    * when the value is absent/null (e.g. an empty or null collection has no metadata).
+    */
+  private[migrator] def metadataAsLongs(row: CassandraRow, name: String): Option[Seq[Long]] =
+    Option(row.getRaw(name)).flatMap {
+      case s: scala.collection.Seq[_] =>
+        Some(s.map {
+          case n: Number => n.longValue()
+          case _         => 0L
+        }.toSeq)
+      case n: Number => Some(Seq(n.longValue()))
+      case _         => None
+    }
+
+  /** Element count of a collection value (map/set/list), or `None` for scalar values. Used to
+    * validate that per-element (array-typed) metadata has one entry per collection element.
+    */
+  private def collectionSize(value: Any): Option[Int] = value match {
+    case m: scala.collection.Map[_, _] => Some(m.size)
+    case s: scala.collection.Set[_]    => Some(s.size)
+    case s: scala.collection.Seq[_]    => Some(s.size)
+    case _ => None // scalars, incl. blobs (Array[Byte]), are not collections here
+  }
+
+  /** True when a metadata value is present but not a clean numeric scalar or numeric/null array
+    * (e.g. a non-numeric element, or a wholly unexpected type). Such values must never be silently
+    * coerced to 0 and validate as equal (M5).
+    */
+  private def hasMalformedMetadata(row: CassandraRow, name: String): Boolean =
+    Option(row.getRaw(name)).exists {
+      case s: scala.collection.Seq[_] => s.exists(e => e != null && !e.isInstanceOf[Number])
+      case _: Number                  => false
+      case _                          => true
+    }
+
+  /** For array-typed (per-element) metadata, the discrepancy between the metadata length and the
+    * associated collection's element count, if they disagree. Scalar metadata (raw is a `Number`)
+    * and non-collection base values are skipped.
+    */
+  private def cardinalityMismatch(
+    row: CassandraRow,
+    name: String,
+    baseValue: Option[Any]
+  ): Option[Long] = {
+    val metaLen = Option(row.getRaw(name)).collect { case s: scala.collection.Seq[_] => s.length }
+    (metaLen, baseValue.flatMap(collectionSize)) match {
+      case (Some(m), Some(c)) if m != c => Some(math.abs(m.toLong - c.toLong))
+      case _                            => None
+    }
+  }
+
+  /** Compare a TTL/WRITETIME metadata column that may be scalar or per-element (array-typed).
+    *
+    * Both source and target return the metadata in the same server (sorted) order, so elements are
+    * compared positionally. Guards first against malformed metadata (non-numeric entries) and, for
+    * per-element metadata, against a metadata/collection cardinality mismatch on either side — both
+    * would otherwise let corrupt data validate as equal. Returns the field name paired with the
+    * largest absolute per-element difference that exceeds `tolerance` (or the relevant count
+    * discrepancy), or `None` when the values match within tolerance.
+    */
+  private[migrator] def diffTimestampMetadata(
+    left: CassandraRow,
+    right: CassandraRow,
+    name: String,
+    tolerance: Long,
+    leftBase: Option[Any] = None,
+    rightBase: Option[Any] = None,
+    valueScaleToMillis: Long = 1L
+  ): Option[(String, Long)] =
+    if (hasMalformedMetadata(left, name) || hasMalformedMetadata(right, name))
+      Some(name -> -1L) // sentinel: non-numeric/unexpected metadata type
+    else
+      cardinalityMismatch(left, name, leftBase)
+        .orElse(cardinalityMismatch(right, name, rightBase))
+        .map(name -> _)
+        .orElse {
+          (metadataAsLongs(left, name), metadataAsLongs(right, name)) match {
+            case (None, None)     => None
+            case (Some(ls), None) => Some(name -> ls.headOption.getOrElse(0L))
+            case (None, Some(rs)) => Some(name -> rs.headOption.getOrElse(0L))
+            case (Some(ls), Some(rs)) =>
+              if (ls.length != rs.length)
+                Some(name -> math.abs(ls.length.toLong - rs.length.toLong))
+              else {
+                // Diffs are scaled to the tolerance's unit (millis) so the report and the tolerance
+                // agree; `valueScaleToMillis` is 1 for values already in the tolerance unit.
+                val exceeding =
+                  ls.zip(rs)
+                    .map { case (l, r) => math.abs(l - r) * valueScaleToMillis }
+                    .filter(_ > tolerance)
+                if (exceeding.isEmpty) None else Some(name -> exceeding.max)
+              }
+          }
+        }
 
   /** @param leftValue
     *   First value to compare

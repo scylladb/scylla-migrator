@@ -153,6 +153,30 @@ object Scylla {
     }
   }
 
+  /** Strip trailing zeros from decimal cells when the target requests it.
+    *
+    * Spark's conversion from its internal Decimal type to `java.math.BigDecimal` pads the value
+    * with trailing zeros matching the Decimal scale; some users don't want that. Handles both plain
+    * `java.math.BigDecimal` (DataFrame rows) and `CassandraOption.Value(BigDecimal)` (exploded RDD
+    * / collection-append rows). No-op when disabled. Shared by the base and collection-append write
+    * paths so they strip decimals symmetrically.
+    */
+  private def stripTrailingZerosIfEnabled(
+    target: TargetSettings.Scylla,
+    rdd: RDD[Row]
+  ): RDD[Row] =
+    if (!target.stripTrailingZerosForDecimals) rdd
+    else
+      rdd.map { row =>
+        Row.fromSeq(row.toSeq.map {
+          case x: java.math.BigDecimal =>
+            x.stripTrailingZeros()
+          case CassandraOption.Value(x: java.math.BigDecimal) =>
+            CassandraOption.Value(x.stripTrailingZeros())
+          case x => x
+        })
+      }
+
   /** Shared write path used by both [[writeRowRDD]] and [[writeDataframe]], invoked once internal
     * columns have been dropped and renames applied. `schema0` is the pre-rename schema, required by
     * [[resolvePrimaryKeyColumns]] (which reverse-maps target primary-key names back to source
@@ -227,23 +251,7 @@ object Scylla {
       ArraySeq.unsafeWrapArray(renamedSchema.fields.map(_.name: ColumnRef)): _*
     )
 
-    // Spark's conversion from its internal Decimal type to java.math.BigDecimal
-    // pads the resulting value with trailing zeros corresponding to the scale of the
-    // Decimal type. Some users don't like this so we conditionally strip those. The
-    // CassandraOption.Value case only occurs on the exploded RDD path; it is inert for
-    // plain DataFrame rows.
-    val rddStripped =
-      if (!target.stripTrailingZerosForDecimals) rdd0
-      else
-        rdd0.map { row =>
-          Row.fromSeq(row.toSeq.map {
-            case x: java.math.BigDecimal =>
-              x.stripTrailingZeros()
-            case CassandraOption.Value(x: java.math.BigDecimal) =>
-              CassandraOption.Value(x.stripTrailingZeros())
-            case x => x
-          })
-        }
+    val rddStripped = stripTrailingZerosIfEnabled(target, rdd0)
 
     // Optionally filter out rows where any primary key column is null to prevent
     // infinite retries against the target database (see issue #262).
@@ -384,13 +392,52 @@ object Scylla {
     )
     log.info(renamedSchema.treeString)
 
-    rdd.saveToCassandra(
+    // Mirror the safety steps `writeCleanedRdd` applies to the base write so the append pass does
+    // not behave asymmetrically. Without this, a Parquet source (where `dropNullPrimaryKeys`
+    // auto-defaults to true) drops null-PK rows in the base write but retries them forever here
+    // (issue #262), and set<decimal>/map<_,decimal> elements are appended without the trailing-zero
+    // stripping applied to scalar decimals, producing spurious validation diffs.
+    val rddStripped = stripTrailingZerosIfEnabled(target, rdd)
+
+    val (finalRdd, nullPkRowsDropped) =
+      if (!shouldDropNullPrimaryKeys(target, source)) (rddStripped, None)
+      else {
+        val tableDef =
+          connector.withSessionDo(Schema.tableFromCassandra(_, target.keyspace, target.table))
+        val targetPkNames = tableDef.primaryKey.map(_.columnName).toSet
+        val pkResolution = resolvePrimaryKeyColumns(targetPkNames, renames, rowSchema)
+        pkResolution.unresolvedSourcePkNames.foreach { sourcePkName =>
+          log.warn(
+            s"Primary key column '${sourcePkName}' not found in collection-append schema for " +
+              s"'${columnName}'"
+          )
+        }
+        requireAllPrimaryKeysResolved(targetPkNames, pkResolution)
+        val accumulator =
+          spark.sparkContext.longAccumulator(
+            s"Null primary key rows dropped (collection append: ${columnName})"
+          )
+        (
+          dropRowsWithNullPrimaryKeys(rddStripped, pkResolution.fieldIndices, accumulator),
+          Some(accumulator)
+        )
+      }
+
+    finalRdd.saveToCassandra(
       target.keyspace,
       target.table,
       columnSelector,
       writeConf,
       tokenRangeAccumulator = tokenRangeAccumulator
     )(connector, SqlRowWriter.Factory)
+
+    nullPkRowsDropped.foreach { acc =>
+      if (acc.value > 0)
+        log.warn(
+          s"Dropped ${acc.value} rows with null primary key values in the collection-append pass " +
+            s"for '${columnName}'"
+        )
+    }
   }
 
   def writeDataframe(
