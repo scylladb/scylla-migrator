@@ -17,12 +17,20 @@ import com.scylladb.migrator.config.{
   SourceSettings,
   TargetSettings
 }
+import com.scylladb.migrator.readers.TimestampColumns
 import com.scylladb.migrator.validation.RowComparisonFailure
 import org.apache.logging.log4j.LogManager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{ Row, SparkSession }
 import org.apache.spark.sql.cassandra.DataTypeConverter
-import org.apache.spark.sql.types.{ IntegerType, LongType, StructField, StructType }
+import org.apache.spark.sql.types.{
+  ArrayType,
+  DataType,
+  IntegerType,
+  LongType,
+  StructField,
+  StructType
+}
 import org.apache.spark.storage.StorageLevel
 
 import scala.collection.immutable.ArraySeq
@@ -35,7 +43,8 @@ object ScyllaValidator {
   private def buildRepairSchema(
     sourceTableDef: TableDef,
     renameColumn: String => String,
-    includePerColumnMetadata: Boolean
+    includePerColumnMetadata: Boolean,
+    nonFrozenCollectionNames: Set[String] = Set.empty
   ): StructType = {
     val primaryKeyFields =
       (sourceTableDef.partitionKey ++ sourceTableDef.clusteringColumns).map { colDef =>
@@ -51,17 +60,40 @@ object ScyllaValidator {
         val widenedField =
           field.copy(dataType = readers.Cassandra.widenCqlTimestamps(field.dataType))
 
-        if (includePerColumnMetadata)
+        if (includePerColumnMetadata) {
+          // Non-frozen collections carry one TTL/WRITETIME per element, so their sidecars are
+          // arrays; the collection-aware explode re-hydrates them into collection-append passes.
+          val isPerElement = nonFrozenCollectionNames.contains(colDef.columnName)
+          val ttlType = if (isPerElement) ArrayType(IntegerType) else IntegerType
+          val writetimeType = if (isPerElement) ArrayType(LongType) else LongType
+          // Stamp the same collection-kind marker the Parquet export writes, so the shared
+          // collection-aware explode accepts this trusted, migrator-built repair schema.
+          val baseField =
+            if (isPerElement)
+              readers.Cassandra.taggedCollectionField(widenedField, colDef.columnType)
+            else widenedField
           Seq(
-            widenedField,
-            StructField(s"${renamedColumn}_ttl", IntegerType, true),
-            StructField(s"${renamedColumn}_writetime", LongType, true)
+            baseField,
+            StructField(s"${renamedColumn}_ttl", ttlType, true),
+            StructField(s"${renamedColumn}_writetime", writetimeType, true)
           )
-        else Seq(widenedField)
+        } else Seq(widenedField)
       }
 
     StructType(primaryKeyFields ++ regularFields)
   }
+
+  /** Spark's `RowEncoder` expects a `Seq` for `ArrayType` columns, but a CQL set read from a plain
+    * `CassandraRow` (the validator join uses these, unlike the migration read which uses the
+    * connector's already-`Seq` `CassandraSQLRow`) decodes to a Scala `Set`. Coerce sets to an
+    * ordered `Seq` so `createDataFrame` can encode the repair rows; the collection-aware explode
+    * re-sorts elements by their ordering afterwards, so the interim order is irrelevant.
+    */
+  private def coerceRepairValue(dataType: DataType, value: Any): Any =
+    (dataType, value) match {
+      case (_: ArrayType, s: scala.collection.Set[_]) => s.toIndexedSeq
+      case _                                          => value
+    }
 
   /** Validates that the target Scylla database contains the same data as the source Cassandra
     * database.
@@ -112,34 +144,36 @@ object ScyllaValidator {
         Schema.tableFromCassandra(_, sourceSettings.keyspace, sourceSettings.table)
       )
 
-    val hasNonFrozenCollections =
-      readers.Cassandra.nonFrozenCollectionColumns(sourceTableDef).nonEmpty
+    val nonFrozenCollectionNames =
+      readers.Cassandra.nonFrozenCollectionColumns(sourceTableDef).map(_.columnName).toSet
+    val hasNonFrozenCollections = nonFrozenCollectionNames.nonEmpty
 
+    // Whether TTL()/WRITETIME() metadata is selected and compared. For scalar columns and frozen
+    // collections these are scalars; under `preserveCollectionTimestamps` non-frozen collection
+    // columns select them as per-element (array) lists. `compareCassandraRows` handles both.
     val includePerColumnMetadata =
-      if (
-        sourceSettings.preserveTimestamps &&
+      readers.Cassandra
+        .determineCopyType(
+          sourceTableDef,
+          sourceSettings.preserveTimestamps,
+          sourceSettings.preserveCollectionTimestamps
+        )
+        .fold(
+          err => throw err,
+          copyType => copyType == CopyType.WithTimestampPreservation
+        )
+
+    // Per-element collection metadata is array-typed. The scalar repair explosion
+    // (`explodeRowsFromPerColumnMeta`) cannot represent it, so copy-missing-rows repair for such
+    // tables uses the collection-aware explosion (`explodeRowsFromPerColumnMetaCollectionAware`):
+    // a scalar/frozen base write plus per-element collection-append passes.
+    val perElementCollectionMetadata =
+      includePerColumnMetadata &&
         sourceSettings.preserveCollectionTimestamps &&
         hasNonFrozenCollections
-      ) {
-        // Per-element collection TTL/WRITETIME come back as arrays, which the scalar per-column
-        // metadata comparison (`compareCassandraRows`) and repair paths (`buildRepairSchema`,
-        // `explodeRowsFromPerColumnMeta`) cannot handle. Element-level collection timestamp
-        // validation is a planned follow-up; until then, fall back to value-only comparison so
-        // these tables validate instead of crashing. (Without this, determineCopyType below throws
-        // for non-frozen collection tables when preserveTimestamps is on.)
-        log.warn(
-          "preserveCollectionTimestamps is enabled: per-element collection TTL/WRITETIME " +
-            "validation is not yet supported. Falling back to value-only comparison for this " +
-            "run; scalar column timestamps will not be validated either."
-        )
-        false
-      } else
-        readers.Cassandra
-          .determineCopyType(sourceTableDef, sourceSettings.preserveTimestamps)
-          .fold(
-            err => throw err,
-            copyType => copyType == CopyType.WithTimestampPreservation
-          )
+
+    // Repair uses the scalar explosion only when there are no per-element collections.
+    val repairWithScalarMetadata = includePerColumnMetadata && !perElementCollectionMetadata
 
     val source = {
       val regularColumnsProjection =
@@ -252,11 +286,38 @@ object ScyllaValidator {
               "repair writes and will be ignored for this run."
           )
         }
+        if (perElementCollectionMetadata) {
+          log.warn(
+            "copyMissingRows for a table with non-frozen (multi-cell) collections under " +
+              "preserveCollectionTimestamps: missing rows are repaired with a scalar/frozen base " +
+              "write plus per-element collection-append passes, restoring element TTL/WRITETIME. " +
+              "With repairWritetimeStrategy=source the original per-element WRITETIMEs are kept. " +
+              "With coordinator/config, the override is applied to BOTH the base write and the " +
+              "collection appends (per-element WRITETIME granularity is collapsed to the override) " +
+              "so the repaired row and its collection elements stay consistent."
+          )
+          // C2: state the convergence limits explicitly so operators do not treat
+          // --copyMissingRows as a general reconciliation tool for these tables.
+          log.warn(
+            "copyMissingRows LIMITATION for non-frozen collections: only rows entirely absent from " +
+              "the target are repaired. A row that already exists on the target but has a DIFFERENT " +
+              "collection (missing, extra, or stale elements) is reported by validation but NOT " +
+              "converged here — collection-append repair is additive (it can only add elements, " +
+              "never remove target-side extras) and re-adding could resurrect elements deleted on " +
+              "the target. To converge present-but-incomplete rows, resume the migration itself " +
+              "(base insert + appends are idempotent under USING TIMESTAMP) rather than relying on " +
+              "validation repair."
+          )
+        }
         log.info("Copying missing rows from source to target")
 
         val repairSchema =
-          buildRepairSchema(sourceTableDef, config.renamesMap, includePerColumnMetadata)
-        val repairFieldNames = repairSchema.fieldNames.toIndexedSeq
+          buildRepairSchema(
+            sourceTableDef,
+            config.renamesMap,
+            includePerColumnMetadata,
+            nonFrozenCollectionNames
+          )
 
         val missingRowsRdd =
           cachedJoined.filter { case (_, r) => r.isEmpty }.persist(StorageLevel.MEMORY_AND_DISK)
@@ -264,12 +325,16 @@ object ScyllaValidator {
           val missingSourceRowCount = missingRowsRdd.count()
 
           if (missingSourceRowCount > 0) {
+            val repairFields = repairSchema.fields.toIndexedSeq
             val rawRepairDf = spark.createDataFrame(
               missingRowsRdd.map { case (sourceRow, _) =>
                 Row.fromSeq(
-                  repairFieldNames.map { fieldName =>
-                    readers.Cassandra.widenTimestampValue(
-                      readers.Cassandra.convertValue(sourceRow.getRaw(fieldName))
+                  repairFields.map { field =>
+                    coerceRepairValue(
+                      field.dataType,
+                      readers.Cassandra.widenTimestampValue(
+                        readers.Cassandra.convertValue(sourceRow.getRaw(field.name))
+                      )
                     )
                   }
                 )
@@ -277,56 +342,105 @@ object ScyllaValidator {
               repairSchema
             )
 
-            if (includePerColumnMetadata) {
-              val (repairRdd, writeRepairSchema, timestampColumns) =
-                readers.Cassandra.explodeRowsFromPerColumnMeta(spark, rawRepairDf)
-              val writetimeIdx = writeRepairSchema.fieldIndex(timestampColumns.writeTime)
-
-              def overrideWritetime(rdd: RDD[Row], micros: Long): RDD[Row] =
-                rdd.map { row =>
-                  val values = row.toSeq.toArray
-                  values(writetimeIdx) match {
-                    case com.datastax.spark.connector.types.CassandraOption.Unset =>
-                    case _ =>
-                      values(writetimeIdx) = java.lang.Long.valueOf(micros)
-                  }
-                  Row(ArraySeq.unsafeWrapArray(values): _*)
-                }
-
-              val rddForWrite = validationConfig.repairWritetimeStrategy match {
+            // Precompute the writetime override (if any) ONCE so the scalar/frozen base write and
+            // every collection-append pass are stamped consistently. Lazy so the value-only repair
+            // path (no metadata) neither logs nor triggers the `config` validation error.
+            //   - source: no override; base + appends keep original per-cell/per-element WRITETIME.
+            //   - coordinator/config: override applied to BOTH base and appends. This collapses the
+            //     per-element WRITETIMEs to a single value, but keeping the appends on source
+            //     WRITETIME while overriding the base would leave the base "resurrected" (live) with
+            //     collection elements that are still shadowed by their older tombstones — an
+            //     inconsistent, partially-empty row. Consistency is preferred over per-element
+            //     granularity whenever the operator explicitly opts into an override strategy.
+            lazy val repairWritetimeOverrideMicros: Option[Long] =
+              validationConfig.repairWritetimeStrategy match {
                 case RepairWritetimeStrategy.Source =>
                   log.info(
-                    "repairWritetimeStrategy=source: using original source writetime. " +
+                    "repairWritetimeStrategy=source: using original source writetime(s). " +
                       "Repair writes may be shadowed by newer delete tombstones on the target."
                   )
-                  repairRdd
-
+                  None
                 case RepairWritetimeStrategy.Coordinator =>
-                  val repairTimeMicros = System.currentTimeMillis() * 1000L
+                  val micros = System.currentTimeMillis() * 1000L
                   log.info(
-                    s"repairWritetimeStrategy=coordinator: overriding writetime to $repairTimeMicros. " +
+                    s"repairWritetimeStrategy=coordinator: overriding writetime to $micros. " +
                       "Repair writes will beat most tombstones but may resurrect deleted rows."
                   )
-                  overrideWritetime(repairRdd, repairTimeMicros)
-
+                  Some(micros)
                 case RepairWritetimeStrategy.Config =>
-                  val configTimeMicros = targetSettings.writeWritetimestampInuS.getOrElse(
+                  val micros = targetSettings.writeWritetimestampInuS.getOrElse(
                     sys.error(
                       "repairWritetimeStrategy=config requires target.writeWritetimestampInuS " +
                         "to be set in the configuration."
                     )
                   )
                   log.info(
-                    s"repairWritetimeStrategy=config: overriding writetime to $configTimeMicros " +
+                    s"repairWritetimeStrategy=config: overriding writetime to $micros " +
                       "(from target.writeWritetimestampInuS)."
                   )
-                  overrideWritetime(repairRdd, configTimeMicros)
+                  Some(micros)
               }
+
+            def overrideWritetimeColumn(
+              rdd: RDD[Row],
+              writeSchema: StructType,
+              writetimeColumn: String
+            ): RDD[Row] =
+              repairWritetimeOverrideMicros match {
+                case None => rdd
+                case Some(micros) =>
+                  val writetimeIdx = writeSchema.fieldIndex(writetimeColumn)
+                  rdd.map { row =>
+                    val values = row.toSeq.toArray
+                    values(writetimeIdx) match {
+                      case com.datastax.spark.connector.types.CassandraOption.Unset =>
+                      case _ => values(writetimeIdx) = java.lang.Long.valueOf(micros)
+                    }
+                    Row(ArraySeq.unsafeWrapArray(values): _*)
+                  }
+              }
+
+            def applyRepairStrategy(
+              rdd: RDD[Row],
+              writeSchema: StructType,
+              timestampColumns: TimestampColumns
+            ): RDD[Row] = overrideWritetimeColumn(rdd, writeSchema, timestampColumns.writeTime)
+
+            if (perElementCollectionMetadata) {
+              // Scalar/frozen base write + per-element collection-append passes, mirroring the
+              // direct migration multi-pass write so missing rows regain element-level metadata.
+              val (baseRdd, baseSchema, timestampColumns, appendWrites) =
+                readers.Cassandra.explodeRowsFromPerColumnMetaCollectionAware(spark, rawRepairDf)
 
               writers.Scylla.writeRowRDD(
                 targetSettings,
                 Nil,
-                rddForWrite,
+                applyRepairStrategy(baseRdd, baseSchema, timestampColumns),
+                baseSchema,
+                Some(timestampColumns),
+                None,
+                sourceSettings
+              )
+
+              appendWrites.foreach { caw =>
+                writers.Scylla.writeCollectionAppendRDD(
+                  targetSettings,
+                  Nil,
+                  caw.columnName,
+                  overrideWritetimeColumn(caw.rdd, caw.schema, "writetime"),
+                  caw.schema,
+                  None,
+                  sourceSettings
+                )
+              }
+            } else if (repairWithScalarMetadata) {
+              val (repairRdd, writeRepairSchema, timestampColumns) =
+                readers.Cassandra.explodeRowsFromPerColumnMeta(spark, rawRepairDf)
+
+              writers.Scylla.writeRowRDD(
+                targetSettings,
+                Nil,
+                applyRepairStrategy(repairRdd, writeRepairSchema, timestampColumns),
                 writeRepairSchema,
                 Some(timestampColumns),
                 None,
