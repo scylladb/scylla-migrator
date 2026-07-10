@@ -321,6 +321,65 @@ object Scylla {
     )
   }
 
+  /** Write per-element collection-timestamp rows for a single non-frozen collection column.
+    *
+    * Each row is `[primary key columns..., singleton/grouped collection value, ttl, writetime]`
+    * (positionally aligned with `rowSchema`, whose last two fields are `ttl`/`writetime`). The
+    * collection column is written with `col = col + ?` (CQL append) so only the elements carried by
+    * that row are added, while the per-row `USING TTL ? AND TIMESTAMP ?` restores each element's
+    * original TTL/WRITETIME. Because appends are idempotent, this pass does not accumulate token
+    * ranges for savepoints.
+    */
+  def writeCollectionAppendRDD(
+    target: TargetSettings.Scylla,
+    renames: List[Rename],
+    columnName: String,
+    rdd: RDD[Row],
+    rowSchema: StructType,
+    source: SourceSettings
+  )(implicit spark: SparkSession): Unit = {
+    val renamedSchema = renameSchemaFields(rowSchema, renames)
+    val renamedCollectionName =
+      renames.collectFirst { case Rename(`columnName`, to) => to }.getOrElse(columnName)
+
+    requireNoCaseInsensitiveColumnNameCollisions(
+      renamedSchema.fieldNames.toSeq,
+      "after applying renames before a collection-append write to ScyllaDB"
+    )
+
+    val connector = Connectors.targetConnector(spark.sparkContext.getConf, target)
+    val consistencyLevel = ConsistencyLevelUtils.parseConsistencyLevel(target.consistencyLevel)
+    val writeConf = WriteConf
+      .fromSparkConf(spark.sparkContext.getConf)
+      .copy(
+        consistencyLevel = consistencyLevel,
+        ttl              = TTLOption.perRow("ttl"),
+        timestamp        = TimestampOption.perRow("writetime")
+      )
+
+    val columnSelector = SomeColumns(
+      ArraySeq.unsafeWrapArray(renamedSchema.fields.map { field =>
+        field.name match {
+          case "ttl" | "writetime"             => field.name: ColumnRef
+          case n if n == renamedCollectionName => CollectionColumnName(n, None, CollectionAppend)
+          case n                               => n: ColumnRef
+        }
+      }): _*
+    )
+
+    log.info(
+      s"Collection-append write for column '${columnName}' (target '${renamedCollectionName}'); schema:"
+    )
+    log.info(renamedSchema.treeString)
+
+    rdd.saveToCassandra(
+      target.keyspace,
+      target.table,
+      columnSelector,
+      writeConf
+    )(connector, SqlRowWriter.Factory)
+  }
+
   def writeDataframe(
     target: TargetSettings.Scylla,
     renames: List[Rename],

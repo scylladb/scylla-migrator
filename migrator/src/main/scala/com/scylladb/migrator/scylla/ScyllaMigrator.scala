@@ -25,11 +25,29 @@ import scala.util.control.NonFatal
   *   vs unset). [[dataFrame]] stays the pre-explosion frame (e.g. wide Cassandra read) for
   *   partition metadata and logging.
   */
+/** A per-element collection-timestamp write pass. Each carries the singleton/grouped
+  * collection-append rows for one non-frozen collection column, written after the base row write
+  * with `col = col + ?` and per-row TTL/WRITETIME so element-level timestamps are preserved.
+  *
+  * @param columnName
+  *   the (source) collection column name; renames are applied by the writer.
+  * @param rdd
+  *   rows of `[primary key columns..., singleton/grouped collection value, ttl, writetime]`.
+  * @param schema
+  *   positional schema for `rdd`, ending in `ttl` (IntegerType) and `writetime` (LongType).
+  */
+case class CollectionAppendWrite(
+  columnName: String,
+  rdd: RDD[Row],
+  schema: StructType
+)
+
 case class SourceDataFrame(
   dataFrame: DataFrame,
   timestampColumns: Option[TimestampColumns],
   savepointsSupported: Boolean,
-  cassandraExplodedWrite: Option[(RDD[Row], StructType)] = None
+  cassandraExplodedWrite: Option[(RDD[Row], StructType)] = None,
+  collectionAppendWrites: Seq[CollectionAppendWrite] = Nil
 )
 
 trait ScyllaMigratorBase {
@@ -102,6 +120,27 @@ trait ScyllaMigratorBase {
             tokenRangeAccumulator,
             migratorConfig.source
           )
+      }
+
+      // Per-element collection timestamp preservation: after the base row write (scalars + frozen
+      // collections), replay each non-frozen collection column with `col = col + ?` and per-row
+      // TTL/WRITETIME. These appends are idempotent (set/map add), so they are safe to re-run and
+      // deliberately do not participate in token-range savepoints.
+      if (sourceDF.collectionAppendWrites.nonEmpty) {
+        log.info(
+          s"Applying ${sourceDF.collectionAppendWrites.size} per-element collection-append " +
+            s"pass(es): ${sourceDF.collectionAppendWrites.map(_.columnName).mkString(", ")}"
+        )
+        sourceDF.collectionAppendWrites.foreach { caw =>
+          writers.Scylla.writeCollectionAppendRDD(
+            target,
+            migratorConfig.getRenamesOrNil,
+            caw.columnName,
+            caw.rdd,
+            caw.schema,
+            migratorConfig.source
+          )
+        }
       }
     } catch {
       case NonFatal(e) => // Catching everything on purpose to try and dump the accumulator state

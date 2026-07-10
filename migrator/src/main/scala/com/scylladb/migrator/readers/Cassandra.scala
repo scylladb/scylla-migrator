@@ -1,10 +1,23 @@
 package com.scylladb.migrator.readers
 
 import com.datastax.spark.connector._
-import com.datastax.spark.connector.cql.{ Schema, TableDef }
+import com.datastax.spark.connector.cql.{ ColumnDef, Schema, TableDef }
 import com.datastax.spark.connector.rdd.ReadConf
 import com.datastax.spark.connector.rdd.partitioner.dht.Token
-import com.datastax.spark.connector.types.CassandraOption
+import com.datastax.spark.connector.types.{
+  AsciiType,
+  BigIntType,
+  CassandraOption,
+  ColumnType,
+  IntType,
+  ListType => CqlListType,
+  MapType => CqlMapType,
+  SetType => CqlSetType,
+  SmallIntType,
+  TextType,
+  TinyIntType,
+  VarCharType
+}
 import com.scylladb.migrator.Connectors
 import com.scylladb.migrator.config.{ CopyType, SourceSettings }
 import org.apache.logging.log4j.LogManager
@@ -23,10 +36,11 @@ import org.apache.spark.sql.types.{
 import org.apache.spark.sql.{ DataFrame, Row, SparkSession }
 import org.apache.spark.unsafe.types.UTF8String
 import com.scylladb.migrator.ConsistencyLevelUtils
-import com.scylladb.migrator.scylla.SourceDataFrame
+import com.scylladb.migrator.scylla.{ CollectionAppendWrite, SourceDataFrame }
 
 import scala.collection.immutable.ArraySeq
 import scala.collection.mutable.ArrayBuffer
+import java.nio.charset.StandardCharsets
 
 object Cassandra {
   val log = LogManager.getLogger("com.scylladb.migrator.readers.Cassandra")
@@ -37,30 +51,127 @@ object Cassandra {
     timestampColumns: Option[TimestampColumns]
   )
 
+  /** Regular columns that are non-frozen (multi-cell) collections. These keep per-element
+    * TTL/WRITETIME (one metadata value per element), so `TTL()`/`WRITETIME()` on them return a list
+    * aligned with the collection's elements rather than a scalar.
+    */
+  def nonFrozenCollectionColumns(tableDef: TableDef): Seq[ColumnDef] =
+    tableDef.regularColumns.filter(c => c.columnType.isCollection && c.columnType.isMultiCell)
+
+  /** Unsigned lexicographic ordering over byte arrays, matching Cassandra's `UTF8Type`/`AsciiType`
+    * comparator for text map keys.
+    */
+  private val unsignedBytesOrdering: Ordering[Array[Byte]] = new Ordering[Array[Byte]] {
+    def compare(a: Array[Byte], b: Array[Byte]): Int = {
+      val n = math.min(a.length, b.length)
+      var i = 0
+      while (i < n) {
+        val ai = a(i) & 0xff
+        val bi = b(i) & 0xff
+        if (ai != bi) return ai - bi
+        i += 1
+      }
+      a.length - b.length
+    }
+  }
+
+  /** Ordering over runtime map-key values that reproduces Cassandra's on-disk key order for the
+    * supported key types, so a decoded map (whose iteration order Spark/Catalyst does not preserve)
+    * can be re-aligned with the element-order `WRITETIME`/`TTL` lists. Returns `None` for key types
+    * whose Cassandra comparator we cannot faithfully reproduce here.
+    */
+  def mapKeyOrdering(keyType: ColumnType[_]): Option[Ordering[Any]] = keyType match {
+    case TextType | AsciiType | VarCharType =>
+      Some(
+        Ordering.by((k: Any) => k.toString.getBytes(StandardCharsets.UTF_8))(unsignedBytesOrdering)
+      )
+    case IntType | BigIntType | SmallIntType | TinyIntType =>
+      Some(Ordering.by((k: Any) => k.asInstanceOf[Number].longValue()))
+    case _ => None
+  }
+
+  /** Describe why a non-frozen collection column cannot have its per-element timestamps preserved,
+    * or `None` if it is supported. Non-frozen lists are unsupported (list cells are keyed by
+    * generated timeuuids, so append cannot reproduce element identity), and maps are supported only
+    * for key types with a reproducible ordering (see [[mapKeyOrdering]]).
+    */
+  private def unsupportedCollectionReason(column: ColumnDef): Option[String] =
+    column.columnType match {
+      case _: CqlListType[_] =>
+        Some(s"'${column.columnName}' (non-frozen list)")
+      case m: CqlMapType[_, _] if mapKeyOrdering(m.keyType).isEmpty =>
+        Some(s"'${column.columnName}' (non-frozen map with unsupported key type ${m.keyType})")
+      case s: CqlSetType[_] if mapKeyOrdering(s.elemType).isEmpty =>
+        Some(s"'${column.columnName}' (non-frozen set with unsupported element type ${s.elemType})")
+      case _ => None
+    }
+
+  /** The ordering used to re-align a non-frozen collection's decoded elements with its
+    * element-order `WRITETIME`/`TTL` lists: map keys for maps, element values for sets (Cassandra
+    * stores/returns both in that sorted order). `None` for unsupported element/key types.
+    */
+  private def collectionElementOrdering(columnType: ColumnType[_]): Option[Ordering[Any]] =
+    columnType match {
+      case m: CqlMapType[_, _] => mapKeyOrdering(m.keyType)
+      case s: CqlSetType[_]    => mapKeyOrdering(s.elemType)
+      case _                   => None
+    }
+
   def determineCopyType(
     tableDef: TableDef,
-    preserveTimesRequest: Boolean
-  ): Either[Throwable, CopyType] =
-    if (tableDef.columnTypes.exists(_.isCollection) && preserveTimesRequest)
+    preserveTimesRequest: Boolean,
+    preserveCollectionTimesRequest: Boolean = false
+  ): Either[Throwable, CopyType] = {
+    // Frozen collections are stored as a single cell, so CQL `TTL()`/`WRITETIME()` return one
+    // scalar value per column and flow through the existing scalar preservation path unchanged.
+    // Non-frozen (multi-cell) collections keep per-element TTL/writetime. They are rejected unless
+    // the opt-in `preserveCollectionTimestamps` is enabled, in which case supported ones (sets and
+    // maps with an orderable key type) are read as element-aligned lists and re-applied per element
+    // via collection-append writes.
+    val nonFrozen = nonFrozenCollectionColumns(tableDef)
+    if (nonFrozen.nonEmpty && preserveTimesRequest && !preserveCollectionTimesRequest)
       Left(
         new Exception(
-          "TTL/Writetime preservation is unsupported for tables with collection types. Please check in your config the option 'preserveTimestamps' and set it to false to continue."
+          "TTL/Writetime preservation is unsupported for tables with non-frozen (multi-cell) " +
+            "collection types (lists, maps, sets). Freeze the collection columns, enable the config " +
+            "option 'preserveCollectionTimestamps' to preserve per-element TTL/WRITETIME (supported " +
+            "for sets and maps on Cassandra 5.0+/modern ScyllaDB sources), or set the config option " +
+            "'preserveTimestamps' to false to continue."
         )
       )
-    else if (preserveTimesRequest && tableDef.regularColumns.nonEmpty)
+    else if (nonFrozen.nonEmpty && preserveTimesRequest && preserveCollectionTimesRequest) {
+      val unsupported = nonFrozen.flatMap(unsupportedCollectionReason)
+      if (unsupported.nonEmpty)
+        Left(
+          new Exception(
+            "Per-element TTL/Writetime preservation ('preserveCollectionTimestamps') is unsupported " +
+              s"for these columns: ${unsupported.mkString(", ")}. Freeze them, or set " +
+              "'preserveCollectionTimestamps' to false to continue."
+          )
+        )
+      else Right(CopyType.WithTimestampPreservation)
+    } else if (preserveTimesRequest && tableDef.regularColumns.nonEmpty)
       Right(CopyType.WithTimestampPreservation)
     else if (preserveTimesRequest && tableDef.regularColumns.isEmpty) {
       log.warn("No regular columns in the table - disabling timestamp preservation")
       Right(CopyType.NoTimestampPreservation)
     } else Right(CopyType.NoTimestampPreservation)
+  }
 
   def createSelection(
     tableDef: TableDef,
     origSchema: StructType,
-    preserveTimes: Boolean
+    preserveTimes: Boolean,
+    preserveCollectionTimes: Boolean = false
   ): Either[Throwable, Selection] =
-    determineCopyType(tableDef, preserveTimes) map {
+    determineCopyType(tableDef, preserveTimes, preserveCollectionTimes) map {
       case CopyType.WithTimestampPreservation =>
+        // When per-element preservation is enabled, non-frozen collection columns select their
+        // TTL()/WRITETIME() as element-aligned lists (ArrayType sidecars) instead of scalars.
+        val perElementCollectionNames =
+          if (preserveCollectionTimes) nonFrozenCollectionColumns(tableDef).map(_.columnName).toSet
+          else Set.empty[String]
+
         val columnRefs =
           tableDef.partitionKey.map(_.ref) ++
             tableDef.clusteringColumns.map(_.ref) ++
@@ -80,11 +191,14 @@ object Cassandra {
         val schema = StructType(for {
           origField <- origSchema.fields
           isRegular = tableDef.regularColumns.exists(_.ref.columnName == origField.name)
+          isPerElementCollection = perElementCollectionNames.contains(origField.name)
+          ttlType       = if (isPerElementCollection) ArrayType(IntegerType) else IntegerType
+          writetimeType = if (isPerElementCollection) ArrayType(LongType) else LongType
           field <- if (isRegular)
                      List(
                        origField,
-                       StructField(s"${origField.name}_ttl", IntegerType, true),
-                       StructField(s"${origField.name}_writetime", LongType, true)
+                       StructField(s"${origField.name}_ttl", ttlType, true),
+                       StructField(s"${origField.name}_writetime", writetimeType, true)
                      )
                    else List(origField)
         } yield field)
@@ -167,6 +281,164 @@ object Cassandra {
           Row(ArraySeq.unsafeWrapArray(newValues): _*)
         }
     }
+
+  /** Explode a wide row into base rows for the timestamp-preservation write, EXCLUDING non-frozen
+    * collection columns (whose per-element timestamps are handled by separate collection-append
+    * passes). `baseSchema` must already omit those columns. When there are no base regular columns
+    * (a table whose only regular columns are per-element collections), a single primary-key-only
+    * row is emitted so the base write establishes the partition; the collection appends carry the
+    * data.
+    */
+  def explodeBaseRow(
+    row: Row,
+    baseSchema: StructType,
+    primaryKeyOrdinals: Map[String, Int],
+    baseRegularKeyOrdinals: Map[String, (Int, Int, Int)]
+  ): Iterable[Row] =
+    if (baseRegularKeyOrdinals.nonEmpty)
+      explodeRow(row, baseSchema, primaryKeyOrdinals, baseRegularKeyOrdinals)
+    else {
+      val newValues = baseSchema.fields.map { field =>
+        primaryKeyOrdinals
+          .get(field.name)
+          .map(ord => if (row.isNullAt(ord)) null else convertValue(row.get(ord)))
+          .getOrElse(CassandraOption.Unset)
+      } ++ Seq(Integer.valueOf(0), CassandraOption.Unset)
+      List(Row(ArraySeq.unsafeWrapArray(newValues): _*))
+    }
+
+  private def asNumberSeq(v: Any): IndexedSeq[Any] = v match {
+    case s: scala.collection.Seq[Any] => s.toIndexedSeq
+    case a: Array[_]                  => ArraySeq.unsafeWrapArray(a.asInstanceOf[Array[Any]])
+    case _                            => IndexedSeq.empty
+  }
+
+  /** Build the per-element collection-append rows for one non-frozen collection column of a single
+    * wide source row. Each emitted row is `[primary key values..., grouped collection value, ttl,
+    * writetime]`. Elements are aligned with their element-order `TTL()`/`WRITETIME()` lists (sets
+    * by natural array order, maps by re-sorting entries with `keyOrdering` to match Cassandra's
+    * on-disk key order), then grouped by `(ttl, writetime)` so co-timestamped elements share one
+    * append.
+    */
+  def collectionAppendRows(
+    row: Row,
+    pkOrdinals: Array[Int],
+    colOrdinal: Int,
+    ttlOrdinal: Int,
+    writetimeOrdinal: Int,
+    isMap: Boolean,
+    elementOrdering: Option[Ordering[Any]]
+  ): Seq[Row] = {
+    if (row.isNullAt(colOrdinal)) return Nil
+
+    val pkValues: Seq[Any] =
+      pkOrdinals.toIndexedSeq.map(o => if (row.isNullAt(o)) null else row.get(o))
+
+    val ttlSeq =
+      if (row.isNullAt(ttlOrdinal)) IndexedSeq.empty else asNumberSeq(row.get(ttlOrdinal))
+    val wtSeq =
+      if (row.isNullAt(writetimeOrdinal)) IndexedSeq.empty
+      else asNumberSeq(row.get(writetimeOrdinal))
+
+    def ttlAt(i: Int): Int =
+      if (i < ttlSeq.length && ttlSeq(i) != null) ttlSeq(i).asInstanceOf[Number].intValue() else 0
+    def wtAt(i: Int): Option[Long] =
+      if (i < wtSeq.length && wtSeq(i) != null) Some(wtSeq(i).asInstanceOf[Number].longValue())
+      else None
+
+    def rowsFrom(elements: IndexedSeq[Any], rebuild: Seq[Any] => Any): Seq[Row] =
+      elements.indices
+        .groupBy(i => (ttlAt(i), wtAt(i)))
+        .toSeq
+        .flatMap { case ((ttl, wtOpt), indices) =>
+          wtOpt.map { wt =>
+            val collectionValue = rebuild(indices.map(elements))
+            Row.fromSeq(
+              pkValues ++ Seq(
+                collectionValue,
+                Integer.valueOf(ttl),
+                java.lang.Long.valueOf(wt)
+              )
+            )
+          }
+        }
+
+    // Both the connector's decoded set and map lose their server (sorted) order, while the
+    // WRITETIME()/TTL() lists arrive in that sorted order. Re-sort the elements/entries with the
+    // Cassandra-compatible ordering so element[i] pairs with its own metadata[i].
+    val ordering = elementOrdering.getOrElse(
+      throw new IllegalStateException(
+        "Missing element ordering for a per-element collection column; this should have been " +
+          "rejected earlier"
+      )
+    )
+
+    if (isMap) {
+      val m = row.get(colOrdinal).asInstanceOf[scala.collection.Map[Any, Any]]
+      if (m.isEmpty) Nil
+      else {
+        val entries = m.toIndexedSeq.sortBy(_._1)(ordering)
+        rowsFrom(
+          entries.asInstanceOf[IndexedSeq[Any]],
+          parts => parts.map(_.asInstanceOf[(Any, Any)]).toMap
+        )
+      }
+    } else {
+      val elems = row.get(colOrdinal).asInstanceOf[scala.collection.Seq[Any]].toIndexedSeq
+      if (elems.isEmpty) Nil
+      else rowsFrom(elems.sorted(ordering), parts => parts.toIndexedSeq)
+    }
+  }
+
+  /** Build one [[CollectionAppendWrite]] per supported non-frozen collection column, reading the
+    * per-element metadata from the wide `rawDataframe` and aligning it with each element.
+    */
+  def buildCollectionAppendWrites(
+    spark: SparkSession,
+    rawDataframe: DataFrame,
+    tableDef: TableDef,
+    origSchema: StructType,
+    primaryKeyOrdinals: Map[String, Int],
+    regularKeyOrdinals: Map[String, (Int, Int, Int)],
+    perElementNames: Set[String]
+  ): Seq[CollectionAppendWrite] = {
+    val pkOrder =
+      (tableDef.partitionKey ++ tableDef.clusteringColumns)
+        .map(_.columnName)
+        .filter(primaryKeyOrdinals.contains)
+    val pkOrdinalArray = pkOrder.map(primaryKeyOrdinals).toArray
+    val pkFields = pkOrder.map(name => origSchema(origSchema.fieldIndex(name)))
+
+    nonFrozenCollectionColumns(tableDef)
+      .filter(c => perElementNames.contains(c.columnName))
+      .map { column =>
+        val colName = column.columnName
+        val (colOrd, ttlOrd, wtOrd) = regularKeyOrdinals(colName)
+        val collectionField = origSchema(origSchema.fieldIndex(colName))
+        val appendSchema = StructType(
+          pkFields ++ Seq(
+            collectionField,
+            StructField("ttl", IntegerType, true),
+            StructField("writetime", LongType, true)
+          )
+        )
+        val isMap = column.columnType.isInstanceOf[CqlMapType[_, _]]
+        val elementOrdering = collectionElementOrdering(column.columnType)
+        val pkOrdinalsBroadcast = spark.sparkContext.broadcast(pkOrdinalArray)
+        val rdd = rawDataframe.rdd.flatMap { row =>
+          collectionAppendRows(
+            row,
+            pkOrdinalsBroadcast.value,
+            colOrd,
+            ttlOrd,
+            wtOrd,
+            isMap,
+            elementOrdering
+          )
+        }
+        CollectionAppendWrite(colName, rdd, appendSchema)
+      }
+  }
 
   /** Convert Cassandra-specific types to standard Spark types.
     *
@@ -372,7 +644,9 @@ object Cassandra {
     log.info("Original schema loaded:")
     origSchema.printTreeString()
 
-    val selection = createSelection(tableDef, origSchema, preserveTimes).fold(throw _, identity)
+    val selection =
+      createSelection(tableDef, origSchema, preserveTimes, source.preserveCollectionTimestamps)
+        .fold(throw _, identity)
 
     val selectCassandraRDD = spark.sparkContext
       .cassandraTable[CassandraSQLRow](
@@ -410,11 +684,23 @@ object Cassandra {
             tableDef
           )
 
+          // Non-frozen collection columns whose per-element TTL/WRITETIME we preserve via
+          // collection-append passes. They are excluded from the base (scalar/frozen) explode.
+          val perElementNames =
+            if (source.preserveCollectionTimestamps)
+              nonFrozenCollectionColumns(tableDef).map(_.columnName).toSet
+            else Set.empty[String]
+
+          val baseOrigSchema =
+            StructType(origSchema.fields.filterNot(f => perElementNames.contains(f.name)))
+          val baseRegularKeyOrdinals =
+            regularKeyOrdinals.filterNot { case (name, _) => perElementNames.contains(name) }
+
           val broadcastPrimaryKeyOrdinals = spark.sparkContext.broadcast(primaryKeyOrdinals)
-          val broadcastRegularKeyOrdinals = spark.sparkContext.broadcast(regularKeyOrdinals)
-          val broadcastSchema = spark.sparkContext.broadcast(origSchema)
+          val broadcastRegularKeyOrdinals = spark.sparkContext.broadcast(baseRegularKeyOrdinals)
+          val broadcastSchema = spark.sparkContext.broadcast(baseOrigSchema)
           val finalSchema = StructType(
-            origSchema.fields ++
+            baseOrigSchema.fields ++
               Seq(StructField(ttl, IntegerType, true), StructField(writeTime, LongType, true))
           )
 
@@ -422,7 +708,7 @@ object Cassandra {
           log.info(finalSchema.treeString)
 
           val explodedRdd = rawDataframe.rdd.flatMap { row =>
-            explodeRow(
+            explodeBaseRow(
               row,
               broadcastSchema.value,
               broadcastPrimaryKeyOrdinals.value,
@@ -430,11 +716,25 @@ object Cassandra {
             )
           }
 
+          val collectionAppendWrites =
+            if (perElementNames.isEmpty) Nil
+            else
+              buildCollectionAppendWrites(
+                spark,
+                rawDataframe,
+                tableDef,
+                origSchema,
+                primaryKeyOrdinals,
+                regularKeyOrdinals,
+                perElementNames
+              )
+
           SourceDataFrame(
             rawDataframe,
             selection.timestampColumns,
             source.supportsSavepoints,
-            Some((explodedRdd, finalSchema))
+            Some((explodedRdd, finalSchema)),
+            collectionAppendWrites
           )
       }
     }
