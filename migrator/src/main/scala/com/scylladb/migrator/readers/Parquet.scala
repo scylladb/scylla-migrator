@@ -32,7 +32,12 @@ object Parquet {
           else ""
         s"${uri.getScheme}://$authority${Option(uri.getPath).getOrElse("")}"
       }
-    } catch { case NonFatal(_) => path }
+    } catch {
+      // Fail closed: an unparseable input that carries credential/query markers must NOT be logged
+      // verbatim. Plain local paths (no `@`/`?`) are safe to echo as-is.
+      case NonFatal(_) =>
+        if (path.contains("@") || path.contains("?")) "<redacted-path>" else path
+    }
 
   def migrateToScylla(
     config: MigratorConfig,

@@ -175,12 +175,70 @@ object ScyllaValidator {
     // Repair uses the scalar explosion only when there are no per-element collections.
     val repairWithScalarMetadata = includePerColumnMetadata && !perElementCollectionMetadata
 
+    // The source SELECT and target JOIN below project the collection-wide `WRITETIME(col)`/`TTL(col)`
+    // form for per-element metadata. ScyllaDB 2026.2+ only accepts the element-subscript form on
+    // non-frozen collections and REJECTS the collection-wide form, so emitting it against such an
+    // endpoint fails mid distributed-read. Detect it up front (same probe the migrate path uses):
+    // if EITHER endpoint is subscript-only, drop per-element metadata for non-frozen collection
+    // columns on BOTH projections and compare those columns by VALUE only (all scalar/frozen
+    // metadata is still validated). Comparison must stay symmetric, hence "both".
+    val collectionsValueOnly: Boolean =
+      if (!perElementCollectionMetadata) false
+      else {
+        val nonFrozenSource = readers.Cassandra.nonFrozenCollectionColumns(sourceTableDef)
+        val sourceStrategy =
+          readers.Cassandra.detectMetadataReadStrategy(
+            sourceConnector,
+            sourceSettings.keyspace,
+            sourceSettings.table,
+            nonFrozenSource
+          )
+        val targetTableDef =
+          targetConnector.withSessionDo(
+            Schema.tableFromCassandra(_, targetSettings.keyspace, targetSettings.table)
+          )
+        val targetStrategy =
+          readers.Cassandra.detectMetadataReadStrategy(
+            targetConnector,
+            targetSettings.keyspace,
+            targetSettings.table,
+            readers.Cassandra.nonFrozenCollectionColumns(targetTableDef)
+          )
+        sourceStrategy == readers.Cassandra.SubscriptMetadataRead ||
+        targetStrategy == readers.Cassandra.SubscriptMetadataRead
+      }
+
+    if (collectionsValueOnly) {
+      log.warn(
+        "Validation source/target exposes per-element collection WRITETIME()/TTL() only via the " +
+          "subscript form (ScyllaDB 2026.2+). The validator compares non-frozen collection columns " +
+          s"by VALUE only (${nonFrozenCollectionNames.mkString(", ")}); their per-element " +
+          "TTL/WRITETIME are NOT validated. Scalar and frozen-collection metadata are still compared."
+      )
+      // copyMissingRows repair for these tables reconstructs per-element collection TTL/WRITETIME
+      // from the source metadata read — which is unavailable in value-only mode — so it cannot run.
+      if (validationConfig.copyMissingRows)
+        sys.error(
+          "copyMissingRows is not supported for non-frozen collections when the source or target " +
+            "only exposes the subscript form of WRITETIME()/TTL() (ScyllaDB 2026.2+): per-element " +
+            "collection metadata cannot be read for repair. Re-run the migration itself (idempotent " +
+            "under USING TIMESTAMP) to converge missing rows, or disable copyMissingRows to validate " +
+            "values only."
+        )
+    }
+
+    // Whether to project per-element metadata for a given regular column. Non-frozen collections are
+    // dropped to value-only when the endpoint only supports the subscript form.
+    def projectMetadataFor(columnName: String): Boolean =
+      includePerColumnMetadata &&
+        !(collectionsValueOnly && nonFrozenCollectionNames.contains(columnName))
+
     val source = {
       val regularColumnsProjection =
         sourceTableDef.regularColumns.flatMap { colDef =>
           val alias = config.renamesMap(colDef.columnName)
 
-          if (includePerColumnMetadata)
+          if (projectMetadataFor(colDef.columnName))
             List(
               ColumnName(colDef.columnName, Some(alias)),
               TTL(colDef.columnName, Some(alias + "_ttl")),
@@ -219,7 +277,7 @@ object ScyllaValidator {
         sourceTableDef.regularColumns.flatMap { colDef =>
           val renamedColName = config.renamesMap(colDef.columnName)
 
-          if (includePerColumnMetadata)
+          if (projectMetadataFor(colDef.columnName))
             List(
               ColumnName(renamedColName),
               TTL(renamedColName, Some(renamedColName + "_ttl")),
