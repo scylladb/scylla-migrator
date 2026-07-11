@@ -3,6 +3,7 @@ package com.scylladb.migrator.readers
 import com.datastax.spark.connector._
 import com.datastax.spark.connector.cql.{ CassandraConnector, ColumnDef, Schema, TableDef }
 import com.datastax.spark.connector.rdd.ReadConf
+import com.datastax.oss.driver.api.core.cql.{ PreparedStatement, Row => DriverRow }
 import com.datastax.spark.connector.rdd.partitioner.dht.Token
 import com.datastax.spark.connector.types.{
   AsciiType,
@@ -44,8 +45,9 @@ import com.scylladb.migrator.ConsistencyLevelUtils
 import com.scylladb.migrator.scylla.{ CollectionAppendWrite, SourceDataFrame }
 
 import scala.collection.immutable.ArraySeq
+import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
-import scala.util.control.NonFatal
+import scala.util.Try
 import java.nio.charset.StandardCharsets
 
 object Cassandra {
@@ -74,6 +76,18 @@ object Cassandra {
     timestampColumns: Option[TimestampColumns]
   )
 
+  /** How the source server exposes per-element `WRITETIME()`/`TTL()` for non-frozen collections.
+    *
+    *   - [[ArrayMetadataRead]]: Cassandra 5.0+ — the collection-wide `WRITETIME(col)`/`TTL(col)`
+    *     form returns element-aligned lists in a single scan (the default, cheapest path).
+    *   - [[SubscriptMetadataRead]]: ScyllaDB 2026.2+ — only the per-element subscript form
+    *     `WRITETIME(col[key])`/`TTL(col[key])` is accepted, so element metadata is fetched via a
+    *     per-row point read (see [[readRawRddSubscript]]).
+    */
+  sealed trait MetadataReadStrategy
+  case object ArrayMetadataRead extends MetadataReadStrategy
+  case object SubscriptMetadataRead extends MetadataReadStrategy
+
   /** Regular columns that are non-frozen (multi-cell) collections. These keep per-element
     * TTL/WRITETIME (one metadata value per element), so `TTL()`/`WRITETIME()` on them return a list
     * aligned with the collection's elements rather than a scalar.
@@ -84,33 +98,237 @@ object Cassandra {
   private def quoteCqlIdentifier(id: String): String =
     "\"" + id.replace("\"", "\"\"") + "\""
 
-  /** Fail fast if the source server cannot return per-element `WRITETIME()`/`TTL()` for a
-    * non-frozen collection column. We only PREPARE the statement (no execution, no data read); on
-    * servers older than Cassandra 5.0 / older ScyllaDB this fails at semantic validation, letting
-    * us surface a clear, actionable error before launching the distributed read.
+  /** Decide how to read per-element collection metadata from the source by PREPARing (no execution,
+    * no data read) probe statements, so the choice is made before the distributed read:
+    *
+    *   1. `WRITETIME(col), TTL(col)` (whole-collection list form) — Cassandra 5.0+ ⇒
+    *      [[ArrayMetadataRead]].
+    *   2. else `WRITETIME(col[?]), TTL(col[?])` (per-element subscript form) — ScyllaDB 2026.2+ ⇒
+    *      [[SubscriptMetadataRead]].
+    *   3. else neither is accepted ⇒ fail fast with the same actionable error as the array probe.
+    *
+    * `col` is the first non-frozen collection column; all such columns share the same server, so a
+    * single probe determines the strategy for the table.
     */
-  private def assertNonFrozenCollectionMetadataReadable(
+  private[migrator] def detectMetadataReadStrategy(
     connector: CassandraConnector,
     keyspace: String,
     table: String,
     nonFrozen: Seq[ColumnDef]
-  ): Unit =
-    nonFrozen.headOption.foreach { col =>
-      val c = quoteCqlIdentifier(col.columnName)
-      val cql =
-        s"SELECT WRITETIME($c), TTL($c) FROM " +
-          s"${quoteCqlIdentifier(keyspace)}.${quoteCqlIdentifier(table)} LIMIT 1"
-      try connector.withSessionDo(_.prepare(cql))
-      catch {
-        case NonFatal(e) =>
+  ): MetadataReadStrategy =
+    nonFrozen.headOption match {
+      case None => ArrayMetadataRead
+      case Some(col) =>
+        val c = quoteCqlIdentifier(col.columnName)
+        val from =
+          s"FROM ${quoteCqlIdentifier(keyspace)}.${quoteCqlIdentifier(table)} LIMIT 1"
+        def canPrepare(cql: String): Boolean =
+          Try(connector.withSessionDo(_.prepare(cql))).isSuccess
+
+        if (canPrepare(s"SELECT WRITETIME($c), TTL($c) $from"))
+          ArrayMetadataRead
+        else if (canPrepare(s"SELECT WRITETIME($c[?]), TTL($c[?]) $from"))
+          SubscriptMetadataRead
+        else
           throw new IllegalStateException(
             s"preserveCollectionTimestamps is enabled, but the source cannot read per-element " +
-              s"WRITETIME()/TTL() on non-frozen collection column '${col.columnName}'. This " +
-              s"requires Cassandra 5.0+ or a modern ScyllaDB. Underlying error: ${e.getMessage}",
-            e
+              s"WRITETIME()/TTL() on non-frozen collection column '${col.columnName}' via either " +
+              s"the collection-wide form (Cassandra 5.0+) or the element-subscript form " +
+              s"(ScyllaDB 2026.2+). This feature requires one of those source versions."
           )
+    }
+
+  /** Bind a runtime value into a driver statement. Collection keys are limited to text/int-family
+    * (see [[mapKeyOrdering]]) and primary keys to types with default driver codecs; both bind by
+    * their Java runtime class, so no explicit codec handling is needed for the supported types.
+    */
+  private def driverBindValue(v: Any): AnyRef = v match {
+    case null                 => null
+    case s: String            => s
+    case n: java.lang.Integer => n
+    case n: java.lang.Long    => n
+    case n: java.lang.Short   => n
+    case n: java.lang.Byte    => n
+    case i: Int               => java.lang.Integer.valueOf(i)
+    case l: Long              => java.lang.Long.valueOf(l)
+    case other                => other.asInstanceOf[AnyRef]
+  }
+
+  /** Read the source into an `RDD[Row]` matching `selection.schema` when the server only supports
+    * the per-element SUBSCRIPT form of `WRITETIME()`/`TTL()` (ScyllaDB 2026.2+).
+    *
+    * Two phases, producing exactly the same array-sidecar schema as the Cassandra 5.0 array path so
+    * every downstream stage (explode, multi-pass write, validation) is reused unchanged:
+    *   1. Base scan (connector): PK + all regular column VALUES + scalar `WRITETIME`/`TTL` sidecars
+    *      (Scylla supports scalar). Non-frozen collection metadata columns are omitted here.
+    *   2. Per-row point read (driver): for each non-frozen collection, sort its decoded
+    *      elements/entries with the column's ordering (so the arrays align with the order the
+    *      downstream explode re-sorts into), then one `SELECT WRITETIME(col[?]), TTL(col[?]), ...`
+    *      point read fetches all element metadata, assembled into element-aligned arrays.
+    */
+  private def readRawRddSubscript(
+    spark: SparkSession,
+    connector: CassandraConnector,
+    source: SourceSettings.Cassandra,
+    readConf: ReadConf,
+    tableDef: TableDef,
+    selection: Selection,
+    nonFrozen: Seq[ColumnDef],
+    tokenRangesToSkip: Set[(Token[_], Token[_])]
+  ): RDD[Row] = {
+    val nfNames = nonFrozen.map(_.columnName).toSet
+
+    // Phase 1 selection: keep every column value + scalar sidecars, but DROP the per-element
+    // collection sidecars (Scylla rejects `WRITETIME(col)`/`TTL(col)` on non-frozen collections).
+    val baseColumnRefs: List[ColumnRef] =
+      (tableDef.partitionKey.map(_.ref) ++
+        tableDef.clusteringColumns.map(_.ref) ++
+        tableDef.regularColumns.flatMap { column =>
+          val colName = column.columnName
+          if (nfNames.contains(colName)) List(column.ref)
+          else
+            List(
+              column.ref,
+              colName.ttl as s"${colName}_ttl",
+              colName.writeTime as s"${colName}_writetime"
+            )
+        }).toList
+
+    val baseSchema = StructType(selection.schema.fields.filterNot { f =>
+      nfNames.exists(n => f.name == s"${n}_ttl" || f.name == s"${n}_writetime")
+    })
+
+    val baseSelectRDD = spark.sparkContext
+      .cassandraTable[CassandraSQLRow](
+        source.keyspace,
+        source.table,
+        (s, e) => !tokenRangesToSkip.contains((s, e))
+      )
+      .withConnector(connector)
+      .withReadConf(readConf)
+      .select(baseColumnRefs: _*)
+
+    val baseFilteredRDD = source.where match {
+      case Some(filter) => baseSelectRDD.where(filter)
+      case None         => baseSelectRDD
+    }
+
+    val baseRdd = baseFilteredRDD
+      .asInstanceOf[RDD[Row]]
+      .map(row => Row.fromSeq(row.toSeq.map(v => widenTimestampValue(convertValue(v)))))
+
+    // Everything below is captured by the executor closure, so keep it serializable (primitives,
+    // Strings, the Serializable `ElementSorter`, and the Serializable `connector`).
+    val baseFieldIndex: Map[String, Int] = baseSchema.fieldNames.zipWithIndex.toMap
+    val pkNames: Seq[String] =
+      (tableDef.partitionKey ++ tableDef.clusteringColumns).map(_.columnName)
+    val pkOrdinals: Seq[Int] = pkNames.map(baseFieldIndex)
+    // (columnName, ordinal-in-base-row, isMap, elementSorter)
+    val nfInfo: Seq[(String, Int, Boolean, ElementSorter[_])] =
+      nonFrozen.map { c =>
+        val sorter = collectionElementOrdering(c.columnType).getOrElse(
+          throw new IllegalStateException(
+            s"Non-frozen collection '${c.columnName}' has no supported element ordering; " +
+              "this should have been rejected by determineCopyType."
+          )
+        )
+        (
+          c.columnName,
+          baseFieldIndex(c.columnName),
+          c.columnType.isInstanceOf[CqlMapType[_, _]],
+          sorter
+        )
+      }
+    val keyspaceQ = quoteCqlIdentifier(source.keyspace)
+    val tableQ = quoteCqlIdentifier(source.table)
+    val whereClause = pkNames.map(n => s"${quoteCqlIdentifier(n)} = ?").mkString(" AND ")
+    val targetFields = selection.schema.fields
+    // Map a target array-sidecar field name back to its collection column, if any.
+    def collectionOfSidecar(fieldName: String): Option[(String, Boolean)] =
+      nfNames.collectFirst {
+        case n if fieldName == s"${n}_ttl"       => (n, true)
+        case n if fieldName == s"${n}_writetime" => (n, false)
+      }
+
+    baseRdd.mapPartitions { rows =>
+      connector.withSessionDo { session =>
+        val stmtCache = mutable.Map.empty[(String, Int), PreparedStatement]
+
+        def elementMetadata(row: Row): Map[String, (Seq[Integer], Seq[java.lang.Long])] =
+          nfInfo.map { case (name, ord, isMap, sorter) =>
+            if (row.isNullAt(ord)) name -> ((null: Seq[Integer]), (null: Seq[java.lang.Long]))
+            else {
+              val sortedKeys: IndexedSeq[Any] =
+                if (isMap)
+                  sorter
+                    .sortEntries(
+                      row.get(ord).asInstanceOf[scala.collection.Map[Any, Any]].toIndexedSeq
+                    )
+                    .map(_._1)
+                else
+                  sorter.sortElements(
+                    row.get(ord).asInstanceOf[scala.collection.Seq[Any]].toIndexedSeq
+                  )
+
+              val n = sortedKeys.length
+              if (n == 0)
+                name -> ((IndexedSeq.empty[Integer], IndexedSeq.empty[java.lang.Long]))
+              else {
+                val colQ = quoteCqlIdentifier(name)
+                val projection =
+                  (0 until n)
+                    .map(_ => s"WRITETIME($colQ[?]), TTL($colQ[?])")
+                    .mkString(", ")
+                val cql =
+                  s"SELECT $projection FROM $keyspaceQ.$tableQ WHERE $whereClause"
+                val ps = stmtCache.getOrElseUpdate((name, n), session.prepare(cql))
+
+                // Bind order follows statement text: each key appears twice (WRITETIME, TTL),
+                // then the primary-key values for the WHERE clause.
+                val keyBinds = sortedKeys.flatMap(k => Seq(driverBindValue(k), driverBindValue(k)))
+                val pkBinds =
+                  pkOrdinals.map(o => driverBindValue(if (row.isNullAt(o)) null else row.get(o)))
+                val bound = ps.bind((keyBinds ++ pkBinds).toArray: _*)
+
+                val dr: DriverRow = session.execute(bound).one()
+                val ttls = new Array[Integer](n)
+                val wts = new Array[java.lang.Long](n)
+                var i = 0
+                while (i < n) {
+                  val wtIdx = 2 * i
+                  val ttlIdx = 2 * i + 1
+                  wts(i) =
+                    if (dr == null || dr.isNull(wtIdx)) null
+                    else java.lang.Long.valueOf(dr.getLong(wtIdx))
+                  ttls(i) =
+                    if (dr == null || dr.isNull(ttlIdx)) null
+                    else Integer.valueOf(dr.getInt(ttlIdx))
+                  i += 1
+                }
+                name -> ((ArraySeq.unsafeWrapArray(ttls), ArraySeq.unsafeWrapArray(wts)))
+              }
+            }
+          }.toMap
+
+        rows
+          .map { row =>
+            val meta = elementMetadata(row)
+            val values = targetFields.map { f =>
+              collectionOfSidecar(f.name) match {
+                case Some((col, isTtl)) =>
+                  val (ttlArr, wtArr) = meta(col)
+                  if (isTtl) ttlArr else wtArr
+                case None =>
+                  row.get(baseFieldIndex(f.name))
+              }
+            }
+            Row.fromSeq(ArraySeq.unsafeWrapArray(values.asInstanceOf[Array[Any]]))
+          }
+          .toList
+          .iterator
       }
     }
+  }
 
   /** Unsigned lexicographic ordering over byte arrays, matching Cassandra's `UTF8Type`/`AsciiType`
     * comparator for text map keys.
@@ -1168,34 +1386,55 @@ object Cassandra {
       createSelection(tableDef, origSchema, preserveTimes, source.preserveCollectionTimestamps)
         .fold(throw _, identity)
 
-    if (preserveTimes && source.preserveCollectionTimestamps)
-      assertNonFrozenCollectionMetadataReadable(
-        connector,
-        source.keyspace,
-        source.table,
-        nonFrozenCollectionColumns(tableDef)
-      )
+    val nonFrozen = nonFrozenCollectionColumns(tableDef)
 
-    val selectCassandraRDD = spark.sparkContext
-      .cassandraTable[CassandraSQLRow](
-        source.keyspace,
-        source.table,
-        (s, e) => !tokenRangesToSkip.contains((s, e))
-      )
-      .withConnector(connector)
-      .withReadConf(readConf)
-      .select(selection.columnRefs: _*)
+    // Choose how to read per-element collection metadata: the Cassandra 5.0 array form or the
+    // ScyllaDB 2026.2+ subscript form. Only relevant when per-element preservation is on AND the
+    // table actually has non-frozen collections.
+    val metadataReadStrategy =
+      if (preserveTimes && source.preserveCollectionTimestamps && nonFrozen.nonEmpty)
+        detectMetadataReadStrategy(connector, source.keyspace, source.table, nonFrozen)
+      else ArrayMetadataRead
 
-    val finalCassandraRDD = source.where match {
-      case Some(filter) => selectCassandraRDD.where(filter)
-      case None         => selectCassandraRDD
+    val rdd = metadataReadStrategy match {
+      case SubscriptMetadataRead =>
+        log.info(
+          "Source exposes per-element collection WRITETIME()/TTL() only via the subscript form " +
+            "(ScyllaDB 2026.2+); reading element metadata with per-row point reads."
+        )
+        readRawRddSubscript(
+          spark,
+          connector,
+          source,
+          readConf,
+          tableDef,
+          selection,
+          nonFrozen,
+          tokenRangesToSkip
+        )
+
+      case ArrayMetadataRead =>
+        val selectCassandraRDD = spark.sparkContext
+          .cassandraTable[CassandraSQLRow](
+            source.keyspace,
+            source.table,
+            (s, e) => !tokenRangesToSkip.contains((s, e))
+          )
+          .withConnector(connector)
+          .withReadConf(readConf)
+          .select(selection.columnRefs: _*)
+
+        val finalCassandraRDD = source.where match {
+          case Some(filter) => selectCassandraRDD.where(filter)
+          case None         => selectCassandraRDD
+        }
+
+        finalCassandraRDD
+          .asInstanceOf[RDD[Row]]
+          .map { row =>
+            Row.fromSeq(row.toSeq.map(v => widenTimestampValue(convertValue(v))))
+          }
     }
-
-    val rdd = finalCassandraRDD
-      .asInstanceOf[RDD[Row]]
-      .map { row =>
-        Row.fromSeq(row.toSeq.map(v => widenTimestampValue(convertValue(v))))
-      }
 
     val rawDataframe = spark.createDataFrame(rdd, selection.schema)
 

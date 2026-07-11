@@ -6,9 +6,10 @@ SHELL := bash
         spark-image start-services stop-services wait-for-services \
         start-services-scylla wait-for-services-scylla \
         start-services-scylla-gcs wait-for-services-scylla-gcs \
+        start-services-scylla2026 wait-for-services-scylla2026 stop-services-scylla2026 dump-logs-scylla2026 \
         start-services-cassandra wait-for-services-cassandra test-integration-cassandra \
         start-services-alternator wait-for-services-alternator \
-        test test-unit test-integration test-integration-scylla \
+        test test-unit test-integration test-integration-scylla test-integration-scylla2026 \
         test-integration-alternator \
         test-integration-aws \
         test-benchmark test-benchmark-jmh test-benchmark-jmh-quick \
@@ -163,6 +164,18 @@ start-services-scylla-gcs: ## Start services needed for Scylla integration tests
 	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_GCS_BIND_DIRS) ./tests/docker/scylla ./tests/docker/scylla-source
 	docker compose $(COMPOSE_SCYLLA_FILES) up -d mysql cassandra scylla-source scylla gcs
 
+start-services-scylla2026: ## Start the pinned ScyllaDB 2026.2 service for collection-timestamp tests
+	docker compose -f $(COMPOSE_FILE) up -d scylla2026
+
+wait-for-services-scylla2026: ## Wait for the ScyllaDB 2026.2 service to become ready
+	$(Q)$(call wait-for-cql,scylla2026)
+
+stop-services-scylla2026: ## Stop the ScyllaDB 2026.2 service
+	$(Q)docker compose -f $(COMPOSE_FILE) rm -sf scylla2026
+
+dump-logs-scylla2026: ## Dump the ScyllaDB 2026.2 service logs
+	$(Q)docker compose -f $(COMPOSE_FILE) logs --tail=100 scylla2026 2>&1 || true
+
 start-services-dynamodb: ## Start services for DynamoDB integration tests (SCYLLA_VERSION=..., TABLETS_MODE=...)
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
 	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
@@ -272,8 +285,11 @@ test-unit: ## Run unit tests (no services required)
 test-integration: ## Run integration tests (requires services, excludes AWS, benchmarks, and E2E)
 	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.AWS,com.scylladb.migrator.E2E" $(SBT_COVERAGE_SUFFIX)
 
-test-integration-scylla: ## Run Scylla and reader integration tests (Cassandra compat tests run in their own matrix job)
-	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.scylla.* com.scylladb.migrator.readers.* -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.E2E,com.scylladb.migrator.CassandraCompat" $(SBT_COVERAGE_SUFFIX)
+test-integration-scylla: ## Run Scylla and reader integration tests (Cassandra/Scylla2026 compat tests run in their own jobs)
+	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.scylla.* com.scylladb.migrator.readers.* -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.E2E,com.scylladb.migrator.CassandraCompat,com.scylladb.migrator.Scylla2026Compat" $(SBT_COVERAGE_SUFFIX)
+
+test-integration-scylla2026: ## Run ScyllaDB 2026.2+ collection-timestamp integration tests (requires the scylla2026 service)
+	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.scylla.Scylla2026* -- --include-categories=com.scylladb.migrator.Scylla2026Compat --exclude-categories=com.scylladb.migrator.E2E" $(SBT_COVERAGE_SUFFIX)
 
 test-integration-dynamodb: ## Run DynamoDB/Alternator integration tests (excludes AWS and E2E)
 	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.alternator.* com.scylladb.migrator.writers.* -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.AWS,com.scylladb.migrator.E2E" $(SBT_COVERAGE_SUFFIX)

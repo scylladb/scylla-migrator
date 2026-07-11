@@ -2,27 +2,28 @@ package com.scylladb.migrator.scylla
 
 import com.datastax.oss.driver.api.core.CqlSession
 import com.datastax.oss.driver.api.core.cql.Row
-import com.scylladb.migrator.Integration
-import com.scylladb.migrator.SparkUtils.performValidation
+import com.scylladb.migrator.{ CassandraCompat, Integration }
+import com.scylladb.migrator.SparkUtils.successfullyPerformMigration
 import org.junit.experimental.categories.Category
 
 import java.net.InetSocketAddress
 import scala.jdk.CollectionConverters._
 
-/** End-to-end coverage for element-level repair of non-frozen collections: the validator's
-  * `copyMissingRows` path restores missing rows with a scalar/frozen base write plus per-element
-  * collection-append passes, so the repaired rows regain their original per-element TTL/WRITETIME.
+/** End-to-end coverage for per-element TTL/WRITETIME preservation of non-frozen collections
+  * (`preserveCollectionTimestamps`).
   *
-  * Cassandra 5.0 is used for both ends because ScyllaDB cannot read back `WRITETIME()`/`TTL()` of
-  * non-frozen collections for verification.
+  * The migration runs Cassandra 5.0 -> Cassandra 5.0 (the target host in the config is
+  * `cassandra5`, remapped to the C*5.0 host port by the harness) because ScyllaDB cannot read back
+  * `WRITETIME()`/`TTL()` of non-frozen collections for verification, while Cassandra 5.0 can. The
+  * write path is plain CQL, identical whether the target is Scylla or Cassandra.
   */
-@Category(Array(classOf[Integration]))
-class CollectionTimestampRepairTest extends munit.FunSuite {
+@Category(Array(classOf[Integration], classOf[CassandraCompat]))
+class Cassandra5CollectionTimestampPreservationTest extends munit.FunSuite {
 
   private val keyspace = "test"
-  private val sourceTbl = "collts_rep_src"
-  private val targetTbl = "collts_rep_dst"
-  private val configFile = "cassandra5-to-cassandra5-collection-timestamps-repair.yaml"
+  private val sourceTbl = "collts_src"
+  private val targetTbl = "collts_dst"
+  private val configFile = "cassandra5-to-cassandra5-collection-timestamps.yaml"
 
   private val cassandra5: Fixture[CqlSession] = new Fixture[CqlSession]("cassandra5") {
     private var session: CqlSession = null
@@ -87,30 +88,44 @@ class CollectionTimestampRepairTest extends munit.FunSuite {
     )
   }
 
-  private def populateSource(session: CqlSession, id: String): Unit = {
+  test("preserves per-element TTL/WRITETIME of non-frozen set and map columns") {
+    val session = cassandra5()
+    createTable(session, sourceTbl)
+    createTable(session, targetTbl)
+
+    val id = "r1"
+    // Scalar written with an explicit timestamp (exercises the base write path alongside appends).
     session.execute(
       s"INSERT INTO ${keyspace}.${sourceTbl} (id, name) VALUES ('${id}', 'alice') " +
         s"USING TIMESTAMP 1000000000000"
     )
-    Seq(
+
+    // Set elements, each with its own WRITETIME, no TTL. 5+ elements to exceed small-collection
+    // special cases, inserted out of natural order.
+    val tagWrites = Seq(
       50 -> 5000000000000L,
       10 -> 1000000000000L,
       30 -> 3000000000000L,
       20 -> 2000000000000L,
       40 -> 4000000000000L
-    ).foreach { case (v, wt) =>
+    )
+    tagWrites.foreach { case (v, wt) =>
       session.execute(
         s"UPDATE ${keyspace}.${sourceTbl} USING TIMESTAMP ${wt} SET tags = tags + {${v}} WHERE id='${id}'"
       )
     }
-    Seq(
+
+    // Map entries with distinct WRITETIMEs, mixed TTLs, keys inserted out of sort order (exercises
+    // the connector's unordered decode + key-sort re-alignment). 6 entries => HashMap on decode.
+    val attrWrites = Seq(
       ("f", 6, 6000000000000L, Some(1000000)),
       ("a", 1, 1000000000000L, None),
       ("e", 5, 5000000000000L, Some(2000000)),
       ("b", 2, 2000000000000L, None),
       ("d", 4, 4000000000000L, Some(3000000)),
       ("c", 3, 3000000000000L, None)
-    ).foreach { case (k, v, wt, ttlOpt) =>
+    )
+    attrWrites.foreach { case (k, v, wt, ttlOpt) =>
       val using = ttlOpt match {
         case Some(ttl) => s"USING TIMESTAMP ${wt} AND TTL ${ttl}"
         case None      => s"USING TIMESTAMP ${wt}"
@@ -119,37 +134,32 @@ class CollectionTimestampRepairTest extends munit.FunSuite {
         s"UPDATE ${keyspace}.${sourceTbl} ${using} SET attrs = attrs + {'${k}': ${v}} WHERE id='${id}'"
       )
     }
-  }
 
-  test("copyMissingRows restores per-element collection TTL/WRITETIME for missing rows") {
-    val session = cassandra5()
-    createTable(session, sourceTbl)
-    createTable(session, targetTbl) // target starts empty
-
-    val id = "r1"
-    populateSource(session, id)
-
-    // Validation must detect the missing row (snapshot is taken before the repair copy).
-    assertEquals(performValidation(configFile), 1, "Should detect the missing target row")
+    successfullyPerformMigration(configFile)
 
     val src = readMeta(session, sourceTbl, id)
     val dst = readMeta(session, targetTbl, id)
 
-    // Scalar base write preserved (repairWritetimeStrategy=source).
+    // Scalar preserved.
     assertEquals(dst.name, src.name)
-    assertEquals(dst.nameWt, src.nameWt, "scalar WRITETIME must be preserved by the repair")
+    assertEquals(dst.nameWt, src.nameWt, "scalar WRITETIME must be preserved")
 
-    // Collection-append passes preserved element-level metadata.
+    // Set: same elements and element-aligned WRITETIMEs (Cassandra returns both in sorted order).
     assertEquals(dst.tags.sorted, src.tags.sorted, "set elements must match")
     assertEquals(dst.tagsWt, src.tagsWt, "set element WRITETIMEs must be preserved")
+
+    // Map: same entries and element-aligned WRITETIMEs (both returned in key-sorted order).
     assertEquals(dst.attrs, src.attrs, "map entries must match")
     assertEquals(dst.attrsWt, src.attrsWt, "map element WRITETIMEs must be preserved")
 
+    // Map TTLs: null stays null; non-null preserved within a small tolerance for elapsed time.
     assertEquals(dst.attrsTtl.length, src.attrsTtl.length)
     dst.attrsTtl.zip(src.attrsTtl).zipWithIndex.foreach { case ((dTtl, sTtl), i) =>
       if (sTtl == null) assert(dTtl == null, s"attrs TTL[$i] expected null, got ${dTtl}")
       else {
         assert(dTtl != null, s"attrs TTL[$i] expected non-null")
+        // The target TTL may differ from the source by the read->write elapsed time (and the
+        // source keeps aging), so compare with an absolute tolerance rather than a direction.
         val diff = math.abs(sTtl.intValue() - dTtl.intValue())
         assert(
           diff <= 600,
@@ -157,8 +167,5 @@ class CollectionTimestampRepairTest extends munit.FunSuite {
         )
       }
     }
-
-    // A second validation pass should now converge (row present, timestamps within tolerance).
-    assertEquals(performValidation(configFile), 0, "Re-validation after repair should pass")
   }
 }

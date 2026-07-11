@@ -37,8 +37,9 @@ source:
   preserveTimestamps: true
   # Opt-in: also preserve the per-element TTL/WRITETIME of non-frozen (multi-cell) collection
   # columns. When enabled, each element's original TTL/WRITETIME is re-applied via collection
-  # appends after the base row write. Requires a source that can read collection-element metadata
-  # (Cassandra 5.0+ / modern ScyllaDB). Supported for non-frozen sets and maps whose element/key
+  # appends after the base row write. Requires a source that can read collection-element metadata:
+  # Cassandra 5.0+ (via WRITETIME(col)/TTL(col)) or ScyllaDB 2026.2+ (via the per-element subscript
+  # form WRITETIME(col[key])/TTL(col[key]), auto-detected). Supported for non-frozen sets and maps whose element/key
   # type has a well-defined order (text/ascii/varchar and integer types); non-frozen lists and
   # other key/element types remain unsupported (freeze them, or leave this disabled).
   # Because elements are restored with collection appends (col = col + ?), this only converges

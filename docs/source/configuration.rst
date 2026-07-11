@@ -94,8 +94,9 @@ A source of type ``cassandra`` can be used together with a target of type ``cass
     preserveTimestamps: true
     # Opt-in: also preserve the per-element TTL/WRITETIME of non-frozen (multi-cell) collection
     # columns. Each element's original TTL/WRITETIME is re-applied via collection appends after the
-    # base row write. Requires a source that can read collection-element metadata (Cassandra 5.0+ /
-    # modern ScyllaDB). Supported for non-frozen sets and maps whose element/key type has a
+    # base row write. Requires a source that can read collection-element metadata: Cassandra 5.0+
+    # (WRITETIME(col)/TTL(col)) or ScyllaDB 2026.2+ (per-element subscript WRITETIME(col[key]),
+    # auto-detected). Supported for non-frozen sets and maps whose element/key type has a
     # well-defined order (text/ascii/varchar and integer types); non-frozen lists and other
     # key/element types remain unsupported.
     # Because elements are restored with collection appends (col = col + ?), this only converges
