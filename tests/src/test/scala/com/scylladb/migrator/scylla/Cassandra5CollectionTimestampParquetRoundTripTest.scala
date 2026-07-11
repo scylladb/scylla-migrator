@@ -2,7 +2,7 @@ package com.scylladb.migrator.scylla
 
 import com.datastax.oss.driver.api.core.CqlSession
 import com.datastax.oss.driver.api.core.cql.Row
-import com.scylladb.migrator.{ Integration, TestFileUtils }
+import com.scylladb.migrator.{ CassandraCompat, Integration, TestFileUtils }
 import com.scylladb.migrator.SparkUtils.successfullyPerformMigration
 import org.junit.experimental.categories.Category
 
@@ -18,8 +18,8 @@ import scala.jdk.CollectionConverters._
   * both ends because ScyllaDB cannot read back `WRITETIME()`/`TTL()` of non-frozen collections for
   * verification.
   */
-@Category(Array(classOf[Integration]))
-class CollectionTimestampParquetRoundTripTest extends munit.FunSuite {
+@Category(Array(classOf[Integration], classOf[CassandraCompat]))
+class Cassandra5CollectionTimestampParquetRoundTripTest extends munit.FunSuite {
 
   private val keyspace = "test"
   private val sourceTbl = "collts_pq_src"

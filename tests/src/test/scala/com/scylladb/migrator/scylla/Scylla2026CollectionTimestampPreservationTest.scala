@@ -2,48 +2,54 @@ package com.scylladb.migrator.scylla
 
 import com.datastax.oss.driver.api.core.CqlSession
 import com.datastax.oss.driver.api.core.cql.Row
-import com.scylladb.migrator.Integration
+import com.scylladb.migrator.{ Integration, Scylla2026Compat }
 import com.scylladb.migrator.SparkUtils.successfullyPerformMigration
 import org.junit.experimental.categories.Category
 
 import java.net.InetSocketAddress
 import scala.jdk.CollectionConverters._
 
-/** End-to-end coverage for per-element TTL/WRITETIME preservation of non-frozen collections
-  * (`preserveCollectionTimestamps`).
+/** End-to-end coverage for per-element TTL/WRITETIME preservation of non-frozen collections with
+  * ScyllaDB as BOTH source and target (`preserveCollectionTimestamps`).
   *
-  * The migration runs Cassandra 5.0 -> Cassandra 5.0 (the target host in the config is
-  * `cassandra5`, remapped to the C*5.0 host port by the harness) because ScyllaDB cannot read back
-  * `WRITETIME()`/`TTL()` of non-frozen collections for verification, while Cassandra 5.0 can. The
-  * write path is plain CQL, identical whether the target is Scylla or Cassandra.
+  * ScyllaDB (verified on 2026.2) rejects the Cassandra 5.0 collection-wide `WRITETIME(col)` list
+  * form on non-frozen collections but supports the per-element subscript form
+  * `WRITETIME(col[key])`. The migrator auto-detects this and reads element metadata via per-row
+  * point reads. This test both migrates through that path AND verifies the result using the same
+  * subscript form (Scylla can read it back, unlike the Cassandra 5.0-only array form).
+  *
+  * Runs against a dedicated `scylla2026` service (host port 9048) rather than the shared `scylla`
+  * service, because the feature needs ScyllaDB >= 2026.2 and 2026.2 rejects `SimpleStrategy`
+  * keyspaces.
   */
-@Category(Array(classOf[Integration]))
-class CollectionTimestampPreservationTest extends munit.FunSuite {
+@Category(Array(classOf[Integration], classOf[Scylla2026Compat]))
+class Scylla2026CollectionTimestampPreservationTest extends munit.FunSuite {
 
   private val keyspace = "test"
   private val sourceTbl = "collts_src"
   private val targetTbl = "collts_dst"
-  private val configFile = "cassandra5-to-cassandra5-collection-timestamps.yaml"
+  private val configFile = "scylla2026-to-scylla2026-collection-timestamps.yaml"
 
-  private val cassandra5: Fixture[CqlSession] = new Fixture[CqlSession]("cassandra5") {
+  private val scylla2026: Fixture[CqlSession] = new Fixture[CqlSession]("scylla2026") {
     private var session: CqlSession = null
     def apply(): CqlSession = session
     override def beforeAll(): Unit = {
       session = CqlSession
         .builder()
-        .addContactPoint(new InetSocketAddress("localhost", 9047))
+        .addContactPoint(new InetSocketAddress("localhost", 9048))
         .withLocalDatacenter("datacenter1")
         .withAuthCredentials("dummy", "dummy")
         .build()
+      // 2026.2 rejects SimpleStrategy; NetworkTopologyStrategy is required.
       session.execute(
         s"CREATE KEYSPACE IF NOT EXISTS ${keyspace} WITH replication = " +
-          "{'class':'SimpleStrategy','replication_factor':1}"
+          "{'class':'NetworkTopologyStrategy','replication_factor':1}"
       )
     }
     override def afterAll(): Unit = if (session != null) session.close()
   }
 
-  override def munitFixtures: Seq[Fixture[_]] = Seq(cassandra5)
+  override def munitFixtures: Seq[Fixture[_]] = Seq(scylla2026)
 
   private def createTable(session: CqlSession, table: String): Unit = {
     session.execute(s"DROP TABLE IF EXISTS ${keyspace}.${table}")
@@ -63,45 +69,67 @@ class CollectionTimestampPreservationTest extends munit.FunSuite {
     nameWt: Long
   )
 
+  /** Read per-element metadata via ScyllaDB's subscript form. Arrays are ordered by ascending set
+    * element / map key so source and target compare element-wise.
+    */
   private def readMeta(session: CqlSession, table: String, id: String): CollectionMeta = {
-    val row: Row = session
+    val base: Row = session
       .execute(
-        s"SELECT name, WRITETIME(name) AS name_wt, " +
-          s"tags, WRITETIME(tags) AS tags_wt, " +
-          s"attrs, WRITETIME(attrs) AS attrs_wt, TTL(attrs) AS attrs_ttl " +
+        s"SELECT name, WRITETIME(name) AS name_wt, tags, attrs " +
           s"FROM ${keyspace}.${table} WHERE id = '${id}'"
       )
       .one()
-    assert(row != null, s"expected a row for id=${id} in ${table}")
+    assert(base != null, s"expected a row for id=${id} in ${table}")
+
+    val tags = base.getSet("tags", classOf[Integer]).asScala.toList.map(_.intValue()).sorted
+    val tagsWt = tags.map { t =>
+      session
+        .execute(s"SELECT WRITETIME(tags[${t}]) AS wt FROM ${keyspace}.${table} WHERE id = '${id}'")
+        .one()
+        .getLong("wt")
+    }
+
+    val attrs = base
+      .getMap("attrs", classOf[String], classOf[Integer])
+      .asScala
+      .toMap
+      .map { case (k, v) => k -> v.intValue() }
+    val attrKeys = attrs.keys.toList.sorted
+    val (attrsWt, attrsTtl) = attrKeys.map { k =>
+      val r = session
+        .execute(
+          s"SELECT WRITETIME(attrs['${k}']) AS wt, TTL(attrs['${k}']) AS ttl " +
+            s"FROM ${keyspace}.${table} WHERE id = '${id}'"
+        )
+        .one()
+      val ttl: Integer = if (r.isNull("ttl")) null else Integer.valueOf(r.getInt("ttl"))
+      (r.getLong("wt"), ttl)
+    }.unzip
+
     CollectionMeta(
-      tags   = row.getSet("tags", classOf[Integer]).asScala.toList.map(_.intValue()),
-      tagsWt = row.getList("tags_wt", classOf[java.lang.Long]).asScala.toList.map(_.longValue()),
-      attrs = row
-        .getMap("attrs", classOf[String], classOf[Integer])
-        .asScala
-        .toMap
-        .map { case (k, v) => k -> v.intValue() },
-      attrsWt  = row.getList("attrs_wt", classOf[java.lang.Long]).asScala.toList.map(_.longValue()),
-      attrsTtl = row.getList("attrs_ttl", classOf[Integer]).asScala.toList,
-      name     = row.getString("name"),
-      nameWt   = row.getLong("name_wt")
+      tags     = tags,
+      tagsWt   = tagsWt,
+      attrs    = attrs,
+      attrsWt  = attrsWt,
+      attrsTtl = attrsTtl,
+      name     = base.getString("name"),
+      nameWt   = base.getLong("name_wt")
     )
   }
 
-  test("preserves per-element TTL/WRITETIME of non-frozen set and map columns") {
-    val session = cassandra5()
+  test(
+    "preserves per-element TTL/WRITETIME of non-frozen collections (Scylla source via subscript)"
+  ) {
+    val session = scylla2026()
     createTable(session, sourceTbl)
     createTable(session, targetTbl)
 
     val id = "r1"
-    // Scalar written with an explicit timestamp (exercises the base write path alongside appends).
     session.execute(
       s"INSERT INTO ${keyspace}.${sourceTbl} (id, name) VALUES ('${id}', 'alice') " +
         s"USING TIMESTAMP 1000000000000"
     )
 
-    // Set elements, each with its own WRITETIME, no TTL. 5+ elements to exceed small-collection
-    // special cases, inserted out of natural order.
     val tagWrites = Seq(
       50 -> 5000000000000L,
       10 -> 1000000000000L,
@@ -115,8 +143,6 @@ class CollectionTimestampPreservationTest extends munit.FunSuite {
       )
     }
 
-    // Map entries with distinct WRITETIMEs, mixed TTLs, keys inserted out of sort order (exercises
-    // the connector's unordered decode + key-sort re-alignment). 6 entries => HashMap on decode.
     val attrWrites = Seq(
       ("f", 6, 6000000000000L, Some(1000000)),
       ("a", 1, 1000000000000L, None),
@@ -140,26 +166,20 @@ class CollectionTimestampPreservationTest extends munit.FunSuite {
     val src = readMeta(session, sourceTbl, id)
     val dst = readMeta(session, targetTbl, id)
 
-    // Scalar preserved.
     assertEquals(dst.name, src.name)
     assertEquals(dst.nameWt, src.nameWt, "scalar WRITETIME must be preserved")
 
-    // Set: same elements and element-aligned WRITETIMEs (Cassandra returns both in sorted order).
-    assertEquals(dst.tags.sorted, src.tags.sorted, "set elements must match")
+    assertEquals(dst.tags, src.tags, "set elements must match")
     assertEquals(dst.tagsWt, src.tagsWt, "set element WRITETIMEs must be preserved")
 
-    // Map: same entries and element-aligned WRITETIMEs (both returned in key-sorted order).
     assertEquals(dst.attrs, src.attrs, "map entries must match")
     assertEquals(dst.attrsWt, src.attrsWt, "map element WRITETIMEs must be preserved")
 
-    // Map TTLs: null stays null; non-null preserved within a small tolerance for elapsed time.
     assertEquals(dst.attrsTtl.length, src.attrsTtl.length)
     dst.attrsTtl.zip(src.attrsTtl).zipWithIndex.foreach { case ((dTtl, sTtl), i) =>
       if (sTtl == null) assert(dTtl == null, s"attrs TTL[$i] expected null, got ${dTtl}")
       else {
         assert(dTtl != null, s"attrs TTL[$i] expected non-null")
-        // The target TTL may differ from the source by the read->write elapsed time (and the
-        // source keeps aging), so compare with an absolute tolerance rather than a direction.
         val diff = math.abs(sTtl.intValue() - dTtl.intValue())
         assert(
           diff <= 600,

@@ -217,7 +217,7 @@ class CassandraRowComparisonTest extends munit.FunSuite {
     )
   }
 
-  test("Per-element collection metadata length mismatch is reported") {
+  test("Per-element collection metadata length mismatch is reported as a cardinality mismatch") {
     val left = CassandraRow.fromMap(
       Map("id" -> "r1", "tags_writetime" -> List(1000L, 2000L, 3000L))
     )
@@ -226,8 +226,45 @@ class CassandraRowComparisonTest extends munit.FunSuite {
     )
     val result = compareItems(left, Some(right))
     assert(
-      result.exists(_.items.exists(_.isInstanceOf[Item.DifferingWritetimes])),
-      s"expected a DifferingWritetimes failure for length mismatch, got ${result}"
+      result.exists(_.items.exists(_.isInstanceOf[Item.MetadataCardinalityMismatch])),
+      s"expected a MetadataCardinalityMismatch failure for length mismatch, got ${result}"
+    )
+    // A length mismatch is structural, not a time delta, so it must NOT be a DifferingWritetimes.
+    assert(
+      !result.exists(_.items.exists(_.isInstanceOf[Item.DifferingWritetimes])),
+      s"length mismatch should not be reported as DifferingWritetimes, got ${result}"
+    )
+  }
+
+  test("Malformed per-element metadata is reported as MalformedMetadata, not a time delta") {
+    val left = CassandraRow.fromMap(
+      Map("id" -> "r1", "tags_writetime" -> List(1000L, "oops", 3000L))
+    )
+    val right = CassandraRow.fromMap(
+      Map("id" -> "r1", "tags_writetime" -> List(1000L, 2000L, 3000L))
+    )
+    val result = compareItems(left, Some(right))
+    assert(
+      result.exists(_.items.exists(_.isInstanceOf[Item.MalformedMetadata])),
+      s"expected a MalformedMetadata failure, got ${result}"
+    )
+    assert(
+      !result.exists(_.items.exists(_.isInstanceOf[Item.DifferingWritetimes])),
+      s"malformed metadata should not be reported as DifferingWritetimes, got ${result}"
+    )
+  }
+
+  test("Per-element metadata vs collection cardinality mismatch is reported") {
+    val left = CassandraRow.fromMap(
+      Map("id" -> "r1", "tags" -> Set(10, 20, 30), "tags_writetime" -> List(1000L, 2000L))
+    )
+    val right = CassandraRow.fromMap(
+      Map("id" -> "r1", "tags" -> Set(10, 20, 30), "tags_writetime" -> List(1000L, 2000L))
+    )
+    val result = compareItems(left, Some(right))
+    assert(
+      result.exists(_.items.exists(_.isInstanceOf[Item.MetadataCardinalityMismatch])),
+      s"expected a MetadataCardinalityMismatch failure (2 writetimes for 3 elements), got ${result}"
     )
   }
 

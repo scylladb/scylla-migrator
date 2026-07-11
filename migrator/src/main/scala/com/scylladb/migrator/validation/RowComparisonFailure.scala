@@ -65,6 +65,22 @@ object RowComparisonFailure {
               s"$fieldName ($writeTimeDiff millis)"
             }
             .mkString(", ")}")
+
+    /** A `_ttl`/`_writetime` column whose value is not a clean numeric scalar or numeric/null array
+      * (non-numeric element or wholly unexpected type). Reported separately from time differences
+      * because it is a data-integrity problem, not a "(N millis)" discrepancy.
+      */
+    case class MalformedMetadata(fields: List[String])
+        extends Item(s"Malformed TTL/WRITETIME metadata: ${fields.mkString(", ")}")
+
+    /** A per-element `_ttl`/`_writetime` array whose element count disagrees with its collection's
+      * element count, or differs between source and target (including one side missing it). Each
+      * detail describes the counts. Reported separately so it is not mistaken for a time delta.
+      */
+    case class MetadataCardinalityMismatch(details: List[(String, String)])
+        extends Item(s"Per-element metadata cardinality mismatch: ${details
+            .map { case (fieldName, detail) => s"$fieldName ($detail)" }
+            .mkString(", ")}")
     case class NumericTypeMismatch(fields: List[(String, String, String)])
         extends Item(s"Numeric type mismatches: ${fields
             .map { case (fieldName, srcType, tgtType) =>
@@ -142,7 +158,7 @@ object RowComparisonFailure {
               }
             }
 
-        val differingTtls =
+        val ttlResults =
           if (!compareTimestamps) Nil
           else
             for {
@@ -168,7 +184,7 @@ object RowComparisonFailure {
         // fails loudly instead of silently wrapping to a negative value (which would make every
         // element "exceed" and produce spurious diffs).
         val writetimeToleranceMicros = Math.multiplyExact(writetimeToleranceMillis, 1000L)
-        val differingWritetimes =
+        val writetimeResults =
           if (!compareTimestamps) Nil
           else
             for {
@@ -185,8 +201,21 @@ object RowComparisonFailure {
                         )
             } yield result
 
+        // Split real time/TTL deltas (reported in millis) from structural problems (malformed or
+        // cardinality mismatches), so the latter get their own, non-misleading failure items.
+        val differingTtls = ttlResults.collect { case MetadataDiff.TimeDiff(f, d) => f -> d }
+        val differingWritetimes =
+          writetimeResults.collect { case MetadataDiff.TimeDiff(f, d) => f -> d }
+        val malformedMetadata =
+          (ttlResults ++ writetimeResults).collect { case MetadataDiff.Malformed(f) => f }
+        val cardinalityMismatches =
+          (ttlResults ++ writetimeResults).collect {
+            case MetadataDiff.CardinalityMismatch(f, detail) => f -> detail
+          }
+
         if (
-          differingFieldValues.isEmpty && numericTypeMismatches.isEmpty && differingTtls.isEmpty && differingWritetimes.isEmpty
+          differingFieldValues.isEmpty && numericTypeMismatches.isEmpty && differingTtls.isEmpty &&
+          differingWritetimes.isEmpty && malformedMetadata.isEmpty && cardinalityMismatches.isEmpty
         )
           None
         else
@@ -204,6 +233,12 @@ object RowComparisonFailure {
                  else Nil) ++
                 (if (differingWritetimes.nonEmpty)
                    List(Item.DifferingWritetimes(differingWritetimes.toList))
+                 else Nil) ++
+                (if (malformedMetadata.nonEmpty)
+                   List(Item.MalformedMetadata(malformedMetadata.toList))
+                 else Nil) ++
+                (if (cardinalityMismatches.nonEmpty)
+                   List(Item.MetadataCardinalityMismatch(cardinalityMismatches.toList))
                  else Nil)
             )
           )
@@ -304,20 +339,31 @@ object RowComparisonFailure {
       case _                          => true
     }
 
-  /** For array-typed (per-element) metadata, the discrepancy between the metadata length and the
-    * associated collection's element count, if they disagree. Scalar metadata (raw is a `Number`)
-    * and non-collection base values are skipped.
+  /** For array-typed (per-element) metadata, the metadata length and its collection's element count
+    * when they disagree. Scalar metadata (raw is a `Number`) and non-collection base values yield
+    * `None` (nothing to reconcile).
     */
   private def cardinalityMismatch(
     row: CassandraRow,
     name: String,
     baseValue: Option[Any]
-  ): Option[Long] = {
+  ): Option[(Int, Int)] = {
     val metaLen = Option(row.getRaw(name)).collect { case s: scala.collection.Seq[_] => s.length }
     (metaLen, baseValue.flatMap(collectionSize)) match {
-      case (Some(m), Some(c)) if m != c => Some(math.abs(m.toLong - c.toLong))
+      case (Some(m), Some(c)) if m != c => Some((m, c))
       case _                            => None
     }
+  }
+
+  /** Outcome of comparing one `_ttl`/`_writetime` metadata column. Distinguishes a genuine time/TTL
+    * difference (reported in millis) from structural problems (malformed metadata, cardinality
+    * mismatch) so the latter are not mislabelled as a "(N millis)" delta.
+    */
+  private[migrator] sealed trait MetadataDiff { def field: String }
+  private[migrator] object MetadataDiff {
+    case class TimeDiff(field: String, diffMillis: Long) extends MetadataDiff
+    case class Malformed(field: String) extends MetadataDiff
+    case class CardinalityMismatch(field: String, detail: String) extends MetadataDiff
   }
 
   /** Compare a TTL/WRITETIME metadata column that may be scalar or per-element (array-typed).
@@ -325,9 +371,10 @@ object RowComparisonFailure {
     * Both source and target return the metadata in the same server (sorted) order, so elements are
     * compared positionally. Guards first against malformed metadata (non-numeric entries) and, for
     * per-element metadata, against a metadata/collection cardinality mismatch on either side — both
-    * would otherwise let corrupt data validate as equal. Returns the field name paired with the
-    * largest absolute per-element difference that exceeds `tolerance` (or the relevant count
-    * discrepancy), or `None` when the values match within tolerance.
+    * would otherwise let corrupt data validate as equal. Returns the largest absolute per-element
+    * difference that exceeds `tolerance` as a [[MetadataDiff.TimeDiff]], a structural
+    * [[MetadataDiff.Malformed]]/[[MetadataDiff.CardinalityMismatch]], or `None` when the values
+    * match within tolerance.
     */
   private[migrator] def diffTimestampMetadata(
     left: CassandraRow,
@@ -337,21 +384,43 @@ object RowComparisonFailure {
     leftBase: Option[Any] = None,
     rightBase: Option[Any] = None,
     valueScaleToMillis: Long = 1L
-  ): Option[(String, Long)] =
+  ): Option[MetadataDiff] =
     if (hasMalformedMetadata(left, name) || hasMalformedMetadata(right, name))
-      Some(name -> -1L) // sentinel: non-numeric/unexpected metadata type
+      Some(MetadataDiff.Malformed(name))
     else
       cardinalityMismatch(left, name, leftBase)
-        .orElse(cardinalityMismatch(right, name, rightBase))
-        .map(name -> _)
+        .map { case (m, c) => s"source metadata has $m entries for a collection of $c elements" }
+        .orElse(cardinalityMismatch(right, name, rightBase).map { case (m, c) =>
+          s"target metadata has $m entries for a collection of $c elements"
+        })
+        .map(detail => MetadataDiff.CardinalityMismatch(name, detail))
         .orElse {
           (metadataAsLongs(left, name), metadataAsLongs(right, name)) match {
-            case (None, None)     => None
-            case (Some(ls), None) => Some(name -> ls.headOption.getOrElse(0L))
-            case (None, Some(rs)) => Some(name -> rs.headOption.getOrElse(0L))
+            case (None, None) => None
+            case (Some(ls), None) =>
+              Some(
+                MetadataDiff
+                  .CardinalityMismatch(
+                    name,
+                    s"source has ${ls.length} metadata entries, target none"
+                  )
+              )
+            case (None, Some(rs)) =>
+              Some(
+                MetadataDiff
+                  .CardinalityMismatch(
+                    name,
+                    s"target has ${rs.length} metadata entries, source none"
+                  )
+              )
             case (Some(ls), Some(rs)) =>
               if (ls.length != rs.length)
-                Some(name -> math.abs(ls.length.toLong - rs.length.toLong))
+                Some(
+                  MetadataDiff.CardinalityMismatch(
+                    name,
+                    s"source has ${ls.length} entries, target has ${rs.length}"
+                  )
+                )
               else {
                 // Diffs are scaled to the tolerance's unit (millis) so the report and the tolerance
                 // agree; `valueScaleToMillis` is 1 for values already in the tolerance unit.
@@ -359,7 +428,8 @@ object RowComparisonFailure {
                   ls.zip(rs)
                     .map { case (l, r) => math.abs(l - r) * valueScaleToMillis }
                     .filter(_ > tolerance)
-                if (exceeding.isEmpty) None else Some(name -> exceeding.max)
+                if (exceeding.isEmpty) None
+                else Some(MetadataDiff.TimeDiff(name, exceeding.max))
               }
           }
         }
