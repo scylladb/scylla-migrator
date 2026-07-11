@@ -70,6 +70,21 @@ object Cassandra {
       .flatMap(s => scala.util.Try(s.trim.toInt).toOption)
       .getOrElse(1000000)
 
+  /** Max number of collection keys read per subscript point-read statement (ScyllaDB 2026.2+ path).
+    * Each key contributes two bind markers (`WRITETIME(col[?]), TTL(col[?])`), so a single
+    * statement would otherwise mint `2*N` markers for an `N`-element cell and blow past the
+    * native-protocol limit (65535) around 32k elements — long before [[LargeCollectionHardLimit]].
+    * Reading in fixed-width chunks bounds both the marker count (`2*chunk`) and the number of
+    * distinct prepared statements (one per chunk length). Override with
+    * `-Dscylla.migrator.subscriptKeyChunkSize=<n>`.
+    */
+  private val SubscriptKeyChunkSize: Int =
+    sys.props
+      .get("scylla.migrator.subscriptKeyChunkSize")
+      .flatMap(s => scala.util.Try(s.trim.toInt).toOption)
+      .filter(_ > 0)
+      .getOrElse(100)
+
   case class Selection(
     columnRefs: List[ColumnRef],
     schema: StructType,
@@ -138,9 +153,11 @@ object Cassandra {
           )
     }
 
-  /** Bind a runtime value into a driver statement. Collection keys are limited to text/int-family
-    * (see [[mapKeyOrdering]]) and primary keys to types with default driver codecs; both bind by
-    * their Java runtime class, so no explicit codec handling is needed for the supported types.
+  /** Bind a runtime value into a driver statement by its Java runtime class. Collection keys are
+    * limited to the text/int family (see [[mapKeyOrdering]]), which already map to default driver
+    * codecs. Primary-key values are pre-converted by the caller for the two widened/decoded types
+    * that would otherwise miss a codec (`timestamp`->Instant, `blob`->ByteBuffer); all other PK
+    * types reach here already codec-compatible.
     */
   private def driverBindValue(v: Any): AnyRef = v match {
     case null                 => null
@@ -220,9 +237,22 @@ object Cassandra {
     // Everything below is captured by the executor closure, so keep it serializable (primitives,
     // Strings, the Serializable `ElementSorter`, and the Serializable `connector`).
     val baseFieldIndex: Map[String, Int] = baseSchema.fieldNames.zipWithIndex.toMap
-    val pkNames: Seq[String] =
-      (tableDef.partitionKey ++ tableDef.clusteringColumns).map(_.columnName)
+    val pkColumns: Seq[ColumnDef] = tableDef.partitionKey ++ tableDef.clusteringColumns
+    val pkNames: Seq[String] = pkColumns.map(_.columnName)
     val pkOrdinals: Seq[Int] = pkNames.map(baseFieldIndex)
+    // Per-PK bind conversion tag. The base scan already widened `timestamp`->Long(epoch-ms) and
+    // yields `blob`->Array[Byte], neither of which has a matching driver default codec, so binding
+    // them by runtime class fails (Long is bound as bigint, byte[] has no codec). Convert those two
+    // back to the driver-native type (Instant / ByteBuffer) before binding; everything else
+    // (text/int/bigint/uuid/inet/decimal/varint/boolean/float/double) is already codec-compatible.
+    //   0 = pass-through, 1 = timestamp(Long->Instant), 2 = blob(Array[Byte]->ByteBuffer)
+    val pkBindKinds: Seq[Int] = pkColumns.map { c =>
+      c.columnType match {
+        case com.datastax.spark.connector.types.TimestampType => 1
+        case com.datastax.spark.connector.types.BlobType      => 2
+        case _                                                => 0
+      }
+    }
     // (columnName, ordinal-in-base-row, isMap, elementSorter)
     val nfInfo: Seq[(String, Int, Boolean, ElementSorter[_])] =
       nonFrozen.map { c =>
@@ -242,6 +272,10 @@ object Cassandra {
     val keyspaceQ = quoteCqlIdentifier(source.keyspace)
     val tableQ = quoteCqlIdentifier(source.table)
     val whereClause = pkNames.map(n => s"${quoteCqlIdentifier(n)} = ?").mkString(" AND ")
+    // Point reads must honor the same source consistency level as the base scan; otherwise the
+    // driver's session default (LOCAL_ONE) is used, widening the read-consistency race window
+    // between the base scan and the metadata point read.
+    val pointReadConsistencyLevel = readConf.consistencyLevel
     val targetFields = selection.schema.fields
     // Map a target array-sidecar field name back to its collection column, if any.
     def collectionOfSidecar(fieldName: String): Option[(String, Boolean)] =
@@ -251,81 +285,153 @@ object Cassandra {
       }
 
     baseRdd.mapPartitions { rows =>
-      connector.withSessionDo { session =>
-        val stmtCache = mutable.Map.empty[(String, Int), PreparedStatement]
+      // Hold ONE session open for the whole partition and stream rows lazily (no `.toList`, which
+      // would materialize every output row of the partition in executor memory). The session is
+      // borrowed from the connector's pool and returned when the Spark task completes.
+      val session = connector.openSession()
+      val stmtCache = mutable.Map.empty[(String, Int), PreparedStatement]
+      val dropped = new java.util.concurrent.atomic.AtomicLong(0L)
+      val taskCtxOpt = Option(org.apache.spark.TaskContext.get())
+      taskCtxOpt.foreach(_.addTaskCompletionListener[Unit] { _ =>
+        if (dropped.get() > 0L)
+          log.warn(
+            s"Subscript metadata read dropped ${dropped.get()} collection element(s) whose " +
+              s"per-element WRITETIME was null at point-read time (element absent — e.g. a " +
+              s"concurrent delete). The migrator requires a quiescent source; resume/re-run once " +
+              s"writes have stopped if this is unexpected."
+          )
+        session.close()
+      })
 
-        def elementMetadata(row: Row): Map[String, (Seq[Integer], Seq[java.lang.Long])] =
-          nfInfo.map { case (name, ord, isMap, sorter) =>
-            if (row.isNullAt(ord)) name -> ((null: Seq[Integer]), (null: Seq[java.lang.Long]))
-            else {
-              val sortedKeys: IndexedSeq[Any] =
-                if (isMap)
-                  sorter
-                    .sortEntries(
-                      row.get(ord).asInstanceOf[scala.collection.Map[Any, Any]].toIndexedSeq
-                    )
-                    .map(_._1)
-                else
-                  sorter.sortElements(
-                    row.get(ord).asInstanceOf[scala.collection.Seq[Any]].toIndexedSeq
-                  )
+      val pkBindKindsArr = pkBindKinds.toArray
+      val pkOrdinalsArr = pkOrdinals.toArray
 
-              val n = sortedKeys.length
-              if (n == 0)
-                name -> ((IndexedSeq.empty[Integer], IndexedSeq.empty[java.lang.Long]))
-              else {
-                val colQ = quoteCqlIdentifier(name)
-                val projection =
-                  (0 until n)
-                    .map(_ => s"WRITETIME($colQ[?]), TTL($colQ[?])")
-                    .mkString(", ")
-                val cql =
-                  s"SELECT $projection FROM $keyspaceQ.$tableQ WHERE $whereClause"
-                val ps = stmtCache.getOrElseUpdate((name, n), session.prepare(cql))
+      // Per-column: the (possibly filtered) collection VALUE plus element-aligned TTL/WRITETIME
+      // arrays. Value and metadata are re-derived from the SAME sorted key set, so they always
+      // align; any element whose WRITETIME reads back null is dropped from both.
+      def readColumn(
+        row: Row,
+        name: String,
+        ord: Int,
+        isMap: Boolean,
+        sorter: ElementSorter[_],
+        pkBinds: Seq[AnyRef]
+      ): (Any, Seq[Integer], Seq[java.lang.Long]) = {
+        if (row.isNullAt(ord)) return (null, null, null)
 
-                // Bind order follows statement text: each key appears twice (WRITETIME, TTL),
-                // then the primary-key values for the WHERE clause.
-                val keyBinds = sortedKeys.flatMap(k => Seq(driverBindValue(k), driverBindValue(k)))
-                val pkBinds =
-                  pkOrdinals.map(o => driverBindValue(if (row.isNullAt(o)) null else row.get(o)))
-                val bound = ps.bind((keyBinds ++ pkBinds).toArray: _*)
+        // (subscript-key, retained-value): for a map the value is the map value; for a set/list the
+        // element is its own key and value.
+        val entries: IndexedSeq[(Any, Any)] =
+          if (isMap)
+            sorter.sortEntries(
+              row.get(ord).asInstanceOf[scala.collection.Map[Any, Any]].toIndexedSeq
+            )
+          else
+            sorter
+              .sortElements(row.get(ord).asInstanceOf[scala.collection.Seq[Any]].toIndexedSeq)
+              .map(e => (e, e))
 
-                val dr: DriverRow = session.execute(bound).one()
-                val ttls = new Array[Integer](n)
-                val wts = new Array[java.lang.Long](n)
-                var i = 0
-                while (i < n) {
-                  val wtIdx = 2 * i
-                  val ttlIdx = 2 * i + 1
-                  wts(i) =
-                    if (dr == null || dr.isNull(wtIdx)) null
-                    else java.lang.Long.valueOf(dr.getLong(wtIdx))
-                  ttls(i) =
-                    if (dr == null || dr.isNull(ttlIdx)) null
-                    else Integer.valueOf(dr.getInt(ttlIdx))
-                  i += 1
-                }
-                name -> ((ArraySeq.unsafeWrapArray(ttls), ArraySeq.unsafeWrapArray(wts)))
-              }
+        val n = entries.length
+        if (n == 0)
+          return (row.get(ord), IndexedSeq.empty[Integer], IndexedSeq.empty[java.lang.Long])
+
+        val colQ = quoteCqlIdentifier(name)
+        val ttls = new Array[Integer](n)
+        val wts = new Array[java.lang.Long](n)
+
+        // Read metadata in fixed-width chunks so a huge cell never exceeds the native-protocol bind
+        // marker limit and only mints a bounded set of prepared statements (one per chunk length).
+        var base = 0
+        while (base < n) {
+          val chunkLen = math.min(SubscriptKeyChunkSize, n - base)
+          val ps = stmtCache.getOrElseUpdate(
+            (name, chunkLen), {
+              val projection =
+                (0 until chunkLen).map(_ => s"WRITETIME($colQ[?]), TTL($colQ[?])").mkString(", ")
+              session.prepare(s"SELECT $projection FROM $keyspaceQ.$tableQ WHERE $whereClause")
             }
+          )
+          // Bind order follows statement text: each key twice (WRITETIME, TTL), then the PK values.
+          val keyBinds =
+            (0 until chunkLen).flatMap { j =>
+              val k = entries(base + j)._1
+              Seq(driverBindValue(k), driverBindValue(k))
+            }
+          val bound = ps
+            .bind((keyBinds ++ pkBinds).toArray: _*)
+            .setConsistencyLevel(pointReadConsistencyLevel)
+
+          val dr: DriverRow = session.execute(bound).one()
+          var j = 0
+          while (j < chunkLen) {
+            val wtIdx = 2 * j
+            val ttlIdx = 2 * j + 1
+            wts(base + j) =
+              if (dr == null || dr.isNull(wtIdx)) null
+              else java.lang.Long.valueOf(dr.getLong(wtIdx))
+            ttls(base + j) =
+              if (dr == null || dr.isNull(ttlIdx)) null
+              else Integer.valueOf(dr.getInt(ttlIdx))
+            j += 1
+          }
+          base += chunkLen
+        }
+
+        // A null WRITETIME means the element no longer exists at the point-read snapshot (element
+        // absent, e.g. a concurrent delete). Drop it from BOTH the value and the metadata so the
+        // arrays stay aligned and the job does not abort. Under a quiescent source (the documented
+        // requirement) `keep.length == n`, so the value/metadata are byte-for-byte the base scan.
+        // NOTE: a null TTL is retained — it legitimately means "no TTL / permanent element".
+        val keptIdx = (0 until n).filter(i => wts(i) != null)
+        if (keptIdx.length == n) {
+          (row.get(ord), ArraySeq.unsafeWrapArray(ttls), ArraySeq.unsafeWrapArray(wts))
+        } else {
+          dropped.addAndGet((n - keptIdx.length).toLong)
+          val value: Any =
+            if (isMap)
+              keptIdx.map(i => entries(i)._1 -> entries(i)._2).to(scala.collection.immutable.Map)
+            else
+              keptIdx.map(i => entries(i)._2).toVector
+          (
+            value,
+            ArraySeq.unsafeWrapArray(keptIdx.map(ttls).toArray),
+            ArraySeq.unsafeWrapArray(keptIdx.map(wts).toArray)
+          )
+        }
+      }
+
+      rows.map { row =>
+        // PK binds are identical for every collection column in a row, so compute them once.
+        val pkBinds: Seq[AnyRef] =
+          pkOrdinalsArr.indices.map { i =>
+            val o = pkOrdinalsArr(i)
+            val raw = if (row.isNullAt(o)) null else row.get(o)
+            val converted: Any = (pkBindKindsArr(i), raw) match {
+              case (_, null)              => null
+              case (1, l: Long)           => java.time.Instant.ofEpochMilli(l)
+              case (1, l: java.lang.Long) => java.time.Instant.ofEpochMilli(l.longValue)
+              case (2, b: Array[Byte])    => java.nio.ByteBuffer.wrap(b)
+              case (_, v)                 => v
+            }
+            driverBindValue(converted)
+          }
+
+        val meta: Map[String, (Any, Seq[Integer], Seq[java.lang.Long])] =
+          nfInfo.map { case (name, ord, isMap, sorter) =>
+            name -> readColumn(row, name, ord, isMap, sorter, pkBinds)
           }.toMap
 
-        rows
-          .map { row =>
-            val meta = elementMetadata(row)
-            val values = targetFields.map { f =>
-              collectionOfSidecar(f.name) match {
-                case Some((col, isTtl)) =>
-                  val (ttlArr, wtArr) = meta(col)
-                  if (isTtl) ttlArr else wtArr
-                case None =>
-                  row.get(baseFieldIndex(f.name))
-              }
-            }
-            Row.fromSeq(ArraySeq.unsafeWrapArray(values.asInstanceOf[Array[Any]]))
+        val values = targetFields.map { f =>
+          collectionOfSidecar(f.name) match {
+            case Some((col, isTtl)) =>
+              val (_, ttlArr, wtArr) = meta(col)
+              if (isTtl) ttlArr else wtArr
+            case None =>
+              if (nfNames.contains(f.name)) meta(f.name)._1
+              else row.get(baseFieldIndex(f.name))
           }
-          .toList
-          .iterator
+        }
+        Row.fromSeq(ArraySeq.unsafeWrapArray(values.asInstanceOf[Array[Any]]))
       }
     }
   }
@@ -854,8 +960,13 @@ object Cassandra {
     }
 
     def rowsFrom(elements: IndexedSeq[Any], rebuild: Seq[Any] => Any): Seq[Row] = {
+      // Both sidecars must be element-aligned. On every real read path `TTL(col)` returns a list the
+      // same length as the collection (null entries for elements with no TTL), so an empty/short TTL
+      // sidecar alongside real writetimes signals malformed input (e.g. foreign/hand-crafted
+      // Parquet). Do NOT treat a missing TTL array as "all permanent (TTL 0)" — that would silently
+      // strip expiry from every element; fail loudly instead.
       require(
-        wtSeq.length == elements.length && (ttlSeq.isEmpty || ttlSeq.length == elements.length),
+        wtSeq.length == elements.length && ttlSeq.length == elements.length,
         s"Collection metadata length mismatch for a per-element collection column: " +
           s"${elements.length} elements but ${wtSeq.length} writetimes / ${ttlSeq.length} ttls. " +
           "Element<->timestamp alignment cannot be guaranteed; aborting to avoid silent data loss."

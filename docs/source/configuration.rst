@@ -105,6 +105,21 @@ A source of type ``cassandra`` can be used together with a target of type ``cass
     # on the source or pre-existing on the target are not reconciled. Very large non-frozen
     # collections are expanded into up to one update per distinct element TTL/WRITETIME, which can
     # be memory- and throughput-intensive. Has no effect unless preserveTimestamps is also true.
+    #
+    # Source-quiescence is REQUIRED. On the ScyllaDB 2026.2+ subscript path, element values and their
+    # metadata are read in two phases (a base scan then per-row point reads); a concurrent update can
+    # yield a stale value with a fresh writetime, and an element deleted between the two reads is
+    # dropped (logged) rather than aborting the run. On the Cassandra 5.0+ array path both are read in
+    # one scan. Either way, stop writes to the source before migrating.
+    #
+    # TTL note: TTLs are read as remaining seconds and re-applied on write, so long-running migrations
+    # (and validation) see the clock advance between read and write/compare; use validation's
+    # ttlToleranceMillis to absorb this drift.
+    #
+    # Validation: per-element collection TTL/WRITETIME are compared only when the endpoints accept the
+    # collection-wide WRITETIME(col)/TTL(col) form (Cassandra 5.0+). Against ScyllaDB 2026.2+ (subscript
+    # only), the validator compares non-frozen collection columns by VALUE only and copyMissingRows for
+    # such tables is rejected (re-run the migration to converge instead).
     # Defaults to false.
     preserveCollectionTimestamps: false
     # Number of splits to use - this should be at minimum the amount of cores
