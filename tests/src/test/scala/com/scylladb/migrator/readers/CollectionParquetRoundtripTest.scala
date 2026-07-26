@@ -162,6 +162,58 @@ class CollectionParquetRoundtripTest extends munit.FunSuite {
     assert(ex.getMessage.contains(Cassandra.CollectionKindMetaKey))
   }
 
+  /** A mixed scalar+collection row whose ONLY live cells are collection elements: `name` is null,
+    * so the scalar explode yields a single all-null group with an Unset writetime. Its base row is
+    * a bare primary-key marker whose liveness must be derived from the collection cells.
+    */
+  private def mixedRowWithNoLiveScalar(tagTtls: Seq[Int]) = {
+    val rows = java.util.Arrays.asList(
+      Row(
+        "r1",
+        null,
+        null,
+        null,
+        Seq(10, 20),
+        tagTtls,
+        Seq(100L, 200L),
+        null,
+        null,
+        null
+      )
+    )
+    spark.createDataFrame(rows, schema)
+  }
+
+  test("mixed-table base marker takes BOTH writetime and TTL from the collection elements") {
+    // Regression: the marker's TTL was hardcoded to 0 (= permanently live) in this branch even
+    // though the row's liveness comes only from TTL'd collection cells. Once those expired, the
+    // target kept a live, empty, never-expiring row the source no longer had.
+    val (baseRdd, baseSchema, _, _) =
+      Cassandra.explodeRowsFromPerColumnMetaCollectionAware(
+        spark,
+        mixedRowWithNoLiveScalar(Seq(60, 120))
+      )
+
+    assertEquals(baseSchema.fieldNames.toSeq, Seq("id", "name", "ttl", "writetime"))
+    val baseRow = baseRdd.collect().head
+    // Writetime floored to the max element writetime, TTL to the max element TTL (latest expiry).
+    assertEquals(baseRow.getLong(3), 200L)
+    assertEquals(baseRow.getInt(2), 120)
+  }
+
+  test("mixed-table base marker stays permanent when any element has no TTL") {
+    // TTL 0 / absent means a permanent element, so the row marker must outlive every TTL'd one.
+    val (baseRdd, _, _, _) =
+      Cassandra.explodeRowsFromPerColumnMetaCollectionAware(
+        spark,
+        mixedRowWithNoLiveScalar(Seq(0, 120))
+      )
+
+    val baseRow = baseRdd.collect().head
+    assertEquals(baseRow.getInt(2), 0)
+    assertEquals(baseRow.getLong(3), 200L)
+  }
+
   test("no per-element columns => base explode matches scalar path with no append passes") {
     val scalarSchema = StructType(
       Seq(

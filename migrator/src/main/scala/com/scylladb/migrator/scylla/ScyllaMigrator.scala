@@ -170,11 +170,24 @@ trait ScyllaMigratorBase {
         // will reprocess the whole input (safe & idempotent, but with no savepoint speedup) — say
         // so rather than let operators be surprised by a full re-run.
         tokenRangeAccumulator.foreach { acc =>
-          if (acc.value.get.isEmpty)
+          val recorded = acc.value.get.size
+          val lastColumn = sourceDF.collectionAppendWrites.last.columnName
+          if (recorded == 0)
             log.warn(
               "Collection-append savepoint pass recorded no token ranges (e.g. the last collection " +
-                "column was null/empty for every row). A resume will reprocess the whole input: " +
-                "safe and idempotent, but without savepoint speedup."
+                s"column '$lastColumn' was null/empty for every row). A resume will reprocess the " +
+                "whole input: safe and idempotent, but without savepoint speedup."
+            )
+          else
+            // Report the count, not just the all-empty case: ranges are recorded only where the
+            // final append pass emitted rows, so a SPARSELY populated last collection column yields
+            // proportionally few savepoints and a resume re-does most of the table. Operators need
+            // the number to judge that, since it is safe-but-slow rather than incorrect.
+            log.info(
+              s"Collection-append savepoint pass recorded $recorded token range(s). Ranges are " +
+                s"recorded only where the final collection column ('$lastColumn') was non-empty, so " +
+                "a sparsely populated collection yields few savepoints and a resume will reprocess " +
+                "most of the input (safe and idempotent, but slow)."
             )
         }
       }

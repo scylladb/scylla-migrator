@@ -59,10 +59,15 @@ object RowComparisonFailure {
               s"$fieldName ($ttlDiff millis)"
             }
             .mkString(", ")}")
+
+    /** WRITETIME is stored in MICROseconds, and the diff is reported in that same unit (the
+      * `writetimeToleranceMillis` config is converted to micros for the comparison). Labelling it
+      * "millis" would overstate every difference by 1000x and cause the tolerance to be mis-tuned.
+      */
     case class DifferingWritetimes(details: List[(String, Long)])
         extends Item(s"Differing WRITETIMEs: ${details
             .map { case (fieldName, writeTimeDiff) =>
-              s"$fieldName ($writeTimeDiff millis)"
+              s"$fieldName ($writeTimeDiff micros)"
             }
             .mkString(", ")}")
 
@@ -426,13 +431,32 @@ object RowComparisonFailure {
                 // agree; `valueScaleToMillis` is 1 for values already in the tolerance unit.
                 val exceeding =
                   ls.zip(rs)
-                    .map { case (l, r) => math.abs(l - r) * valueScaleToMillis }
+                    .map { case (l, r) => saturatingScaledAbsDiff(l, r, valueScaleToMillis) }
                     .filter(_ > tolerance)
                 if (exceeding.isEmpty) None
                 else Some(MetadataDiff.TimeDiff(name, exceeding.max))
               }
           }
         }
+
+  /** `|l - r| * scale`, saturating at `Long.MaxValue` instead of wrapping.
+    *
+    * Plain `math.abs(l - r) * scale` can overflow on adversarial metadata (e.g. a hand-crafted
+    * Parquet writetime of `Long.MinValue`), and a wrapped NEGATIVE difference silently passes the
+    * `diff > tolerance` test — reporting a corrupt row as identical. Saturating keeps the
+    * comparison monotonic, and `Long.MaxValue` exceeds every valid tolerance so such a row is
+    * always flagged. The happy path allocates nothing (no `BigInt`), which matters because this
+    * runs per element of every per-element metadata array.
+    */
+  private def saturatingScaledAbsDiff(l: Long, r: Long, scale: Long): Long =
+    try {
+      val diff = Math.subtractExact(l, r)
+      // `math.abs(Long.MinValue)` is itself negative; `subtractExact` permits that exact value.
+      if (diff == Long.MinValue) Long.MaxValue
+      else Math.multiplyExact(math.abs(diff), scale)
+    } catch {
+      case _: ArithmeticException => Long.MaxValue
+    }
 
   /** @param leftValue
     *   First value to compare

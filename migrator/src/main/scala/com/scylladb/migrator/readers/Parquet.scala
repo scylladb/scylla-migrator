@@ -23,7 +23,12 @@ object Parquet {
   private[readers] def redactPathForLog(path: String): String =
     try {
       val uri = new java.net.URI(path)
-      if (uri.getScheme == null) path
+      // Fail closed on anything carrying credentials or a signed query, INCLUDING schemeless inputs
+      // that still parse (e.g. `//user:secret@host/p`) — those would otherwise be echoed verbatim.
+      if (uri.getRawUserInfo != null || uri.getRawQuery != null || uri.getRawFragment != null)
+        "<redacted-path>"
+      else if (uri.getScheme == null)
+        if (path.contains("@") || path.contains("?")) "<redacted-path>" else path
       else {
         val authority =
           if (uri.getHost != null)
