@@ -107,14 +107,21 @@ A source of type ``cassandra`` can be used together with a target of type ``cass
     # be memory- and throughput-intensive. Has no effect unless preserveTimestamps is also true.
     #
     # Source-quiescence is REQUIRED. On the ScyllaDB 2026.2+ subscript path, element values and their
-    # metadata are read in two phases (a base scan then per-row point reads); a concurrent update can
-    # yield a stale value with a fresh writetime, and an element deleted between the two reads is
-    # dropped (logged) rather than aborting the run. On the Cassandra 5.0+ array path both are read in
-    # one scan. Either way, stop writes to the source before migrating.
+    # metadata are read in two phases (a base scan then per-row point reads), so a concurrent write in
+    # between can: (a) delete an element -> it is dropped from the migrated row and logged; (b) add an
+    # element -> it is never queried and is silently absent (it is not in the base scan, so it is not
+    # counted in the dropped-element warning); (c) update a MAP value in place -> the older value can
+    # be paired with the newer writetime, which then permanently shadows the correct value on the
+    # target. Sets are immune to (c) because an element's value IS its identity. On the Cassandra 5.0+
+    # array path values and metadata come from one scan, so none of these apply. Stop writes to the
+    # source before migrating.
     #
     # TTL note: TTLs are read as remaining seconds and re-applied on write, so long-running migrations
     # (and validation) see the clock advance between read and write/compare; use validation's
-    # ttlToleranceMillis to absorb this drift.
+    # ttlToleranceMillis to absorb this drift. A short-lived element can even expire on the source
+    # between the read and the append, in which case it is still written to the target with its
+    # remaining-TTL-at-read-time and briefly reappears there. Prefer migrating tables whose collection
+    # TTLs are comfortably longer than the expected job duration.
     #
     # Validation: per-element collection TTL/WRITETIME are compared only when the endpoints accept the
     # collection-wide WRITETIME(col)/TTL(col) form (Cassandra 5.0+). Against ScyllaDB 2026.2+ (subscript

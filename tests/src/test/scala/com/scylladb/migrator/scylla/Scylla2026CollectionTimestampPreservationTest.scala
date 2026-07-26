@@ -69,22 +69,25 @@ class Scylla2026CollectionTimestampPreservationTest extends munit.FunSuite {
     nameWt: Long
   )
 
+  private def readMeta(session: CqlSession, table: String, id: String): CollectionMeta =
+    readMetaWhere(session, table, s"id = '${id}'")
+
   /** Read per-element metadata via ScyllaDB's subscript form. Arrays are ordered by ascending set
     * element / map key so source and target compare element-wise.
     */
-  private def readMeta(session: CqlSession, table: String, id: String): CollectionMeta = {
+  private def readMetaWhere(session: CqlSession, table: String, where: String): CollectionMeta = {
     val base: Row = session
       .execute(
         s"SELECT name, WRITETIME(name) AS name_wt, tags, attrs " +
-          s"FROM ${keyspace}.${table} WHERE id = '${id}'"
+          s"FROM ${keyspace}.${table} WHERE ${where}"
       )
       .one()
-    assert(base != null, s"expected a row for id=${id} in ${table}")
+    assert(base != null, s"expected a row matching '${where}' in ${table}")
 
     val tags = base.getSet("tags", classOf[Integer]).asScala.toList.map(_.intValue()).sorted
     val tagsWt = tags.map { t =>
       session
-        .execute(s"SELECT WRITETIME(tags[${t}]) AS wt FROM ${keyspace}.${table} WHERE id = '${id}'")
+        .execute(s"SELECT WRITETIME(tags[${t}]) AS wt FROM ${keyspace}.${table} WHERE ${where}")
         .one()
         .getLong("wt")
     }
@@ -99,7 +102,7 @@ class Scylla2026CollectionTimestampPreservationTest extends munit.FunSuite {
       val r = session
         .execute(
           s"SELECT WRITETIME(attrs['${k}']) AS wt, TTL(attrs['${k}']) AS ttl " +
-            s"FROM ${keyspace}.${table} WHERE id = '${id}'"
+            s"FROM ${keyspace}.${table} WHERE ${where}"
         )
         .one()
       val ttl: Integer = if (r.isNull("ttl")) null else Integer.valueOf(r.getInt("ttl"))
@@ -187,5 +190,59 @@ class Scylla2026CollectionTimestampPreservationTest extends munit.FunSuite {
         )
       }
     }
+  }
+
+  /** The subscript path re-binds each row's primary key into per-row point reads. The connector's
+    * base scan decodes `uuid` to a `String` and `timestamp` to epoch-millis, neither of which has a
+    * matching driver codec, so binding them by runtime class throws `CodecNotFoundException` on the
+    * first point read. This covers the declared-type conversion for both; the `id text` test above
+    * cannot, because text is the one type that happens to bind correctly either way.
+    */
+  test("preserves per-element metadata for a compound uuid + timestamp primary key") {
+    val session = scylla2026()
+    for (table <- Seq(sourceTbl, targetTbl)) {
+      session.execute(s"DROP TABLE IF EXISTS ${keyspace}.${table}")
+      session.execute(
+        s"CREATE TABLE ${keyspace}.${table} " +
+          "(id uuid, ts timestamp, name text, tags set<int>, attrs map<text,int>, " +
+          "PRIMARY KEY ((id), ts))"
+      )
+    }
+
+    val id = "8f2a6c1e-3b7d-4a52-9c0e-1d4f6a8b2c39"
+    val ts = "2024-03-05T11:22:33.000Z"
+    val where = s"id = ${id} AND ts = '${ts}'"
+
+    session.execute(
+      s"INSERT INTO ${keyspace}.${sourceTbl} (id, ts, name) VALUES (${id}, '${ts}', 'alice') " +
+        "USING TIMESTAMP 1000000000000"
+    )
+    Seq(30 -> 3000000000000L, 10 -> 1000000000000L, 20 -> 2000000000000L).foreach { case (v, wt) =>
+      session.execute(
+        s"UPDATE ${keyspace}.${sourceTbl} USING TIMESTAMP ${wt} SET tags = tags + {${v}} " +
+          s"WHERE ${where}"
+      )
+    }
+    Seq(("b", 2, 2000000000000L, Some(1000000)), ("a", 1, 1000000000000L, None)).foreach {
+      case (k, v, wt, ttlOpt) =>
+        val using =
+          ttlOpt.fold(s"USING TIMESTAMP ${wt}")(t => s"USING TIMESTAMP ${wt} AND TTL ${t}")
+        session.execute(
+          s"UPDATE ${keyspace}.${sourceTbl} ${using} SET attrs = attrs + {'${k}': ${v}} " +
+            s"WHERE ${where}"
+        )
+    }
+
+    successfullyPerformMigration(configFile)
+
+    val src = readMetaWhere(session, sourceTbl, where)
+    val dst = readMetaWhere(session, targetTbl, where)
+
+    assertEquals(dst.name, src.name)
+    assertEquals(dst.nameWt, src.nameWt, "scalar WRITETIME must be preserved")
+    assertEquals(dst.tags, src.tags, "set elements must match")
+    assertEquals(dst.tagsWt, src.tagsWt, "set element WRITETIMEs must be preserved")
+    assertEquals(dst.attrs, src.attrs, "map entries must match")
+    assertEquals(dst.attrsWt, src.attrsWt, "map element WRITETIMEs must be preserved")
   }
 }

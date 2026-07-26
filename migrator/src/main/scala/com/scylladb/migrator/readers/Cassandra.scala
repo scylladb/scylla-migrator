@@ -78,12 +78,24 @@ object Cassandra {
     * distinct prepared statements (one per chunk length). Override with
     * `-Dscylla.migrator.subscriptKeyChunkSize=<n>`.
     */
-  private val SubscriptKeyChunkSize: Int =
-    sys.props
-      .get("scylla.migrator.subscriptKeyChunkSize")
-      .flatMap(s => scala.util.Try(s.trim.toInt).toOption)
-      .filter(_ > 0)
-      .getOrElse(100)
+  private val SubscriptKeyChunkSize: Int = {
+    // Each key contributes 2 markers, and the native protocol caps a statement at 65535, so anything
+    // at/above ~32K would reintroduce the very overflow this chunking prevents. Reject an
+    // out-of-range override loudly instead of silently falling back to the default.
+    val MaxChunk = 30000
+    sys.props.get("scylla.migrator.subscriptKeyChunkSize") match {
+      case None => 100
+      case Some(raw) =>
+        val parsed = scala.util.Try(raw.trim.toInt).toOption
+        parsed.filter(n => n > 0 && n <= MaxChunk).getOrElse {
+          throw new IllegalArgumentException(
+            s"-Dscylla.migrator.subscriptKeyChunkSize=$raw is invalid: expected an integer in " +
+              s"[1, $MaxChunk]. Each collection key uses 2 bind markers, so a larger chunk can " +
+              "exceed the native-protocol limit of 65535 markers per statement."
+          )
+        }
+    }
+  }
 
   case class Selection(
     columnRefs: List[ColumnRef],
@@ -112,6 +124,39 @@ object Cassandra {
 
   private def quoteCqlIdentifier(id: String): String =
     "\"" + id.replace("\"", "\"\"") + "\""
+
+  /** Enforce the element-count fail-safe on the RAW decoded collection size, BEFORE any
+    * copy/sort/group/point-read, so a pathological cell fails fast instead of OOMing (or issuing
+    * thousands of point reads) first. Object-level so every path that expands a non-frozen
+    * collection applies the same cap: the append builder ([[collectionAppendRows]]) and the
+    * ScyllaDB-2026.2 subscript metadata read ([[readRawRddSubscript]]).
+    */
+  private def enforceSizeLimits(size: Int): Unit = {
+    if (LargeCollectionHardLimit > 0 && size > LargeCollectionHardLimit)
+      throw new IllegalStateException(
+        s"Non-frozen collection cell has $size elements, exceeding the hard limit of " +
+          s"$LargeCollectionHardLimit. Per-element TTL/WRITETIME preservation expands each element " +
+          "into collection-append updates, and a collection this large risks executor OOM / write " +
+          "amplification. Raise or disable the cap with -Dscylla.migrator.maxCollectionElements=<n> " +
+          "(non-positive disables) if this size is expected. Note: the property must be set on the " +
+          "EXECUTORS (spark.executor.extraJavaOptions) — it is read where the expansion happens."
+      )
+    if (size > LargeCollectionWarnThreshold)
+      log.warn(
+        s"Non-frozen collection cell has $size elements; per-element TTL/WRITETIME " +
+          "preservation may expand it into up to that many separate collection-append updates " +
+          "(one per distinct TTL/WRITETIME group). Very large collections can cause high " +
+          "executor memory/GC pressure and slow writes."
+      )
+  }
+
+  /** Number of elements in a decoded non-frozen collection value (0 for anything unexpected). */
+  private def decodedCollectionSize(value: Any): Int = value match {
+    case m: scala.collection.Map[_, _] => m.size
+    case s: scala.collection.Seq[_]    => s.size
+    case s: scala.collection.Set[_]    => s.size
+    case _                             => 0
+  }
 
   /** Decide how to read per-element collection metadata from the source by PREPARing (no execution,
     * no data read) probe statements, so the choice is made before the distributed read:
@@ -155,9 +200,8 @@ object Cassandra {
 
   /** Bind a runtime value into a driver statement by its Java runtime class. Collection keys are
     * limited to the text/int family (see [[mapKeyOrdering]]), which already map to default driver
-    * codecs. Primary-key values are pre-converted by the caller for the two widened/decoded types
-    * that would otherwise miss a codec (`timestamp`->Instant, `blob`->ByteBuffer); all other PK
-    * types reach here already codec-compatible.
+    * codecs. Primary-key values must be pre-converted by [[driverPkBindValue]] first: the base scan
+    * decodes several CQL types into Java types the driver has no codec for.
     */
   private def driverBindValue(v: Any): AnyRef = v match {
     case null                 => null
@@ -169,6 +213,100 @@ object Cassandra {
     case i: Int               => java.lang.Integer.valueOf(i)
     case l: Long              => java.lang.Long.valueOf(l)
     case other                => other.asInstanceOf[AnyRef]
+  }
+
+  /** How a primary-key value must be converted before it can be bound into a subscript point read.
+    *
+    * The base scan hands us values already decoded by the connector's `CassandraSQLRow` (and then
+    * by [[convertValue]]/[[widenTimestampValue]]), which turns several CQL types into Java types
+    * the driver has NO codec for — binding them by runtime class throws `CodecNotFoundException`
+    * deep inside a Spark task. Verified against spark-scylladb-connector 4.1.3:
+    *
+    *   - `uuid`/`timeuuid` -> `String` (`UUID.toString`)
+    *   - `inet` -> `String` (`InetAddress.getHostAddress`)
+    *   - `timestamp` -> `java.sql.Timestamp` -> `Long` epoch-millis
+    *   - `date` -> `java.sql.Date` -> (a `java.util.Date`, so also) `Long` epoch-millis
+    *   - `time` -> `Long` nanoseconds-of-day
+    *   - `varint`/`decimal` -> `org.apache.spark.sql.types.Decimal`
+    *   - `blob` -> `Array[Byte]`
+    *
+    * Note that `bigint`, `timestamp`, `date` and `time` all arrive as `Long`, which is exactly why
+    * the conversion must be driven by the DECLARED column type rather than the runtime class.
+    */
+  private sealed trait PkBindKind
+  private object PkBindKind {
+    case object AsIs extends PkBindKind
+    case object TimestampMillis extends PkBindKind
+    case object Blob extends PkBindKind
+    case object Uuid extends PkBindKind
+    case object Inet extends PkBindKind
+    case object DateMillis extends PkBindKind
+    case object TimeNanos extends PkBindKind
+    case object VarInt extends PkBindKind
+    case object BigDecimal extends PkBindKind
+  }
+
+  /** Classify a primary-key column for point-read binding, failing fast on any type whose decoded
+    * representation we cannot map back to a driver-bindable value. Failing here (on the driver,
+    * before the distributed read) beats a `CodecNotFoundException` per task.
+    */
+  private def pkBindKindOf(column: ColumnDef): PkBindKind = {
+    // Qualified alias: several connector type names (e.g. TimestampType) collide with the
+    // `org.apache.spark.sql.types` names imported at the top of this file.
+    import com.datastax.spark.connector.{ types => cql }
+    column.columnType match {
+      case cql.TimestampType               => PkBindKind.TimestampMillis
+      case cql.BlobType                    => PkBindKind.Blob
+      case cql.UUIDType | cql.TimeUUIDType => PkBindKind.Uuid
+      case cql.InetType                    => PkBindKind.Inet
+      case cql.DateType                    => PkBindKind.DateMillis
+      case cql.TimeType                    => PkBindKind.TimeNanos
+      case cql.VarIntType                  => PkBindKind.VarInt
+      case cql.DecimalType                 => PkBindKind.BigDecimal
+      case cql.AsciiType | cql.TextType | cql.VarCharType | cql.IntType | cql.BigIntType |
+          cql.SmallIntType | cql.TinyIntType | cql.BooleanType | cql.FloatType | cql.DoubleType |
+          cql.CounterType =>
+        PkBindKind.AsIs
+      case other =>
+        throw new IllegalStateException(
+          s"preserveCollectionTimestamps against a subscript-only source (ScyllaDB 2026.2+) cannot " +
+            s"bind primary-key column '${column.columnName}' of type $other in the per-element " +
+            "metadata point read. Freeze the non-frozen collection column(s), disable " +
+            "preserveCollectionTimestamps, or migrate from a Cassandra 5.0+ source (which reads " +
+            "element metadata in a single scan and needs no point reads)."
+        )
+    }
+  }
+
+  /** Convert one decoded primary-key value into a driver-bindable value for its declared type. */
+  private def driverPkBindValue(kind: PkBindKind, raw: Any): AnyRef = {
+    val converted: Any = (kind, raw) match {
+      case (_, null)                                  => null
+      case (PkBindKind.AsIs, v)                       => v
+      case (PkBindKind.TimestampMillis, n: Number)    => java.time.Instant.ofEpochMilli(n.longValue)
+      case (PkBindKind.Blob, b: Array[Byte])          => java.nio.ByteBuffer.wrap(b)
+      case (PkBindKind.Uuid, s: String)               => java.util.UUID.fromString(s)
+      case (PkBindKind.Uuid, u: java.util.UUID)       => u
+      case (PkBindKind.Inet, s: String)               => java.net.InetAddress.getByName(s)
+      case (PkBindKind.Inet, a: java.net.InetAddress) => a
+      // `java.sql.Date.getTime` is midnight in the JVM default zone; `new java.sql.Date(millis)`
+      // is its exact inverse in that same zone, so the round-trip is lossless.
+      case (PkBindKind.DateMillis, n: Number)        => new java.sql.Date(n.longValue).toLocalDate
+      case (PkBindKind.DateMillis, d: java.sql.Date) => d.toLocalDate
+      case (PkBindKind.TimeNanos, n: Number)         => java.time.LocalTime.ofNanoOfDay(n.longValue)
+      case (PkBindKind.VarInt, d: org.apache.spark.sql.types.Decimal) =>
+        d.toJavaBigDecimal.toBigIntegerExact
+      case (PkBindKind.VarInt, b: java.math.BigInteger)                   => b
+      case (PkBindKind.BigDecimal, d: org.apache.spark.sql.types.Decimal) => d.toJavaBigDecimal
+      case (PkBindKind.BigDecimal, b: java.math.BigDecimal)               => b
+      case (kind, v) =>
+        throw new IllegalStateException(
+          s"Primary-key value of runtime type ${v.getClass.getName} does not match its expected " +
+            s"decoded representation for bind kind $kind. This is a migrator bug; please report it " +
+            "with the source table's schema."
+        )
+    }
+    driverBindValue(converted)
   }
 
   /** Read the source into an `RDD[Row]` matching `selection.schema` when the server only supports
@@ -240,19 +378,9 @@ object Cassandra {
     val pkColumns: Seq[ColumnDef] = tableDef.partitionKey ++ tableDef.clusteringColumns
     val pkNames: Seq[String] = pkColumns.map(_.columnName)
     val pkOrdinals: Seq[Int] = pkNames.map(baseFieldIndex)
-    // Per-PK bind conversion tag. The base scan already widened `timestamp`->Long(epoch-ms) and
-    // yields `blob`->Array[Byte], neither of which has a matching driver default codec, so binding
-    // them by runtime class fails (Long is bound as bigint, byte[] has no codec). Convert those two
-    // back to the driver-native type (Instant / ByteBuffer) before binding; everything else
-    // (text/int/bigint/uuid/inet/decimal/varint/boolean/float/double) is already codec-compatible.
-    //   0 = pass-through, 1 = timestamp(Long->Instant), 2 = blob(Array[Byte]->ByteBuffer)
-    val pkBindKinds: Seq[Int] = pkColumns.map { c =>
-      c.columnType match {
-        case com.datastax.spark.connector.types.TimestampType => 1
-        case com.datastax.spark.connector.types.BlobType      => 2
-        case _                                                => 0
-      }
-    }
+    // Per-PK bind conversion, driven by the DECLARED column type (see `pkBindKindOf`). Resolved on
+    // the driver so an unbindable primary-key type aborts before the distributed read starts.
+    val pkBindKinds: Seq[PkBindKind] = pkColumns.map(pkBindKindOf)
     // (columnName, ordinal-in-base-row, isMap, elementSorter)
     val nfInfo: Seq[(String, Int, Boolean, ElementSorter[_])] =
       nonFrozen.map { c =>
@@ -291,17 +419,31 @@ object Cassandra {
       val session = connector.openSession()
       val stmtCache = mutable.Map.empty[(String, Int), PreparedStatement]
       val dropped = new java.util.concurrent.atomic.AtomicLong(0L)
-      val taskCtxOpt = Option(org.apache.spark.TaskContext.get())
-      taskCtxOpt.foreach(_.addTaskCompletionListener[Unit] { _ =>
-        if (dropped.get() > 0L)
-          log.warn(
-            s"Subscript metadata read dropped ${dropped.get()} collection element(s) whose " +
-              s"per-element WRITETIME was null at point-read time (element absent — e.g. a " +
-              s"concurrent delete). The migrator requires a quiescent source; resume/re-run once " +
-              s"writes have stopped if this is unexpected."
+      // The session must outlive this method (rows are consumed lazily downstream), so it can only
+      // be released by a task-completion hook. Without a TaskContext nothing would ever close it —
+      // refuse rather than leak a pooled session, and rather than close it early and break the
+      // point reads mid-iteration.
+      org.apache.spark.TaskContext.get() match {
+        case null =>
+          session.close()
+          throw new IllegalStateException(
+            "Subscript per-element metadata read requires a Spark TaskContext (it holds a CQL " +
+              "session open for the lifetime of the partition). This partition was evaluated " +
+              "outside a Spark task, which is unsupported."
           )
-        session.close()
-      })
+        case ctx =>
+          ctx.addTaskCompletionListener[Unit] { _ =>
+            if (dropped.get() > 0L)
+              log.warn(
+                s"Subscript metadata read dropped ${dropped.get()} collection element(s) whose " +
+                  s"per-element WRITETIME was null at point-read time (element absent — e.g. a " +
+                  s"concurrent delete). NOTE: elements ADDED to the source after the base scan are " +
+                  s"invisible to this read and are not counted here. The migrator requires a " +
+                  s"quiescent source; re-run once writes have stopped if this is unexpected."
+              )
+            session.close()
+          }
+      }
 
       val pkBindKindsArr = pkBindKinds.toArray
       val pkOrdinalsArr = pkOrdinals.toArray
@@ -318,6 +460,12 @@ object Cassandra {
         pkBinds: Seq[AnyRef]
       ): (Any, Seq[Integer], Seq[java.lang.Long]) = {
         if (row.isNullAt(ord)) return (null, null, null)
+
+        // Apply the element-count fail-safe on the RAW decoded size FIRST. Everything below this
+        // line is proportional to the element count — the decorate-sort, two boxed metadata arrays,
+        // and ceil(n / SubscriptKeyChunkSize) synchronous point reads — so checking here (rather
+        // than later in `collectionAppendRows`) is what makes the cap actually protective.
+        enforceSizeLimits(decodedCollectionSize(row.get(ord)))
 
         // (subscript-key, retained-value): for a map the value is the map value; for a set/list the
         // element is its own key and value.
@@ -405,15 +553,7 @@ object Cassandra {
         val pkBinds: Seq[AnyRef] =
           pkOrdinalsArr.indices.map { i =>
             val o = pkOrdinalsArr(i)
-            val raw = if (row.isNullAt(o)) null else row.get(o)
-            val converted: Any = (pkBindKindsArr(i), raw) match {
-              case (_, null)              => null
-              case (1, l: Long)           => java.time.Instant.ofEpochMilli(l)
-              case (1, l: java.lang.Long) => java.time.Instant.ofEpochMilli(l.longValue)
-              case (2, b: Array[Byte])    => java.nio.ByteBuffer.wrap(b)
-              case (_, v)                 => v
-            }
-            driverBindValue(converted)
+            driverPkBindValue(pkBindKindsArr(i), if (row.isNullAt(o)) null else row.get(o))
           }
 
         val meta: Map[String, (Any, Seq[Integer], Seq[java.lang.Long])] =
@@ -502,15 +642,28 @@ object Cassandra {
     * for key types with a reproducible ordering (see [[mapKeyOrdering]]).
     */
   private def unsupportedCollectionReason(column: ColumnDef): Option[String] =
-    column.columnType match {
-      case _: CqlListType[_] =>
-        Some(s"'${column.columnName}' (non-frozen list)")
-      case m: CqlMapType[_, _] if mapKeyOrdering(m.keyType).isEmpty =>
-        Some(s"'${column.columnName}' (non-frozen map with unsupported key type ${m.keyType})")
-      case s: CqlSetType[_] if mapKeyOrdering(s.elemType).isEmpty =>
-        Some(s"'${column.columnName}' (non-frozen set with unsupported element type ${s.elemType})")
-      case _ => None
-    }
+    if (column.isStatic)
+      // A static cell belongs to the PARTITION, but the base scan yields it once per clustering row,
+      // so the append pass would replay it once per row. CQL also rejects an UPDATE that restricts
+      // clustering columns while modifying only static columns, which is exactly the statement the
+      // connector would emit here (the append schema carries the full primary key).
+      Some(
+        s"'${column.columnName}' (static non-frozen collection: per-element appends would be " +
+          "replayed once per clustering row, and CQL forbids restricting clustering columns in an " +
+          "UPDATE that modifies only static columns)"
+      )
+    else
+      column.columnType match {
+        case _: CqlListType[_] =>
+          Some(s"'${column.columnName}' (non-frozen list)")
+        case m: CqlMapType[_, _] if mapKeyOrdering(m.keyType).isEmpty =>
+          Some(s"'${column.columnName}' (non-frozen map with unsupported key type ${m.keyType})")
+        case s: CqlSetType[_] if mapKeyOrdering(s.elemType).isEmpty =>
+          Some(
+            s"'${column.columnName}' (non-frozen set with unsupported element type ${s.elemType})"
+          )
+        case _ => None
+      }
 
   /** The ordering used to re-align a non-frozen collection's decoded elements with its
     * element-order `WRITETIME`/`TTL` lists: map keys for maps, element values for sets (Cassandra
@@ -603,6 +756,15 @@ object Cassandra {
     // via collection-append writes.
     val nonFrozen = nonFrozenCollectionColumns(tableDef)
 
+    // Multi-cell columns that are NOT collections: non-frozen UDTs. The connector reports
+    // `isCollection == false` for `UserDefinedType` while `isMultiCell == !isFrozen`, so these are
+    // invisible to `nonFrozenCollectionColumns` yet their TTL()/WRITETIME() still return one value
+    // PER SUBFIELD. Left unguarded they would be declared with SCALAR metadata sidecars against
+    // list-valued metadata. The per-element machinery is collection-shaped (`col = col + ?`) and
+    // cannot reproduce UDT subfield identity, so reject rather than mis-handle.
+    val multiCellNonCollection =
+      tableDef.regularColumns.filter(c => c.columnType.isMultiCell && !c.columnType.isCollection)
+
     // Timestamp preservation appends internal metadata columns named `ttl`/`writetime`, plus a
     // `<col>_ttl`/`<col>_writetime` sidecar for every regular column. `ttl` and `writetime` are
     // non-reserved CQL keywords, so a real column may legitimately be named `ttl`/`writetime` (or
@@ -634,6 +796,16 @@ object Cassandra {
             "'<column>_ttl'/'<column>_writetime'. The source table has column(s) colliding with " +
             s"these reserved names: ${reservedNameCollisions.mkString(", ")}. Rename the source " +
             "column(s), or set 'preserveTimestamps' to false to continue."
+        )
+      )
+    else if (preserveTimesRequest && multiCellNonCollection.nonEmpty)
+      Left(
+        new Exception(
+          "TTL/Writetime preservation is unsupported for non-frozen (multi-cell) non-collection " +
+            s"column(s): ${multiCellNonCollection.map(_.columnName).mkString(", ")} (e.g. a " +
+            "non-frozen UDT). Their TTL()/WRITETIME() return one value per subfield, which cannot " +
+            "be represented as a scalar or replayed as a collection append. Freeze the column(s), " +
+            "or set 'preserveTimestamps' to false to continue."
         )
       )
     else if (nonFrozen.nonEmpty && preserveTimesRequest && !preserveCollectionTimesRequest)
@@ -813,6 +985,25 @@ object Cassandra {
     if (wts.hasNext) Some(wts.max) else None
   }
 
+  /** TTL to stamp on a base row whose liveness comes only from collection cells (no live scalar
+    * cell in its group). Row-marker liveness must reflect the LATEST cell expiry: permanent when
+    * any element is permanent (TTL 0/absent), otherwise the maximum finite element TTL. A hardcoded
+    * TTL 0 would leave the target with an empty, never-expiring row once every TTL'd element has
+    * expired, while the source — whose liveness came only from those cells — has none (C1).
+    */
+  private def markerTtlFor(row: Row, perElementTtlOrdinals: Seq[Int]): Integer = {
+    val ttls = perElementTtlOrdinals.iterator.flatMap { o =>
+      if (o < 0 || o >= row.length || row.isNullAt(o)) Iterator.empty
+      else
+        asNumberSeq(row.get(o)).iterator.map {
+          case n: Number => n.intValue()
+          case _         => 0 // null TTL slot => no TTL => permanent
+        }
+    }.toVector
+    if (ttls.isEmpty || ttls.exists(_ <= 0)) Integer.valueOf(0)
+    else Integer.valueOf(ttls.max)
+  }
+
   def explodeBaseRow(
     row: Row,
     baseSchema: StructType,
@@ -831,11 +1022,18 @@ object Cassandra {
       // columns were all null (a live scalar cell always has a writetime).
       maxPerElementWritetime(row, perElementWritetimeOrdinals) match {
         case Some(wt) =>
+          // C1 applies here too: such a group also carries `explodeRow`'s `ttl.getOrElse(0)` — i.e.
+          // TTL 0 = a permanently live row marker — even though its liveness comes solely from
+          // collection cells that DO expire. Stamp both dimensions from the collection, exactly as
+          // the collection-only branch below does, or the target keeps an empty never-expiring row.
+          val collectionTtl = markerTtlFor(row, perElementTtlOrdinals)
           rows.map { r =>
             val vals = r.toSeq.toArray
             val wtIdx = vals.length - 1
+            val ttlIdx = vals.length - 2
             if (vals(wtIdx) == CassandraOption.Unset) {
-              vals(wtIdx) = java.lang.Long.valueOf(wt)
+              vals(wtIdx)  = java.lang.Long.valueOf(wt)
+              vals(ttlIdx) = collectionTtl
               Row(ArraySeq.unsafeWrapArray(vals): _*)
             } else r
           }
@@ -852,23 +1050,8 @@ object Cassandra {
         maxPerElementWritetime(row, perElementWritetimeOrdinals)
           .map(java.lang.Long.valueOf)
           .getOrElse(CassandraOption.Unset)
-      // C1: mirror the marker's TTL to the collection's latest-cell expiry. A hardcoded TTL 0 (=no
-      // TTL) makes the primary-key marker permanently live, so after every TTL'd element expires the
-      // target keeps an empty, never-expiring row that the source (whose liveness came only from the
-      // now-expired cells) no longer has. Row-marker liveness must reflect the LATEST cell expiry:
-      // permanent if any element is permanent (TTL 0/absent), else the max finite element TTL.
-      val markerTtl: Integer = {
-        val ttls = perElementTtlOrdinals.iterator.flatMap { o =>
-          if (o < 0 || o >= row.length || row.isNullAt(o)) Iterator.empty
-          else
-            asNumberSeq(row.get(o)).iterator.map {
-              case n: Number => n.intValue()
-              case _         => 0 // null TTL slot => no TTL => permanent
-            }
-        }.toVector
-        if (ttls.isEmpty || ttls.exists(_ <= 0)) Integer.valueOf(0)
-        else Integer.valueOf(ttls.max)
-      }
+      // C1: mirror the marker's TTL to the collection's latest-cell expiry (see `markerTtlFor`).
+      val markerTtl: Integer = markerTtlFor(row, perElementTtlOrdinals)
       val newValues = baseSchema.fields.map { field =>
         primaryKeyOrdinals
           .get(field.name)
@@ -938,26 +1121,6 @@ object Cassandra {
               "timestamp. Aborting to avoid silently dropping it."
           )
       }
-
-    // Enforce the size cap on the RAW decoded collection size, before any copy/sort/group, so a
-    // pathological cell fails fast instead of OOMing during `toIndexedSeq`/`sortElements`.
-    def enforceSizeLimits(size: Int): Unit = {
-      if (LargeCollectionHardLimit > 0 && size > LargeCollectionHardLimit)
-        throw new IllegalStateException(
-          s"Non-frozen collection cell has $size elements, exceeding the hard limit of " +
-            s"$LargeCollectionHardLimit. Per-element TTL/WRITETIME preservation expands each element " +
-            "into collection-append updates, and a collection this large risks executor OOM / write " +
-            "amplification. Raise or disable the cap with -Dscylla.migrator.maxCollectionElements=<n> " +
-            "(non-positive disables) if this size is expected."
-        )
-      if (size > LargeCollectionWarnThreshold)
-        log.warn(
-          s"Non-frozen collection cell has $size elements; per-element TTL/WRITETIME " +
-            "preservation may expand it into up to that many separate collection-append updates " +
-            "(one per distinct TTL/WRITETIME group). Very large collections can cause high " +
-            "executor memory/GC pressure and slow writes."
-        )
-    }
 
     def rowsFrom(elements: IndexedSeq[Any], rebuild: Seq[Any] => Any): Seq[Row] = {
       // Both sidecars must be element-aligned. On every real read path `TTL(col)` returns a list the
@@ -1418,12 +1581,21 @@ object Cassandra {
         Seq(StructField("ttl", IntegerType, true), StructField("writetime", LongType, true))
     )
 
-    if (perElementNames.nonEmpty)
+    if (perElementNames.nonEmpty) {
       log.info(
         s"Parquet restore: per-element collection columns detected " +
           s"(${perElementNames.toSeq.sorted.mkString(", ")}); they will be replayed as " +
           "collection-append passes after the base write."
       )
+      // Same rationale as F5 in `readDataframe`: the base explode and each collection-append pass
+      // are SEPARATE Spark jobs derived from this one frame, so without caching the Parquet dataset
+      // is re-read 1 + K times (K = per-element collection columns). This path has no incremental
+      // savepointing to compensate — file-level tracking is deliberately disabled for multi-pass
+      // writes — so the re-read is pure waste. `ScyllaMigratorBase.migrate` unpersists
+      // `sourceDF.dataFrame` (this same frame) in its `finally`, and the validator repair path
+      // unpersists its own upstream, so this is self-cleaning.
+      df.persist(StorageLevel.MEMORY_AND_DISK)
+    }
     log.info("Base schema after explosion from per-column metadata:")
     log.info(finalSchema.treeString)
 
@@ -1579,7 +1751,12 @@ object Cassandra {
           // is re-read once per pass (1 + K scans for K collection columns), and worse, a source
           // mutated between passes could be observed inconsistently (base row from one snapshot,
           // appended elements from another). Persisting pins a single snapshot read once and shared
-          // across passes. Safe w.r.t. savepoints: the write-side TokenRangeAccumulator derives
+          // across passes. CAVEAT: `MEMORY_AND_DISK` is best-effort — if a block is evicted or an
+          // executor is lost, Spark recomputes that partition, and on the ScyllaDB-2026.2 subscript
+          // path recomputation re-issues point reads at a LATER wall-clock time (decayed TTLs, a
+          // different view of concurrent deletes). The single-snapshot property therefore holds for
+          // the common case, not unconditionally; a quiescent source is what makes it exact.
+          // Safe w.r.t. savepoints: the write-side TokenRangeAccumulator derives
           // ranges from each row's partition-key token, independent of how the read is
           // materialized. `migrate` unpersists it once all passes finish.
           if (perElementNames.nonEmpty)

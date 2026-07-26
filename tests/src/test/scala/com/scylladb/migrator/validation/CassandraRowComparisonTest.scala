@@ -217,6 +217,33 @@ class CassandraRowComparisonTest extends munit.FunSuite {
     )
   }
 
+  test("Extreme writetime difference saturates instead of overflowing into a false match") {
+    // `|l - r| * scale` overflows for adversarial metadata (e.g. a hand-crafted Parquet writetime of
+    // Long.MinValue), and a WRAPPED negative difference silently passes the `diff > tolerance` test,
+    // reporting a corrupt row as identical. The comparison must saturate and still flag the row.
+    val left = CassandraRow.fromMap(
+      Map(
+        "id"             -> "r1",
+        "tags"           -> Set(10),
+        "tags_writetime" -> List(Long.MaxValue)
+      )
+    )
+    val right = CassandraRow.fromMap(
+      Map(
+        "id"             -> "r1",
+        "tags"           -> Set(10),
+        "tags_writetime" -> List(Long.MinValue)
+      )
+    )
+    val result = compareItems(left, Some(right), writetimeToleranceMillis = 0L)
+    val diffs = result.toList.flatMap(_.items).collect { case d: Item.DifferingWritetimes => d }
+    assert(diffs.nonEmpty, s"expected a DifferingWritetimes failure, got ${result}")
+    assert(
+      diffs.flatMap(_.details.map(_._2)).forall(_ > 0L),
+      s"expected a positive (saturated) difference, got ${diffs.flatMap(_.details)}"
+    )
+  }
+
   test("Per-element collection metadata length mismatch is reported as a cardinality mismatch") {
     val left = CassandraRow.fromMap(
       Map("id" -> "r1", "tags_writetime" -> List(1000L, 2000L, 3000L))

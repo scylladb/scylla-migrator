@@ -50,12 +50,17 @@ source:
   # memory- and throughput-intensive. Has no effect unless preserveTimestamps is also true.
   #
   # Source-quiescence is REQUIRED. On the ScyllaDB 2026.2+ subscript path values and metadata are read
-  # in two phases (base scan + per-row point reads): a concurrent update can pair a stale value with a
-  # fresh writetime, and an element deleted between the reads is dropped (logged) rather than aborting.
-  # The Cassandra 5.0+ array path reads both in one scan. Stop source writes before migrating.
+  # in two phases (base scan + per-row point reads), so a concurrent write in between can: delete an
+  # element (dropped + logged), add an element (never queried, silently absent, not counted in the
+  # dropped-element warning), or update a MAP value in place (a stale value can be paired with the
+  # newer writetime and then permanently shadow the correct value on the target). Sets are immune to
+  # the last case since an element's value is its identity. The Cassandra 5.0+ array path reads values
+  # and metadata in one scan and is unaffected. Stop source writes before migrating.
   #
   # TTLs are read as remaining seconds and re-applied on write, so the clock advances between read and
-  # write/compare on long runs; use validation's ttlToleranceMillis to absorb this drift.
+  # write/compare on long runs; use validation's ttlToleranceMillis to absorb this drift. A short-lived
+  # element can expire on the source between read and append and still be written to the target, where
+  # it briefly reappears; prefer collection TTLs comfortably longer than the job duration.
   #
   # Validation compares per-element collection TTL/WRITETIME only on the collection-wide form
   # (Cassandra 5.0+). Against ScyllaDB 2026.2+ (subscript only) it compares non-frozen collection
