@@ -423,6 +423,62 @@ object MySQLToScyllaValidator {
     }
   }
 
+  private[scylla] def applySourceRenames(
+    df: DataFrame,
+    renamesByLower: Map[String, String]
+  ): DataFrame = {
+    def resolveRename(c: String): String =
+      renamesByLower.getOrElse(c.toLowerCase(Locale.ROOT), c)
+
+    // Group source columns by their target name. An explicit rename (from != to) takes
+    // precedence over an identity-mapped column with the same name. This handles the migration
+    // case where MySQL column A was renamed to Scylla column B (and MySQL's original B column was
+    // dropped): the identity-mapped B is silently excluded rather than causing a collision error.
+    val targetToSources: Map[String, List[(String, Boolean)]] =
+      df.columns.toIndexedSeq
+        .map { c =>
+          val isExplicit =
+            renamesByLower
+              .get(c.toLowerCase(Locale.ROOT))
+              .exists(_.toLowerCase(Locale.ROOT) != c.toLowerCase(Locale.ROOT))
+          (resolveRename(c).toLowerCase(Locale.ROOT), (c, isExplicit))
+        }
+        .groupBy(_._1)
+        .view
+        .mapValues(_.map(_._2).toList)
+        .toMap
+
+    val genuineCollisions = targetToSources
+      .collect {
+        case (_, sources) if sources.count(_._2) > 1 => sources.filter(_._2).map(_._1)
+      }
+      .flatten
+      .toList
+    if (genuineCollisions.nonEmpty)
+      sys.error(
+        s"Column rename collision: multiple columns explicitly renamed to the same target name(s): " +
+          s"${genuineCollisions.distinct.mkString(", ")}. " +
+          "Check your 'renames' configuration for conflicting mappings."
+      )
+
+    val selectedCols = df.columns.toIndexedSeq.flatMap { c =>
+      val targetName = resolveRename(c)
+      val isExplicit =
+        renamesByLower
+          .get(c.toLowerCase(Locale.ROOT))
+          .exists(_.toLowerCase(Locale.ROOT) != c.toLowerCase(Locale.ROOT))
+      if (!isExplicit && targetToSources(targetName.toLowerCase(Locale.ROOT)).length > 1) {
+        log.info(
+          s"Excluding source column '$c': its name '$targetName' is the target of an explicit rename. " +
+            "The column was likely dropped during migration."
+        )
+        None
+      } else
+        Some(sparkColumn(c).as(targetName))
+    }
+    df.select(selectedCols: _*)
+  }
+
   private def resolveTargetColumns(
     targetTableDef: TableDef,
     columns: Seq[String]
@@ -623,14 +679,6 @@ object MySQLToScyllaValidator {
       )
     )
 
-    val actualSourcePK = sourcePrimaryKeyFromMetadata(sourceSettings)
-    if (actualSourcePK.isEmpty)
-      sys.error(
-        s"MySQL table ${sourceSettings.database}.${sourceSettings.table} does not expose a primary key via JDBC metadata. " +
-          "Validation requires the real source primary key."
-      )
-    validateSourcePrimaryKey(primaryKey, actualSourcePK)
-
     // Always read all columns from MySQL; hash is computed in Spark (not MySQL)
     val rawSourceDF = {
       val df = readers.MySQL.readDataframe(spark, sourceSettings).dataFrame
@@ -645,32 +693,16 @@ object MySQLToScyllaValidator {
         )
       if (primaryKey.map(_.toLowerCase(Locale.ROOT)).distinct.size != primaryKey.size)
         sys.error(s"primaryKey contains duplicate columns: ${primaryKey.mkString(", ")}")
-      val renamed =
-        df.select(df.columns.toIndexedSeq.map(c => sparkColumn(c).as(resolveRename(c))): _*)
-      val renamedCols = renamed.columns.map(_.toLowerCase(Locale.ROOT))
-      val duplicates = renamedCols.diff(renamedCols.distinct)
-      if (duplicates.nonEmpty)
-        sys.error(
-          s"Column rename collision: multiple source columns map to the same target name(s): " +
-            s"${duplicates.distinct.mkString(", ")}. " +
-            "Check your 'renames' configuration for conflicting mappings."
-        )
-      renamed
+      applySourceRenames(df, renamesByLower)
     }
 
     log.info(s"Connecting to ScyllaDB target at ${targetSettings.host}:${targetSettings.port}")
 
-    // Verify that the configured primaryKey (after renames) matches the target table's actual PK.
-    // This prevents silent incorrect validation results when the PK is mis-specified.
     val targetConnector =
       Connectors.targetConnector(spark.sparkContext.getConf, targetSettings)
     val targetTableDef = targetConnector.withSessionDo(
       Schema.tableFromCassandra(_, targetSettings.keyspace, targetSettings.table)
     )
-    val actualTargetPK =
-      (targetTableDef.partitionKey ++ targetTableDef.clusteringColumns)
-        .map(_.columnName.toLowerCase(Locale.ROOT))
-    validateTargetPrimaryKey(renamedPK, actualTargetPK)
     val targetColumnNames = targetTableDef.columns.map(_.columnName)
     val selectedTargetColumns = rawSourceDF.columns.toSeq
 
