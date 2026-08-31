@@ -72,15 +72,21 @@ class FileCompletionListener(
             savepointsManager.markFileAsProcessed(filename)
 
             val progress = s"${completedFiles.size}/${fileToPartitions.size}"
-            log.info(s"File completed: $filename (progress: $progress)")
+            log.info(s"File completed: ${Parquet.redactPathForLog(filename)} (progress: $progress)")
           }
         } else {
           val completedCount = allPartitions.count(completedPartitions.contains)
-          log.trace(s"File $filename: $completedCount/${allPartitions.size} partitions complete")
+          log.trace(
+            s"File ${Parquet.redactPathForLog(filename)}: $completedCount/${allPartitions.size} " +
+              "partitions complete"
+          )
         }
 
       case None =>
-        log.warn(s"File $filename not found in fileToPartitions map (this shouldn't happen)")
+        log.warn(
+          s"File ${Parquet.redactPathForLog(filename)} not found in fileToPartitions map " +
+            "(this shouldn't happen)"
+        )
     }
   }
 

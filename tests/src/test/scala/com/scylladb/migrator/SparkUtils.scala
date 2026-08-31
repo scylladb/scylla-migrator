@@ -158,7 +158,8 @@ object SparkUtils {
     "cassandra3"    -> 9045,
     "cassandra5"    -> 9047,
     "scylla"        -> 9042,
-    "scylla-source" -> 9044
+    "scylla-source" -> 9044,
+    "scylla2026"    -> 9048
   )
 
   /** Map from Docker Compose MySQL hostnames to the exposed localhost port. */
