@@ -21,6 +21,7 @@ import org.apache.spark.sql.types._
 import java.util.concurrent.{ ConcurrentHashMap, ConcurrentLinkedQueue }
 import java.util.concurrent.atomic.{ AtomicBoolean, AtomicInteger, AtomicReference }
 import scala.jdk.CollectionConverters._
+import scala.util.control.NonFatal
 
 object Aerospike {
   val log = LogManager.getLogger("com.scylladb.migrator.readers.Aerospike")
@@ -62,6 +63,7 @@ object Aerospike {
       "Aerospike 'namespace' must not be empty in the source configuration"
     )
     require(source.hosts.nonEmpty, "Aerospike 'hosts' must not be empty")
+    source.bins.foreach(validateBinsAgainstReservedNames)
 
     val connConfig = AerospikeConnectionConfig(
       source.hosts.toList,
@@ -86,9 +88,7 @@ object Aerospike {
 
     val binNames = schema.fields
       .map(_.name)
-      .filter { n =>
-        n != KeyColumnName && n != TtlColumnName && n != GenerationColumnName
-      }
+      .filterNot(ReservedColumnNames.contains)
       .toIndexedSeq
     val queueSize = source.queueSize.getOrElse(1024)
     val pollTimeoutSeconds = source.pollTimeoutSeconds.getOrElse(120)
@@ -125,6 +125,10 @@ object Aerospike {
     )
 
     val recordsRead = spark.sparkContext.longAccumulator("Aerospike Records Read")
+    // Counts bin values nulled because their runtime type did not match the type inferred from
+    // the schema sample, so this data loss is visible on the driver rather than only in
+    // executor logs. Reported by the caller after the migration completes.
+    val typeMismatches = spark.sparkContext.longAccumulator("Aerospike Type Mismatches")
 
     val rdd = new AerospikeRDD(
       spark.sparkContext,
@@ -133,7 +137,8 @@ object Aerospike {
       broadcastCredentials,
       broadcastBinNames,
       broadcastSchema,
-      recordsRead
+      recordsRead,
+      typeMismatches
     )
 
     val df = spark.createDataFrame(rdd, schema)
@@ -208,8 +213,8 @@ object Aerospike {
       case None =>
         val credentials = resolveCredentials(source)
         val connectionKey = AerospikeConnectionKey.fromConfig(connConfig, credentials)
-        // Client is intentionally cached in AerospikeClientHolder; reused by executors
-        // and closed when the last reference is released (or by the JVM shutdown hook).
+        // Client is cached in AerospikeClientHolder for the duration of schema discovery and
+        // closed in the `finally` below, since the driver has no further use for it.
         val client =
           try AerospikeClientHolder.acquire(connectionKey, connConfig, credentials)
           catch {
@@ -264,8 +269,11 @@ object Aerospike {
           val keyTypeRef = new AtomicReference[Option[DataType]](None)
           val sampledCount = new AtomicInteger(0)
           // Progressive discovery re-scans overlapping partition ranges, so a record can be
-          // observed more than once. Escalation is gated on distinct records (tracked by digest,
-          // and only up to sampleSize) so duplicates cannot masquerade as a sufficient sample.
+          // observed more than once. Escalation is gated on distinct records (tracked by digest)
+          // so duplicates cannot masquerade as a sufficient sample. Tracking stops once the
+          // target is reached, which caps memory but also means the counter saturates rather
+          // than reporting the true number of distinct records.
+          val distinctTarget = math.min(sampleSize, MaxSchemaSampleSize)
           val distinctCount = new AtomicInteger(0)
           val seenDigests = ConcurrentHashMap.newKeySet[java.nio.ByteBuffer]()
           // Collect type conflict messages during scanning; logged after scan completes
@@ -313,13 +321,30 @@ object Aerospike {
                 }
               }
               sampledCount.incrementAndGet()
+              // `digest` is copied because the buffer becomes a long-lived map key and must not
+              // alias an array the client owns. Concurrent callbacks may push the set a few
+              // entries past the target; that is harmless and keeps this off the lock path.
               if (
-                distinctCount.get() < sampleSize &&
-                seenDigests.add(java.nio.ByteBuffer.wrap(key.digest))
+                distinctCount.get() < distinctTarget &&
+                seenDigests.add(java.nio.ByteBuffer.wrap(key.digest.clone()))
               )
                 distinctCount.incrementAndGet()
             }
           }
+
+          // Steps 2 and 3 of the progressive strategy only refine a sample that is already
+          // usable, so a transient scan failure there must not abort the migration. Step 1
+          // remains fatal: with no records at all there is nothing to build a schema from.
+          def refineSample(description: String)(scan: => Unit): Unit =
+            try scan
+            catch {
+              case NonFatal(e) if sampledCount.get() > 0 =>
+                log.warn(
+                  s"Schema discovery: $description failed; continuing with the " +
+                    s"${sampledCount.get()} record(s) already sampled. Cause: ${e.getMessage}",
+                  e
+                )
+            }
 
           val strategy =
             source.schemaDiscoveryStrategy.getOrElse(SchemaDiscoveryStrategy.Progressive)
@@ -371,36 +396,40 @@ object Aerospike {
               // the sample is still smaller than the requested sampleSize, so plentiful data stops
               // after the first slice. Ranges use independent random offsets and may overlap, so
               // the decision uses distinct records; type merging itself is idempotent.
-              if (distinctCount.get() < sampleSize) {
+              if (distinctCount.get() < distinctTarget) {
                 log.warn(
                   s"Only ${distinctCount.get()} distinct record(s) in the initial $InitialSamplePartitions-partition " +
                     s"sample (< requested $sampleSize); expanding to $ExtendedSamplePartitions partitions for schema discovery"
                 )
                 val extCount = math.min(ExtendedSamplePartitions, TotalAerospikePartitions)
-                tryScanPartitions(
-                  client,
-                  buildScanPolicy(source, sampleSize),
-                  PartitionFilter.range(schemaSampleOffset(extCount), extCount),
-                  source.namespace,
-                  source.set,
-                  callback,
-                  source.bins
-                )
+                refineSample(s"expansion to $extCount partitions") {
+                  tryScanPartitions(
+                    client,
+                    buildScanPolicy(source, sampleSize),
+                    PartitionFilter.range(schemaSampleOffset(extCount), extCount),
+                    source.namespace,
+                    source.set,
+                    callback,
+                    source.bins
+                  )
+                }
               }
-              if (distinctCount.get() < sampleSize) {
+              if (distinctCount.get() < distinctTarget) {
                 log.warn(
                   s"Only ${distinctCount.get()} distinct record(s) after $ExtendedSamplePartitions partitions " +
                     s"(< requested $sampleSize); falling back to a full cluster scan for schema discovery"
                 )
-                tryScanPartitions(
-                  client,
-                  buildScanPolicy(source, sampleSize),
-                  PartitionFilter.all(),
-                  source.namespace,
-                  source.set,
-                  callback,
-                  source.bins
-                )
+                refineSample("full cluster scan fallback") {
+                  tryScanPartitions(
+                    client,
+                    buildScanPolicy(source, sampleSize),
+                    PartitionFilter.all(),
+                    source.namespace,
+                    source.set,
+                    callback,
+                    source.bins
+                  )
+                }
               }
           }
 
@@ -414,9 +443,14 @@ object Aerospike {
           }
 
           val finalSampledCount = sampledCount.get()
+          // Distinct tracking stops at the target, so report it as a lower bound once saturated
+          // rather than implying the rest of the sample was duplicates.
           val finalDistinctCount = distinctCount.get()
+          val distinctLabel =
+            if (finalDistinctCount >= distinctTarget) s">=$finalDistinctCount distinct"
+            else s"$finalDistinctCount distinct"
           log.info(
-            s"Schema discovery sampled $finalSampledCount records ($finalDistinctCount distinct), " +
+            s"Schema discovery sampled $finalSampledCount records ($distinctLabel), " +
               s"discovered ${bins.size()} bins"
           )
           if (finalSampledCount == 0) {
@@ -442,9 +476,10 @@ object Aerospike {
             discoveredFields.partition(f => ReservedColumnNames.contains(f.name))
           shadowedFields.foreach { f =>
             log.warn(
-              s"Aerospike bin '${f.name}' collides with a reserved column name and will NOT be " +
-                "migrated; that column carries migration metadata instead. Rename the bin or use " +
-                "a 'schema' override."
+              s"Aerospike bin '${f.name}' uses a reserved column name and will NOT be migrated. " +
+                s"${ReservedColumnNames.toSeq.sorted.mkString(", ")} are reserved for migration " +
+                "metadata regardless of the preserveTTL / preserveGeneration settings. Rename " +
+                "the bin, or use 'renames' on the target to map it to another column."
             )
           }
 
@@ -453,9 +488,10 @@ object Aerospike {
             StructField(KeyColumnName, finalKeyType, nullable = false) +: fieldSeq ++: metaFields
           )
         } finally
-          // Release the driver-side reference after schema discovery — it is only needed briefly
-          // and executors acquire their own references via AerospikeClientHolder.
-          AerospikeClientHolder.releaseOne(connectionKey)
+          // Close the driver-side client after schema discovery: the driver performs no further
+          // Aerospike I/O, and leaving it cached would hold its tend thread and sockets for the
+          // whole job. Executors acquire their own references via AerospikeClientHolder.
+          AerospikeClientHolder.releaseAndClose(connectionKey)
     }
   }
 
@@ -492,6 +528,23 @@ object Aerospike {
           s"('$KeyColumnName' is always a string; '$TtlColumnName' and '$GenerationColumnName' " +
           "come from preserveTTL / preserveGeneration). Rename the bin(s) or drop them from the " +
           "schema override."
+      )
+  }
+
+  /** Reject a `bins` filter that names a reserved metadata column.
+    *
+    * Such a bin is dropped from the schema, and a filter left empty by that dropping would be
+    * passed to the Aerospike client as "no filter" — silently inverting the user's intent into
+    * fetching every bin. Rejecting up front keeps this consistent with the schema-override path.
+    */
+  private[migrator] def validateBinsAgainstReservedNames(bins: Seq[String]): Unit = {
+    val declared = bins.filter(ReservedColumnNames.contains).distinct
+    if (declared.nonEmpty)
+      throw new IllegalArgumentException(
+        s"The 'bins' filter names reserved column name(s): ${declared.mkString(", ")}. " +
+          s"${ReservedColumnNames.toSeq.sorted.mkString(", ")} are generated by the migrator and " +
+          "are never read as bins. Remove them from 'bins' (use preserveTTL / preserveGeneration " +
+          "to emit the metadata columns)."
       )
   }
 

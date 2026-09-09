@@ -62,7 +62,8 @@ private[migrator] class AerospikeRDD(
   broadcastCredentials: Broadcast[Option[(String, String)]],
   broadcastBinNames: Broadcast[IndexedSeq[String]],
   broadcastSchema: Broadcast[StructType],
-  recordsReadAccumulator: LongAccumulator
+  recordsReadAccumulator: LongAccumulator,
+  typeMismatchAccumulator: LongAccumulator
 ) extends RDD[Row](sc, Nil) {
 
   override def getPartitions: Array[Partition] =
@@ -205,6 +206,7 @@ private[migrator] class AerospikeRDD(
     new Iterator[Row] {
       private var recordCount = 0L
       private var localAccumulatorCount = 0L
+      private var localTypeMismatches = 0L
       // Fixed 100K interval; keeps log noise manageable for large datasets
       private val LogInterval = 100000L
       private val AccumulatorFlushInterval = 1000L
@@ -304,6 +306,14 @@ private[migrator] class AerospikeRDD(
             recordsReadAccumulator.add(localAccumulatorCount)
             localAccumulatorCount = 0
           }
+          if (localTypeMismatches > 0) {
+            typeMismatchAccumulator.add(localTypeMismatches)
+            Aerospike.log.warn(
+              s"Partition ${asPart.index}: $localTypeMismatches value(s) were written as null " +
+                "because their runtime type did not match the inferred column type"
+            )
+            localTypeMismatches = 0
+          }
           Aerospike.log.info(
             s"Partition ${asPart.index}: completed, processed $recordCount records"
           )
@@ -331,11 +341,15 @@ private[migrator] class AerospikeRDD(
               ttlValue.asInstanceOf[Any]
             } else if (field.name == Aerospike.GenerationColumnName)
               record.generation.asInstanceOf[Any]
-            else
-              AerospikeTypes.convertValue(
-                if (record.bins != null) record.bins.get(field.name) else null,
-                field.dataType
-              )
+            else {
+              val raw = if (record.bins != null) record.bins.get(field.name) else null
+              val converted = AerospikeTypes.convertValue(raw, field.dataType)
+              // A non-null bin that converts to null means the runtime type did not match the
+              // type inferred from the schema sample. Count it so the loss is visible on the
+              // driver and in the Spark UI, instead of only in executor logs.
+              if (raw != null && converted == null) localTypeMismatches += 1
+              converted
+            }
           i += 1
         }
 

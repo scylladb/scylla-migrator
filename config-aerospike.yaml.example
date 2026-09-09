@@ -63,8 +63,9 @@ source:
   # Supported collection types: list<T> and map<K,V>, which may be nested,
   #   e.g. list<string>, map<string,long>, list<map<string,long>>
   # Note: 'aero_key', 'aero_ttl' and 'aero_generation' are reserved for migration
-  #   metadata and must not be declared here. 'aero_key' is always a string when an
-  #   explicit schema is used.
+  #   metadata and must not be declared here, nor listed in 'bins'. A source bin with
+  #   one of these names is never migrated, even when preserveTTL / preserveGeneration
+  #   are false. 'aero_key' is always a string when an explicit schema is used.
   # schema:
   #   name: string
   #   age: long
@@ -87,6 +88,12 @@ source:
   # AEROSPIKE_USERNAME and AEROSPIKE_PASSWORD environment variables on executor nodes instead.
   # When these env vars are present, credentials are read from the environment at runtime
   # and are not broadcast as part of the Spark job closure.
+  #
+  # Because Aerospike is schema-less, a bin's runtime type can differ from the type inferred
+  # from the sample. Such a value cannot be written to the inferred column, so it is written
+  # as null and counted by the "Aerospike Type Mismatches" accumulator (visible in the Spark
+  # UI). A non-zero count means data was dropped: raise schemaSampleSize or set an explicit
+  # 'schema' override and re-run.
   #
   # Aerospike-to-Spark type mapping (auto-detected during schema discovery):
   #   Integer/Long  -> LongType  (bigint)

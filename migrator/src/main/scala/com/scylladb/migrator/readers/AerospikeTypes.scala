@@ -109,21 +109,41 @@ object AerospikeTypes {
       case _                                           => false
     }
 
-  /** Rate-limited warning for values that cannot be represented as the inferred column type. */
-  private def warnIncompatible(value: Any, expectedType: DataType): Unit = {
-    val typeName = if (value == null) "null" else value.getClass.getName
+  /** Log `message` on the first occurrence of `counterKey` and every `WarnInterval` after that,
+    * passing the running count so the operator can gauge how widespread the problem is.
+    */
+  private def warnRateLimited(counterKey: String)(message: Long => String): Unit = {
     val counter = warnedTypeCounts.computeIfAbsent(
-      s"$typeName->$expectedType",
+      counterKey,
       _ => new java.util.concurrent.atomic.AtomicLong(0)
     )
     val count = counter.incrementAndGet()
-    if (count == 1 || count % WarnInterval == 0)
-      log.warn(
-        s"convertValue: a value of type $typeName is not representable as $expectedType, " +
-          s"writing null ($count occurrences so far). The column type came from the schema " +
-          "sample; provide an explicit 'schema' override or raise 'schemaSampleSize' if this " +
-          "is unexpected."
-      )
+    if (count == 1 || count % WarnInterval == 0) log.warn(message(count))
+  }
+
+  private def typeNameOf(value: Any): String =
+    if (value == null) "null" else value.getClass.getName
+
+  /** Rate-limited warning for values that cannot be represented as the inferred column type. */
+  private def warnIncompatible(value: Any, expectedType: DataType): Unit = {
+    val typeName = typeNameOf(value)
+    warnRateLimited(s"incompatible:$typeName->$expectedType") { count =>
+      s"convertValue: a value of type $typeName is not representable as $expectedType, " +
+        s"writing null ($count occurrences so far). The column type came from the schema " +
+        "sample; provide an explicit 'schema' override or raise 'schemaSampleSize' if this " +
+        "is unexpected."
+    }
+  }
+
+  /** Rate-limited warning for map entries dropped because their key could not be converted. */
+  private def warnDroppedMapKey(key: Any, keyType: DataType): Unit = {
+    val typeName = typeNameOf(key)
+    warnRateLimited(s"mapkey:$typeName->$keyType") { count =>
+      s"convertValue: dropping a map entry whose key of type $typeName is not representable " +
+        s"as the inferred key type $keyType ($count entries dropped so far). Spark map keys " +
+        "cannot be null. Provide an explicit 'schema' override or raise 'schemaSampleSize' if " +
+        "this is unexpected."
+    }
   }
 
   private def convertByRuntimeType(value: Any, expectedType: DataType): Any = value match {
@@ -144,7 +164,16 @@ object AerospikeTypes {
     case v: java.util.Map[_, _] =>
       expectedType match {
         case MapType(k, vt, _) =>
-          v.asScala.map { case (mk, mv) => convertValue(mk, k) -> convertValue(mv, vt) }.toMap
+          // A key that fails conversion cannot be written as null — Spark map keys are
+          // non-nullable — and two such keys would silently collapse into a single entry under
+          // `.toMap`. Drop those entries individually instead, and say so.
+          v.asScala.iterator.flatMap { case (mk, mv) =>
+            val convertedKey = convertValue(mk, k)
+            if (convertedKey == null) {
+              warnDroppedMapKey(mk, k)
+              None
+            } else Some(convertedKey -> convertValue(mv, vt))
+          }.toMap
         case StringType =>
           // Serialize collection to string for an explicit StringType column
           v.toString
@@ -219,7 +248,10 @@ object AerospikeTypes {
         if (key.userKey != null) key.userKey.toString else hexFormat.formatHex(key.digest)
       case BinaryType =>
         // Digest is always available as raw bytes; user keys written as blobs arrive as byte[].
-        if (key.userKey != null) key.userKey.getObject else key.digest
+        // A user key of any other runtime type is not representable here, so it gets the same
+        // compatibility check as the other typed branches rather than reaching Spark's encoder.
+        if (key.userKey == null) key.digest
+        else requireCompatibleKey(key.userKey.getObject, keyType)
       case _ =>
         // A non-String/Binary key type was inferred from the sample. Neither a digest-only
         // record nor a key of a different runtime type is representable as that type, and
@@ -231,18 +263,22 @@ object AerospikeTypes {
               s"$keyType. Store keys with sendKey=true, or set an explicit 'schema' so 'aero_key' " +
               "is a string and the digest fallback is representable."
           )
-        else {
-          val userKey = key.userKey.getObject
-          if (isCompatible(userKey, keyType)) userKey
-          else
-            throw new IllegalStateException(
-              s"Aerospike record key of type ${userKey.getClass.getName} does not match the " +
-                s"discovered key type $keyType. This set mixes key types that the schema sample " +
-                "did not observe. Set an explicit 'schema' so 'aero_key' is a string, or raise " +
-                "'schemaSampleSize' so the mixed types are detected during discovery."
-            )
-        }
+        else requireCompatibleKey(key.userKey.getObject, keyType)
     }
+
+  /** Return the user key when it matches the discovered key type, otherwise fail with guidance.
+    *
+    * `aero_key` is non-nullable, so a mismatch cannot be dropped the way a bin value can.
+    */
+  private def requireCompatibleKey(userKey: Any, keyType: DataType): Any =
+    if (isCompatible(userKey, keyType)) userKey
+    else
+      throw new IllegalStateException(
+        s"Aerospike record key of type ${typeNameOf(userKey)} does not match the discovered " +
+          s"key type $keyType. This set mixes key types that the schema sample did not observe. " +
+          "Set an explicit 'schema' so 'aero_key' is a string, or raise 'schemaSampleSize' so " +
+          "the mixed types are detected during discovery."
+      )
 
   /** Parse a user-provided type name into a Spark DataType. Supports scalar types (string, long,
     * double, binary) and collection types (list<T>, map<K,V>). Collection types can be nested,

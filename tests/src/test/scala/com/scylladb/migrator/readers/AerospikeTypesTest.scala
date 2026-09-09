@@ -240,6 +240,38 @@ class AerospikeTypesTest extends munit.FunSuite {
     assertEquals(AerospikeTypes.convertValue(java.lang.Long.valueOf(42L), BinaryType), null)
   }
 
+  test("convertValue: map entry whose key fails conversion is dropped, not nulled") {
+    // Spark map keys are non-nullable, so a drifted key must not become a null key.
+    val map = new java.util.HashMap[Any, Any]()
+    map.put(java.lang.Long.valueOf(1L), java.lang.Long.valueOf(10L))
+    map.put("not-a-long", java.lang.Long.valueOf(20L))
+    val result = AerospikeTypes
+      .convertValue(map, MapType(LongType, LongType, valueContainsNull = true))
+      .asInstanceOf[Map[Any, Any]]
+    assertEquals(result, Map[Any, Any](1L -> 10L))
+    assert(!result.contains(null), "a null map key must never be emitted")
+  }
+
+  test("convertValue: two drifted map keys do not collapse into one entry") {
+    // Both keys would convert to null and `.toMap` would silently keep only one.
+    val map = new java.util.HashMap[Any, Any]()
+    map.put("a", java.lang.Long.valueOf(1L))
+    map.put("b", java.lang.Long.valueOf(2L))
+    val result = AerospikeTypes
+      .convertValue(map, MapType(LongType, LongType, valueContainsNull = true))
+      .asInstanceOf[Map[Any, Any]]
+    assertEquals(result, Map.empty[Any, Any])
+  }
+
+  test("convertValue: map values that fail conversion are still nulled, keys preserved") {
+    val map = new java.util.HashMap[Any, Any]()
+    map.put("k", "not-a-long")
+    val result = AerospikeTypes
+      .convertValue(map, MapType(StringType, LongType, valueContainsNull = true))
+      .asInstanceOf[Map[Any, Any]]
+    assertEquals(result, Map[Any, Any]("k" -> null))
+  }
+
   // --- mergeTypes ---
 
   test("mergeTypes: identical scalar types") {
@@ -314,6 +346,25 @@ class AerospikeTypesTest extends munit.FunSuite {
   test("extractKey: Long userKey coerced to StringType") {
     val key = new com.aerospike.client.Key("ns", "set", 42L)
     assertEquals(AerospikeTypes.extractKey(key, StringType), "42")
+  }
+
+  test("extractKey: byte[] userKey under BinaryType passes through") {
+    val bytes = Array[Byte](1, 2, 3)
+    val key = new com.aerospike.client.Key("ns", "set", bytes)
+    val result = AerospikeTypes.extractKey(key, BinaryType).asInstanceOf[Array[Byte]]
+    assertEquals(result.toSeq, bytes.toSeq)
+  }
+
+  test("extractKey: non-binary userKey under BinaryType fails instead of reaching the encoder") {
+    // Sample saw only byte[] keys; a later String key is not representable as BinaryType.
+    val key = new com.aerospike.client.Key("ns", "set", "a-string-key")
+    val ex = intercept[IllegalStateException] {
+      AerospikeTypes.extractKey(key, BinaryType)
+    }
+    assert(
+      ex.getMessage.contains("does not match the discovered key type"),
+      s"Unexpected message: ${ex.getMessage}"
+    )
   }
 
   test("extractKey: key type not matching the inferred type fails with guidance") {

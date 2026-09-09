@@ -66,6 +66,27 @@ class AerospikeSchemaValidationTest extends munit.FunSuite {
     )
   }
 
+  test("validateBinsAgainstReservedNames: ordinary bin names pass") {
+    Aerospike.validateBinsAgainstReservedNames(Seq("foo", "bar"))
+  }
+
+  test("validateBinsAgainstReservedNames: reserved name in the bins filter throws") {
+    // Left unchecked, the reserved name is dropped from the schema and an emptied bin filter
+    // is sent to Aerospike as "no filter", inverting the intent into fetching every bin.
+    val ex = intercept[IllegalArgumentException] {
+      Aerospike.validateBinsAgainstReservedNames(Seq("aero_key"))
+    }
+    assert(ex.getMessage.contains("aero_key"), s"Unexpected message: ${ex.getMessage}")
+  }
+
+  test("validateBinsAgainstReservedNames: reports every reserved name listed") {
+    val ex = intercept[IllegalArgumentException] {
+      Aerospike.validateBinsAgainstReservedNames(Seq("foo", "aero_ttl", "aero_generation"))
+    }
+    assert(ex.getMessage.contains("aero_ttl"), s"Unexpected message: ${ex.getMessage}")
+    assert(ex.getMessage.contains("aero_generation"), s"Unexpected message: ${ex.getMessage}")
+  }
+
   test("validateSchemaAgainstReservedNames: metadata column names throw") {
     val ex = intercept[IllegalArgumentException] {
       Aerospike.validateSchemaAgainstReservedNames(

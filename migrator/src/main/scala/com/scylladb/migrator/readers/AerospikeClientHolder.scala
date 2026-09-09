@@ -64,8 +64,10 @@ private[migrator] object AerospikeClientHolder extends Serializable {
   private val log = LogManager.getLogger("com.scylladb.migrator.readers.AerospikeClientHolder")
   @transient private lazy val clients =
     new ConcurrentHashMap[AerospikeConnectionKey, AerospikeClient]()
-  // Active-reference counts per key so executor-side clients are closed when the last task
-  // using them on this JVM completes — bounding growth across jobs with distinct configs.
+  // Active-reference counts per key. A live reference pins the client against eviction; a client
+  // with no references stays cached (see `releaseOne`) and is closed by the shutdown hook, by
+  // `release`/`releaseAndClose`/`reset`, or by idle eviction when the cache grows past
+  // MaxCachedClients.
   @transient private lazy val refCounts =
     new ConcurrentHashMap[AerospikeConnectionKey, Integer]()
   @volatile private var closed = false
@@ -125,8 +127,8 @@ private[migrator] object AerospikeClientHolder extends Serializable {
   }
 
   /** Acquire a client and increment its active-reference count. Every acquire MUST be paired with
-    * exactly one releaseOne (e.g. via a TaskCompletionListener), so the client is closed when the
-    * last task using it on this JVM completes.
+    * exactly one `releaseOne` (e.g. via a TaskCompletionListener). Reaching zero references does
+    * not close the client — see `releaseOne` — it only makes it eligible for eviction.
     */
   def acquire(
     key: AerospikeConnectionKey,
@@ -161,12 +163,40 @@ private[migrator] object AerospikeClientHolder extends Serializable {
     if (clients.size() > MaxCachedClients) evictIdleClients()
   }
 
+  /** Release one reference and close the client if that was the last one.
+    *
+    * For callers that will not come back — notably driver-side schema discovery, which does no
+    * further Aerospike I/O once the schema is known. Executors keep using `releaseOne` so their
+    * client survives between the many tasks of a job.
+    */
+  def releaseAndClose(key: AerospikeConnectionKey): Unit = {
+    releaseOne(key)
+    closeIfUnreferenced(key, "after the last reference was released")
+  }
+
   /** Close and evict cached clients that currently have no active references. */
   private def evictIdleClients(): Unit =
-    clients.forEach { (k, _) =>
-      if (!refCounts.containsKey(k))
-        closeQuietly(clients.remove(k), "during idle eviction")
-    }
+    clients.forEach((k, _) => closeIfUnreferenced(k, "during idle eviction"))
+
+  /** Close and evict the client for `key` unless a reference is currently held.
+    *
+    * The refcount is re-checked *inside* `clients.computeIfPresent` so this serializes with the
+    * `clients.compute` in `get` for the same key. A concurrent `acquire` therefore either registers
+    * its reference before this runs — in which case the client is kept — or blocks and then builds
+    * a fresh client. Checking `refCounts` outside the map operation would allow the acquirer to be
+    * handed a client that this method closes an instant later.
+    */
+  private def closeIfUnreferenced(key: AerospikeConnectionKey, context: String): Unit = {
+    val _ = clients.computeIfPresent(
+      key,
+      (_, client) =>
+        if (refCounts.containsKey(key)) client
+        else {
+          closeQuietly(client, context)
+          null // evict
+        }
+    )
+  }
 
   /** Get or create an AerospikeClient for the given connection config and credentials. */
   def get(

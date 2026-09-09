@@ -33,15 +33,22 @@ abstract class MigratorSuite extends munit.FunSuite {
   private val aerospikePort = sys.env.getOrElse("AEROSPIKE_PORT", "3000").toInt
   private val scyllaHost = sys.env.getOrElse("SCYLLA_HOST", "localhost")
   private val scyllaPort = sys.env.getOrElse("SCYLLA_PORT", "9042").toInt
+  // Used both as the driver's local DC and as the NetworkTopologyStrategy replication key, so the
+  // two cannot drift apart.
+  private val scyllaDatacenter = sys.env.getOrElse("SCYLLA_DATACENTER", "datacenter1")
 
+  // NetworkTopologyStrategy rather than SimpleStrategy: Scylla rejects SimpleStrategy on a
+  // tablets-enabled cluster ("SimpleStrategy doesn't support tablet replication"), which is the
+  // default for recent releases. NTS works in both tablet and vnode modes, so this suite does not
+  // depend on how the Scylla container was started.
   private val createKeyspaceStatement =
     SchemaBuilder
       .createKeyspace(keyspace)
       .ifNotExists()
       .withReplicationOptions(
         Map[String, AnyRef](
-          "class"              -> "SimpleStrategy",
-          "replication_factor" -> Integer.valueOf(1)
+          "class"          -> "NetworkTopologyStrategy",
+          scyllaDatacenter -> Integer.valueOf(1)
         ).asJava
       )
       .build()
@@ -66,7 +73,7 @@ abstract class MigratorSuite extends munit.FunSuite {
       session = CqlSession
         .builder()
         .addContactPoint(new InetSocketAddress(scyllaHost, scyllaPort))
-        .withLocalDatacenter("datacenter1")
+        .withLocalDatacenter(scyllaDatacenter)
         .withAuthCredentials("dummy", "dummy")
         .build()
       session.execute(createKeyspaceStatement)
@@ -91,6 +98,7 @@ abstract class MigratorSuite extends munit.FunSuite {
     scanPolicy.maxRecords = 1
     var found = true
     var sleepMs = 100L
+    var lastScanError = Option.empty[Exception]
     while (found && System.currentTimeMillis() < deadline) {
       var count = 0
       // A scan that throws proves nothing about emptiness, so it must not be mistaken for a
@@ -105,19 +113,30 @@ abstract class MigratorSuite extends munit.FunSuite {
           (_: Key, _: com.aerospike.client.Record) => count += 1
         )
         scanSucceeded = true
-      } catch { case e: Exception => log.debug("waitForTruncate: scan check failed", e) }
+      } catch {
+        case e: Exception =>
+          // A scan that always fails (wrong server edition, auth) would otherwise time out with
+          // a message blaming truncate. Keep the cause so it travels with the failure.
+          lastScanError = Some(e)
+          log.debug("waitForTruncate: scan check failed", e)
+      }
       found = !scanSucceeded || count > 0
       if (found) {
         Thread.sleep(sleepMs)
         sleepMs = math.min(sleepMs * 2, 2000L) // exponential backoff, cap at 2s
       }
     }
-    assert(!found, s"Timed out waiting for truncate of set $setName after ${maxWaitMs}ms")
+    assert(
+      !found,
+      s"Timed out waiting for truncate of set $setName after ${maxWaitMs}ms" +
+        lastScanError.fold("")(e => s"; last scan error: $e")
+    )
     // Verify the set is writable — Aerospike may briefly reject writes while finalizing
     // truncation or initializing a new set.
     // Two consecutive successful writes confirm the set is stable — Aerospike 7.x may
     // transiently re-enter FORBIDDEN state after a single successful probe write.
-    val writeDeadline = System.currentTimeMillis() + 20000
+    val maxWritableWaitMs = 20000
+    val writeDeadline = System.currentTimeMillis() + maxWritableWaitMs
     val testKey = new Key(aerospikeNamespace, setName, "__truncate_check__")
     var consecutiveSuccesses = 0
     var writeSleepMs = 200L
@@ -147,7 +166,7 @@ abstract class MigratorSuite extends munit.FunSuite {
     // the test body (or as non-retrying bulk inserts in the benchmarks).
     assert(
       consecutiveSuccesses >= 2,
-      s"Set $setName did not become writable within 20000ms after truncate"
+      s"Set $setName did not become writable within ${maxWritableWaitMs}ms after truncate"
     )
   }
 
