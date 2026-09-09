@@ -8,8 +8,10 @@ SHELL := bash
         start-services-scylla-gcs wait-for-services-scylla-gcs \
         start-services-cassandra wait-for-services-cassandra test-integration-cassandra \
         start-services-alternator wait-for-services-alternator \
+        start-services-aerospike wait-for-services-aerospike \
         test test-unit test-integration test-integration-scylla \
         test-integration-alternator \
+        test-integration-aerospike \
         test-integration-aws \
         test-benchmark test-benchmark-jmh test-benchmark-jmh-quick \
         test-benchmark-e2e test-benchmark-e2e-sanity test-benchmark-e2e-sanity-scylla \
@@ -17,6 +19,8 @@ SHELL := bash
         test-benchmark-e2e-scylla-parquet test-benchmark-e2e-parquet-scylla \
         test-benchmark-e2e-cassandra-parquet \
         test-benchmark-e2e-dynamodb-s3export test-benchmark-e2e-s3export-alternator \
+        test-benchmark-e2e-aerospike-scylla \
+        test-benchmark-e2e-sanity-aerospike \
         dump-logs
 
 COMPOSE_FILE := docker-compose-tests.yml
@@ -30,6 +34,7 @@ COVERAGE ?= false
 VERBOSE ?= false
 E2E_CQL_ROWS ?= 5000000
 E2E_DDB_ROWS ?= 500000
+E2E_AEROSPIKE_ROWS ?= 5000000
 
 # ScyllaDB version and storage mode for DynamoDB/Alternator tests
 SCYLLA_VERSION ?= latest
@@ -170,6 +175,11 @@ start-services-dynamodb: ## Start services for DynamoDB integration tests (SCYLL
 
 start-services-alternator: start-services-dynamodb ## Alias for start-services-dynamodb
 
+start-services-aerospike: ## Start services needed for Aerospike integration tests
+	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
+	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
+	docker compose -f $(COMPOSE_FILE) up -d aerospike scylla
+
 start-services-aws: ## Start only services needed for AWS tests
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
 	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
@@ -209,6 +219,11 @@ wait-for-services-dynamodb: ## Wait for DynamoDB test services to become ready
 	wait $$p1; wait $$p2; wait $$p3; wait $$p4
 
 wait-for-services-alternator: wait-for-services-dynamodb ## Alias for wait-for-services-dynamodb
+
+wait-for-services-aerospike: ## Wait for Aerospike test services to become ready
+	$(Q)echo "Waiting for Aerospike to be ready on port 3000"
+	$(call attempt,docker compose -f $(COMPOSE_FILE) exec aerospike asinfo -v status 2>/dev/null | grep -qw ok)
+	$(call wait-for-cql,scylla)
 
 wait-for-services-aws: ## Wait for AWS test services to become ready
 	$(Q)($(call wait-for-port,8000)) & p1=$$!
@@ -280,6 +295,30 @@ test-integration-dynamodb: ## Run DynamoDB/Alternator integration tests (exclude
 
 test-integration-alternator: test-integration-dynamodb ## Alias for test-integration-dynamodb
 
+test-integration-aerospike: ## Run Aerospike integration tests only (excludes E2E benchmarks)
+	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.aerospike.* -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.E2E" $(SBT_COVERAGE_SUFFIX)
+
+# --- Per-version Aerospike source testing (AEROSPIKE_VERSION=6|7) ---
+AEROSPIKE_VERSION ?= 7
+ifeq ($(AEROSPIKE_VERSION),7)
+_AEROSPIKE_SERVICE := aerospike
+else
+_AEROSPIKE_SERVICE := aerospike$(AEROSPIKE_VERSION)
+endif
+
+start-services-aerospike-compat: ## Start services for a single Aerospike version (AEROSPIKE_VERSION=...)
+	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
+	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
+	docker compose -f $(COMPOSE_FILE) up -d $(_AEROSPIKE_SERVICE) scylla
+
+wait-for-services-aerospike-compat: ## Wait for a single Aerospike version to become ready (AEROSPIKE_VERSION=...)
+	$(Q)echo "Waiting for Aerospike ($(_AEROSPIKE_SERVICE)) to be ready"
+	$(call attempt,docker compose -f $(COMPOSE_FILE) exec $(_AEROSPIKE_SERVICE) asinfo -v status 2>/dev/null | grep -qw ok)
+	$(call wait-for-cql,scylla)
+
+test-integration-aerospike-compat: ## Run Aerospike integration tests for a specific version (AEROSPIKE_VERSION=...)
+	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly com.scylladb.migrator.aerospike.* -- --include-categories=com.scylladb.migrator.Integration --exclude-categories=com.scylladb.migrator.E2E" $(SBT_COVERAGE_SUFFIX)
+
 test-integration-aws: ## Run AWS integration tests (requires services + AWS credentials)
 	$(Q)sbt $(SBT_COVERAGE_PREFIX) "testOnly -- --include-categories=com.scylladb.migrator.AWS" $(SBT_COVERAGE_SUFFIX)
 
@@ -334,6 +373,7 @@ test-benchmark-e2e: ## Run all E2E throughput benchmarks (requires services)
 	$(Q)$(MAKE) test-benchmark-e2e-cassandra-parquet
 	$(Q)$(MAKE) test-benchmark-e2e-dynamodb-s3export
 	$(Q)$(MAKE) test-benchmark-e2e-s3export-alternator
+	$(Q)$(MAKE) test-benchmark-e2e-aerospike-scylla
 
 test-benchmark-e2e-cassandra-scylla: ## Run Cassandra->Scylla E2E benchmarks
 	$(Q)sbt -De2e.cql.rows=$(E2E_CQL_ROWS) "testOnly com.scylladb.migrator.scylla.CassandraToScyllaE2EBenchmark"
@@ -358,3 +398,9 @@ test-benchmark-e2e-dynamodb-s3export: ## Run DynamoDB->S3Export E2E benchmark
 
 test-benchmark-e2e-s3export-alternator: ## Run S3Export->Alternator E2E benchmark (requires dynamodb-s3export to have run first)
 	$(Q)sbt -De2e.ddb.rows=$(E2E_DDB_ROWS) "testOnly com.scylladb.migrator.alternator.S3ExportToAlternatorE2EBenchmark"
+
+test-benchmark-e2e-aerospike-scylla: ## Run Aerospike->Scylla E2E benchmark
+	$(Q)sbt -De2e.aerospike.rows=$(E2E_AEROSPIKE_ROWS) "testOnly com.scylladb.migrator.aerospike.AerospikeToScyllaE2EBenchmark"
+
+test-benchmark-e2e-sanity-aerospike: ## Run Aerospike E2E sanity (small row count, for CI)
+	$(Q)$(MAKE) test-benchmark-e2e-aerospike-scylla E2E_AEROSPIKE_ROWS=1000

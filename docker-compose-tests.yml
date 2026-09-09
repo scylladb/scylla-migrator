@@ -22,6 +22,45 @@ services:
       - "8001:8000"
     working_dir: /home/dynamodblocal
 
+  aerospike:
+    # Aerospike Server 7.x is AGPL v3 licensed. Used here only for integration testing.
+    image: aerospike/aerospike-server:7.2
+    volumes:
+      - ./tests/docker/aerospike/aerospike.conf:/etc/aerospike/aerospike.conf
+    ports:
+      - "3000:3000"
+    expose:
+      - 3000
+    healthcheck:
+      test: ["CMD", "asinfo", "-v", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  aerospike6:
+    # Aerospike 6.4 — minimum supported version (scanPartitions requires 6.0+).
+    # Network alias "aerospike" allows Spark configs to connect without modification.
+    # NOTE: Do not run aerospike and aerospike6 simultaneously — they share the "aerospike"
+    # alias. The compat tests start only one version at a time via make targets.
+    image: aerospike/aerospike-server:6.4
+    volumes:
+      - ./tests/docker/aerospike/aerospike.conf:/etc/aerospike/aerospike.conf
+    ports:
+      - "3001:3000"
+    expose:
+      - 3000
+    networks:
+      default:
+        aliases:
+          - aerospike
+    healthcheck:
+      test: ["CMD", "asinfo", "-v", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   cassandra:
     image: cassandra:4.1
     environment:

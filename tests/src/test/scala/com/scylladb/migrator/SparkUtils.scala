@@ -194,6 +194,12 @@ object SparkUtils {
           host = "localhost",
           port = mysqlHostPortMap.getOrElse(m.host, m.port)
         )
+      case a: SourceSettings.Aerospike =>
+        // Mirror MigratorSuite's AEROSPIKE_HOST/AEROSPIKE_PORT env handling so the migration
+        // config targets the same instance as the test client (compat runs use port 3001).
+        val host = sys.env.getOrElse("AEROSPIKE_HOST", "localhost")
+        val port = sys.env.get("AEROSPIKE_PORT").map(_.toInt).orElse(a.port).getOrElse(3000)
+        a.copy(hosts = Seq(host), port = Some(port))
     }
     val newTarget = config.target match {
       case s: TargetSettings.Scylla if s.cloud.isEmpty =>
