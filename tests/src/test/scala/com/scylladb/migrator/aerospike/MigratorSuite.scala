@@ -93,7 +93,10 @@ abstract class MigratorSuite extends munit.FunSuite {
     var sleepMs = 100L
     while (found && System.currentTimeMillis() < deadline) {
       var count = 0
-      try
+      // A scan that throws proves nothing about emptiness, so it must not be mistaken for a
+      // verified-empty set; keep polling until a scan actually succeeds or the deadline passes.
+      var scanSucceeded = false
+      try {
         sourceAerospike().scanPartitions(
           scanPolicy,
           com.aerospike.client.query.PartitionFilter.all(),
@@ -101,8 +104,9 @@ abstract class MigratorSuite extends munit.FunSuite {
           setName,
           (_: Key, _: com.aerospike.client.Record) => count += 1
         )
-      catch { case e: Exception => log.debug("waitForTruncate: scan check failed", e) }
-      found = count > 0
+        scanSucceeded = true
+      } catch { case e: Exception => log.debug("waitForTruncate: scan check failed", e) }
+      found = !scanSucceeded || count > 0
       if (found) {
         Thread.sleep(sleepMs)
         sleepMs = math.min(sleepMs * 2, 2000L) // exponential backoff, cap at 2s
@@ -138,6 +142,13 @@ abstract class MigratorSuite extends munit.FunSuite {
     // breaking the Scylla write with "Columns not found in table ...: _c".
     try sourceAerospike().delete(new WritePolicy(), testKey)
     catch { case e: Exception => log.debug("waitForTruncate: probe delete failed (ignored)", e) }
+
+    // Fail here rather than letting a non-writable set surface later as a confusing failure in
+    // the test body (or as non-retrying bulk inserts in the benchmarks).
+    assert(
+      consecutiveSuccesses >= 2,
+      s"Set $setName did not become writable within 20000ms after truncate"
+    )
   }
 
   def withSet(setName: String): FunFixture[String] =

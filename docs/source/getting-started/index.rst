@@ -4,6 +4,8 @@ Getting Started
 
 Since the Migrator is packaged as a Spark application, you first have to set up a Spark cluster to use it. Then, submit the application along with its :doc:`configuration </configuration>` on the Spark cluster, which will execute the migration by reading from the source database and writing to the target database.
 
+.. _set-up-a-spark-cluster:
+
 ----------------------
 Set Up a Spark Cluster
 ----------------------
@@ -14,13 +16,15 @@ We suggest starting with a small cluster containing a single worker node with 5 
 
 .. caution::
 
-  Make sure the Spark version, the Scala version, and the Migrator version you use are `compatible together <../#compatibility-matrix>`_.
+  Make sure the Spark version, the Scala version, and the Migrator version you use are :ref:`compatible together <compatibility-matrix>`.
 
 The following pages describe various alternative ways to set up a Spark cluster:
 
 * :doc:`on your infrastructure, using Ansible </getting-started/ansible>`,
 * :doc:`on your infrastructure, manually </getting-started/spark-standalone>`,
 * or, :doc:`on a single machine, using Docker </getting-started/docker>`.
+
+.. _configure-the-migration:
 
 -----------------------
 Configure the Migration

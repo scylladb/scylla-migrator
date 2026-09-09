@@ -213,9 +213,31 @@ class AerospikeTypesTest extends munit.FunSuite {
     assertEquals(AerospikeTypes.convertValue(java.lang.Boolean.TRUE, StringType), "true")
   }
 
-  test("convertValue: unexpected type coerces to String") {
-    // java.math.BigDecimal is not a recognized Aerospike type — should be coerced to String
-    assertEquals(AerospikeTypes.convertValue(new java.math.BigDecimal("42"), LongType), "42")
+  test("convertValue: unexpected type coerces to String for a string column") {
+    // java.math.BigDecimal is not a recognized Aerospike type — representable only as text
+    assertEquals(AerospikeTypes.convertValue(new java.math.BigDecimal("42"), StringType), "42")
+  }
+
+  test("convertValue: unexpected type yields null for a non-string column") {
+    // Returning "42" here would blow up in Spark's row encoder for a LongType column.
+    assertEquals(AerospikeTypes.convertValue(new java.math.BigDecimal("42"), LongType), null)
+  }
+
+  test("convertValue: String in a Long column yields null") {
+    // Bin type drifted after schema sampling; must not reach the encoder as a String.
+    assertEquals(AerospikeTypes.convertValue("hello", LongType), null)
+  }
+
+  test("convertValue: byte array in a Long column yields null") {
+    assertEquals(AerospikeTypes.convertValue(Array[Byte](1, 2, 3), LongType), null)
+  }
+
+  test("convertValue: Boolean in a Long column yields null") {
+    assertEquals(AerospikeTypes.convertValue(java.lang.Boolean.TRUE, LongType), null)
+  }
+
+  test("convertValue: Long in a Binary column yields null") {
+    assertEquals(AerospikeTypes.convertValue(java.lang.Long.valueOf(42L), BinaryType), null)
   }
 
   // --- mergeTypes ---
@@ -292,6 +314,19 @@ class AerospikeTypesTest extends munit.FunSuite {
   test("extractKey: Long userKey coerced to StringType") {
     val key = new com.aerospike.client.Key("ns", "set", 42L)
     assertEquals(AerospikeTypes.extractKey(key, StringType), "42")
+  }
+
+  test("extractKey: key type not matching the inferred type fails with guidance") {
+    // Sampling inferred LongType but this record has a String key: aero_key is non-nullable,
+    // so this must fail loudly instead of handing a String to a LongType field.
+    val key = new com.aerospike.client.Key("ns", "set", "not-a-long")
+    val ex = intercept[IllegalStateException] {
+      AerospikeTypes.extractKey(key, LongType)
+    }
+    assert(
+      ex.getMessage.contains("does not match the discovered key type"),
+      s"Unexpected message: ${ex.getMessage}"
+    )
   }
 
   test("extractKey: null userKey falls back to hex digest") {

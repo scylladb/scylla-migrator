@@ -78,8 +78,55 @@ object AerospikeTypes {
   }
 
   /** Convert an Aerospike value to a Spark-compatible value, coercing to match the expected type.
+    *
+    * Aerospike is schema-less, so a bin's runtime type can differ from the type inferred during
+    * sampling. Whatever the runtime-type rules produce is therefore checked against `expectedType`:
+    * a mismatch is rendered as text for string columns, and otherwise replaced by null (with a
+    * rate-limited warning) so a single unsampled value cannot fail the whole task with a
+    * ClassCastException inside Spark's row encoder.
     */
-  private[migrator] def convertValue(value: Any, expectedType: DataType): Any = value match {
+  private[migrator] def convertValue(value: Any, expectedType: DataType): Any = {
+    val converted = convertByRuntimeType(value, expectedType)
+    if (converted == null || isCompatible(converted, expectedType)) converted
+    else if (expectedType == StringType) converted.toString
+    else {
+      warnIncompatible(value, expectedType)
+      null
+    }
+  }
+
+  /** Whether a converted value can be handed to Spark's row encoder for `expectedType`. */
+  private def isCompatible(value: Any, expectedType: DataType): Boolean =
+    (value, expectedType) match {
+      case (_: java.lang.Long, LongType)               => true
+      case (_: java.lang.Integer, IntegerType)         => true
+      case (_: java.lang.Double, DoubleType)           => true
+      case (_: java.lang.Boolean, BooleanType)         => true
+      case (_: String, StringType)                     => true
+      case (_: Array[Byte], BinaryType)                => true
+      case (_: Seq[_], _: ArrayType)                   => true
+      case (_: scala.collection.Map[_, _], _: MapType) => true
+      case _                                           => false
+    }
+
+  /** Rate-limited warning for values that cannot be represented as the inferred column type. */
+  private def warnIncompatible(value: Any, expectedType: DataType): Unit = {
+    val typeName = if (value == null) "null" else value.getClass.getName
+    val counter = warnedTypeCounts.computeIfAbsent(
+      s"$typeName->$expectedType",
+      _ => new java.util.concurrent.atomic.AtomicLong(0)
+    )
+    val count = counter.incrementAndGet()
+    if (count == 1 || count % WarnInterval == 0)
+      log.warn(
+        s"convertValue: a value of type $typeName is not representable as $expectedType, " +
+          s"writing null ($count occurrences so far). The column type came from the schema " +
+          "sample; provide an explicit 'schema' override or raise 'schemaSampleSize' if this " +
+          "is unexpected."
+      )
+  }
+
+  private def convertByRuntimeType(value: Any, expectedType: DataType): Any = value match {
     case null => null
     // Collection types first (most specific)
     case v: java.util.List[_] =>
@@ -127,21 +174,25 @@ object AerospikeTypes {
     case v: String => v
     case v: java.lang.Boolean =>
       if (expectedType == BooleanType) v else v.toString
-    // Catch-all: coerce anything else to String. Warn on first occurrence and then
-    // periodically (every 10,000 occurrences) per type to surface ongoing degradation.
+    // Catch-all: an unrecognized type is only representable as text. Warn on first occurrence
+    // and then periodically (every 10,000 occurrences) per type to surface ongoing degradation.
+    // For non-string columns the value is returned unchanged so the compatibility guard in
+    // `convertValue` rejects it with a single, more specific warning.
     case v =>
-      val typeName = v.getClass.getName
-      val counter = warnedTypeCounts.computeIfAbsent(
-        typeName,
-        _ => new java.util.concurrent.atomic.AtomicLong(0)
-      )
-      val count = counter.incrementAndGet()
-      if (count == 1 || count % WarnInterval == 0)
-        log.warn(
-          s"convertValue: unexpected type $typeName for expected $expectedType, " +
-            s"coercing to String ($count occurrences so far)"
+      if (expectedType == StringType) {
+        val typeName = v.getClass.getName
+        val counter = warnedTypeCounts.computeIfAbsent(
+          typeName,
+          _ => new java.util.concurrent.atomic.AtomicLong(0)
         )
-      v.toString
+        val count = counter.incrementAndGet()
+        if (count == 1 || count % WarnInterval == 0)
+          log.warn(
+            s"convertValue: unexpected type $typeName for expected $expectedType, " +
+              s"coercing to String ($count occurrences so far)"
+          )
+        v.toString
+      } else v
   }
 
   /** Clear rate-limited warning state. Intended for tests to prevent state leaking across suites.
@@ -170,16 +221,27 @@ object AerospikeTypes {
         // Digest is always available as raw bytes; user keys written as blobs arrive as byte[].
         if (key.userKey != null) key.userKey.getObject else key.digest
       case _ =>
-        // A non-String/Binary key type was inferred from the sample. A user key matching that
-        // type is returned as-is; a digest-only record (null user key) is not representable as
-        // the inferred type, so fail with an actionable message rather than corrupting the row.
-        if (key.userKey != null) key.userKey.getObject
-        else
+        // A non-String/Binary key type was inferred from the sample. Neither a digest-only
+        // record nor a key of a different runtime type is representable as that type, and
+        // aero_key is non-nullable, so fail with an actionable message rather than emitting a
+        // row the Spark encoder will reject.
+        if (key.userKey == null)
           throw new IllegalStateException(
             s"Digest-only record (no user key) encountered, but the discovered key type is " +
               s"$keyType. Store keys with sendKey=true, or set an explicit 'schema' so 'aero_key' " +
               "is a string and the digest fallback is representable."
           )
+        else {
+          val userKey = key.userKey.getObject
+          if (isCompatible(userKey, keyType)) userKey
+          else
+            throw new IllegalStateException(
+              s"Aerospike record key of type ${userKey.getClass.getName} does not match the " +
+                s"discovered key type $keyType. This set mixes key types that the schema sample " +
+                "did not observe. Set an explicit 'schema' so 'aero_key' is a string, or raise " +
+                "'schemaSampleSize' so the mixed types are detected during discovery."
+            )
+        }
     }
 
   /** Parse a user-provided type name into a Spark DataType. Supports scalar types (string, long,

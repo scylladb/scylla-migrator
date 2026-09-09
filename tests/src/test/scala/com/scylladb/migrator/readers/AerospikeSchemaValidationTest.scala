@@ -50,4 +50,29 @@ class AerospikeSchemaValidationTest extends munit.FunSuite {
     }
     assert(ex.getMessage.contains("foo"))
   }
+
+  test("validateSchemaAgainstReservedNames: ordinary bin names pass") {
+    Aerospike.validateSchemaAgainstReservedNames(ListMap("foo" -> "string", "bar" -> "long"))
+  }
+
+  test("validateSchemaAgainstReservedNames: declaring aero_key throws") {
+    // Without this guard the key column would be appended a second time.
+    val ex = intercept[IllegalArgumentException] {
+      Aerospike.validateSchemaAgainstReservedNames(ListMap("aero_key" -> "long"))
+    }
+    assert(
+      ex.getMessage.contains("aero_key"),
+      s"Expected 'aero_key' in message, got: ${ex.getMessage}"
+    )
+  }
+
+  test("validateSchemaAgainstReservedNames: metadata column names throw") {
+    val ex = intercept[IllegalArgumentException] {
+      Aerospike.validateSchemaAgainstReservedNames(
+        ListMap("foo" -> "string", "aero_ttl" -> "long", "aero_generation" -> "long")
+      )
+    }
+    assert(ex.getMessage.contains("aero_ttl"), s"Unexpected message: ${ex.getMessage}")
+    assert(ex.getMessage.contains("aero_generation"), s"Unexpected message: ${ex.getMessage}")
+  }
 }

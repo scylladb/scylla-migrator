@@ -2,7 +2,7 @@
 Run the Migration
 =================
 
-After you have `set up a Spark cluster <./getting-started#set-up-a-spark-cluster>`_ and `configured the migration <./getting-started#configure-the-migration>`_ you can start the migration by submitting a job to your Spark cluster. The command to use to submit the job depends on how the Spark cluster was installed. Please refer to the page that describes your Spark cluster setup to see how to invoke the ``spark-submit`` command. This page describes the arguments you need to pass to the ``spark-submit`` command to control the resources allocated to the migration job.
+After you have :ref:`set up a Spark cluster <set-up-a-spark-cluster>` and :ref:`configured the migration <configure-the-migration>` you can start the migration by submitting a job to your Spark cluster. The command to use to submit the job depends on how the Spark cluster was installed. Please refer to the page that describes your Spark cluster setup to see how to invoke the ``spark-submit`` command. This page describes the arguments you need to pass to the ``spark-submit`` command to control the resources allocated to the migration job.
 
 -----------------------
 Invoke ``spark-submit``

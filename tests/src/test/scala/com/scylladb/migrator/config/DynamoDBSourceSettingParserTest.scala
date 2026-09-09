@@ -76,6 +76,60 @@ class DynamoDBSourceSettingParserTest extends munit.FunSuite {
     }
   }
 
+  test("dynamodb-s3-export config with streamSource block (ARCH-1)") {
+    // This pins the wire-format for chained S3-export + streamChanges. The nested block must
+    // decode into a `SourceSettings.DynamoDB` whose fields are picked up (table/region) — the
+    // orchestrator uses those when enabling the streaming destination on the still-live table.
+    val config =
+      """type: dynamodb-s3-export
+        |bucket: foobar
+        |manifestKey: AWSDynamoDB/01715094384115-f0e55399/manifest-summary.json
+        |tableDescription:
+        |  attributeDefinitions:
+        |    - name: id
+        |      type: S
+        |  keySchema:
+        |    - name: id
+        |      type: HASH
+        |streamSource:
+        |  table: MyLiveTable
+        |  region: us-east-1
+        |""".stripMargin
+
+    val parsed = parseSourceSettings(config)
+    assert(
+      parsed.streamSource.isDefined,
+      s"streamSource must round-trip out of YAML; got ${parsed.streamSource}"
+    )
+    val live = parsed.streamSource.get
+    assertEquals(live.table, "MyLiveTable")
+    assertEquals(live.region, Some("us-east-1"))
+    // Fields not specified in YAML default to None — sanity-check one so the decoder isn't
+    // silently reusing state from the outer S3-export block.
+    assertEquals(live.credentials, None)
+    assertEquals(live.endpoint, None)
+  }
+
+  test("dynamodb-s3-export without streamSource keeps streamSource = None (default)") {
+    // Backward-compat pin: existing YAML files that do not mention streamSource must continue
+    // decoding unchanged.
+    val config =
+      """type: dynamodb-s3-export
+        |bucket: foobar
+        |manifestKey: AWSDynamoDB/01715094384115-f0e55399/manifest-summary.json
+        |tableDescription:
+        |  attributeDefinitions:
+        |    - name: id
+        |      type: S
+        |  keySchema:
+        |    - name: id
+        |      type: HASH
+        |""".stripMargin
+
+    val parsed = parseSourceSettings(config)
+    assertEquals(parsed.streamSource, None)
+  }
+
   test("'dynamo' type alias parses as DynamoDB source") {
     val config =
       """type: dynamo

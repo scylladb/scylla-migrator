@@ -127,7 +127,7 @@ class DynamoDBTargetSettingParserTest extends munit.FunSuite {
         assertEquals(alt.table, "MyTable")
         assertEquals(alt.writeThroughput, Some(200))
         assertEquals(alt.throughputWritePercent, Some(0.8f))
-        assertEquals(alt.streamChanges, true)
+        assertEquals(alt.streamChanges, StreamChangesSetting.DynamoDBStreams)
         assertEquals(alt.endpoint, Some(DynamoDBEndpoint("http://10.0.0.1", 8000)))
         assertEquals(alt.alternatorConfig.datacenter, Some("dc1"))
         assertEquals(alt.alternatorConfig.rack, Some("rack1"))
@@ -172,7 +172,7 @@ class DynamoDBTargetSettingParserTest extends munit.FunSuite {
       table                       = "RoundtripTable",
       writeThroughput             = Some(200),
       throughputWritePercent      = Some(0.8f),
-      streamChanges               = true,
+      streamChanges               = StreamChangesSetting.DynamoDBStreams,
       skipInitialSnapshotTransfer = Some(false),
       removeConsumedCapacity      = false,
       billingMode                 = Some(BillingMode.PROVISIONED),
@@ -211,7 +211,7 @@ class DynamoDBTargetSettingParserTest extends munit.FunSuite {
       table                       = "TestTable",
       writeThroughput             = Some(200),
       throughputWritePercent      = Some(0.8f),
-      streamChanges               = false,
+      streamChanges               = StreamChangesSetting.Disabled,
       skipInitialSnapshotTransfer = None,
       billingMode                 = Some(BillingMode.PAY_PER_REQUEST)
     )
@@ -462,7 +462,7 @@ class DynamoDBTargetSettingParserTest extends munit.FunSuite {
       table                       = "MinimalTable",
       writeThroughput             = None,
       throughputWritePercent      = None,
-      streamChanges               = false,
+      streamChanges               = StreamChangesSetting.Disabled,
       skipInitialSnapshotTransfer = None
     )
     val json = (original: TargetSettings).asJson
@@ -478,7 +478,7 @@ class DynamoDBTargetSettingParserTest extends munit.FunSuite {
       table                       = "MinimalTable",
       writeThroughput             = None,
       throughputWritePercent      = None,
-      streamChanges               = false,
+      streamChanges               = StreamChangesSetting.Disabled,
       skipInitialSnapshotTransfer = None,
       removeConsumedCapacity      = true,
       billingMode                 = None,
@@ -501,7 +501,7 @@ class DynamoDBTargetSettingParserTest extends munit.FunSuite {
         table                       = "",
         writeThroughput             = None,
         throughputWritePercent      = None,
-        streamChanges               = false,
+        streamChanges               = StreamChangesSetting.Disabled,
         skipInitialSnapshotTransfer = None
       )
       .productElementNames
@@ -764,7 +764,7 @@ class DynamoDBTargetSettingParserTest extends munit.FunSuite {
       table                       = "HttpsTable",
       writeThroughput             = None,
       throughputWritePercent      = None,
-      streamChanges               = false,
+      streamChanges               = StreamChangesSetting.Disabled,
       skipInitialSnapshotTransfer = None,
       removeConsumedCapacity      = true,
       billingMode                 = None,

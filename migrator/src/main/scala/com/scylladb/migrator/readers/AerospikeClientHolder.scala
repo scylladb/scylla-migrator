@@ -80,12 +80,24 @@ private[migrator] object AerospikeClientHolder extends Serializable {
     }
   }
 
+  /** Maximum number of cached clients tolerated before idle ones are evicted. Keeps the cache
+    * useful for the sequential tasks of one job while bounding growth across jobs that use distinct
+    * connection configurations.
+    */
+  private val MaxCachedClients = 4
+
+  private def closeQuietly(client: AerospikeClient, context: String): Unit =
+    if (client != null)
+      try client.close()
+      catch { case e: Exception => log.debug(s"Error closing Aerospike client $context", e) }
+
   private def closeAll(): Unit = synchronized {
     closed = true
-    clients.forEach { (_, c) =>
-      if (c != null && c.isConnected) c.close()
-    }
+    // Close every cached client, connected or not: a client that lost its connection still owns
+    // its tend thread and sockets, so skipping it would leak exactly the failed clients.
+    clients.forEach((_, c) => closeQuietly(c, "during shutdown"))
     clients.clear()
+    refCounts.clear()
   }
 
   /** For tests only — close all clients and allow the holder to be reused. */
@@ -108,11 +120,8 @@ private[migrator] object AerospikeClientHolder extends Serializable {
     credentials: Option[(String, String)]
   ): Unit = {
     val key = AerospikeConnectionKey.fromConfig(connConfig, credentials)
-    val removed = clients.remove(key)
-    if (removed != null) {
-      try removed.close()
-      catch { case e: Exception => log.debug("Error closing Aerospike client during release", e) }
-    }
+    refCounts.remove(key)
+    closeQuietly(clients.remove(key), "during release")
   }
 
   /** Acquire a client and increment its active-reference count. Every acquire MUST be paired with
@@ -133,22 +142,31 @@ private[migrator] object AerospikeClientHolder extends Serializable {
     }
   }
 
-  /** Release one active reference; close and evict the client when the count reaches zero. */
+  /** Release one active reference.
+    *
+    * The client is deliberately left open once the count reaches zero: an executor processes many
+    * partitions in sequence, and closing between tasks would repeat connection setup and cluster
+    * discovery for every split. Cached clients are closed by the JVM shutdown hook, by `release` or
+    * `reset`, or by idle eviction once more than `MaxCachedClients` are held.
+    */
   def releaseOne(key: AerospikeConnectionKey): Unit = {
     val _ = refCounts.compute(
       key,
       (_, c) => {
         val n = (if (c == null) 0 else c.intValue) - 1
-        if (n <= 0) {
-          val removed = clients.remove(key)
-          if (removed != null)
-            try removed.close()
-            catch { case e: Exception => log.debug("Error closing Aerospike client on release", e) }
-          null // drop the refcount entry
-        } else Integer.valueOf(n)
+        if (n <= 0) null // drop the refcount entry; the client stays cached
+        else Integer.valueOf(n)
       }
     )
+    if (clients.size() > MaxCachedClients) evictIdleClients()
   }
+
+  /** Close and evict cached clients that currently have no active references. */
+  private def evictIdleClients(): Unit =
+    clients.forEach { (k, _) =>
+      if (!refCounts.containsKey(k))
+        closeQuietly(clients.remove(k), "during idle eviction")
+    }
 
   /** Get or create an AerospikeClient for the given connection config and credentials. */
   def get(

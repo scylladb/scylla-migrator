@@ -196,6 +196,7 @@ object Aerospike {
 
     source.schema match {
       case Some(userSchema) =>
+        validateSchemaAgainstReservedNames(userSchema)
         source.bins.foreach(binFilter => validateSchemaAgainstBins(userSchema, binFilter))
         val fields = userSchema.map { case (name, typeName) =>
           StructField(name, AerospikeTypes.parseType(typeName), nullable = true)
@@ -262,6 +263,11 @@ object Aerospike {
           // Once set to Some(StringType), it never reverts — StringType is the absorbing element.
           val keyTypeRef = new AtomicReference[Option[DataType]](None)
           val sampledCount = new AtomicInteger(0)
+          // Progressive discovery re-scans overlapping partition ranges, so a record can be
+          // observed more than once. Escalation is gated on distinct records (tracked by digest,
+          // and only up to sampleSize) so duplicates cannot masquerade as a sufficient sample.
+          val distinctCount = new AtomicInteger(0)
+          val seenDigests = ConcurrentHashMap.newKeySet[java.nio.ByteBuffer]()
           // Collect type conflict messages during scanning; logged after scan completes
           // to avoid blocking scan callback threads on synchronous log appenders.
           val typeConflicts = new ConcurrentLinkedQueue[String]()
@@ -307,6 +313,11 @@ object Aerospike {
                 }
               }
               sampledCount.incrementAndGet()
+              if (
+                distinctCount.get() < sampleSize &&
+                seenDigests.add(java.nio.ByteBuffer.wrap(key.digest))
+              )
+                distinctCount.incrementAndGet()
             }
           }
 
@@ -357,12 +368,12 @@ object Aerospike {
 
               // Progressive fallback: 8 -> 64 -> all partitions. A fresh ScanPolicy is used at
               // each step because maxRecords is not reset between scans. A step only executes if
-              // the accumulated sample is still smaller than the requested sampleSize, so plentiful
-              // data stops after the first slice. On sparse data, overlapping ranges may re-observe
-              // records: type merging is idempotent, so only the logged sampledCount may inflate.
-              if (sampledCount.get() < sampleSize) {
+              // the sample is still smaller than the requested sampleSize, so plentiful data stops
+              // after the first slice. Ranges use independent random offsets and may overlap, so
+              // the decision uses distinct records; type merging itself is idempotent.
+              if (distinctCount.get() < sampleSize) {
                 log.warn(
-                  s"Only ${sampledCount.get()} record(s) in the initial $InitialSamplePartitions-partition " +
+                  s"Only ${distinctCount.get()} distinct record(s) in the initial $InitialSamplePartitions-partition " +
                     s"sample (< requested $sampleSize); expanding to $ExtendedSamplePartitions partitions for schema discovery"
                 )
                 val extCount = math.min(ExtendedSamplePartitions, TotalAerospikePartitions)
@@ -376,9 +387,9 @@ object Aerospike {
                   source.bins
                 )
               }
-              if (sampledCount.get() < sampleSize) {
+              if (distinctCount.get() < sampleSize) {
                 log.warn(
-                  s"Only ${sampledCount.get()} record(s) after $ExtendedSamplePartitions partitions " +
+                  s"Only ${distinctCount.get()} distinct record(s) after $ExtendedSamplePartitions partitions " +
                     s"(< requested $sampleSize); falling back to a full cluster scan for schema discovery"
                 )
                 tryScanPartitions(
@@ -403,8 +414,10 @@ object Aerospike {
           }
 
           val finalSampledCount = sampledCount.get()
+          val finalDistinctCount = distinctCount.get()
           log.info(
-            s"Schema discovery sampled $finalSampledCount records, discovered ${bins.size()} bins"
+            s"Schema discovery sampled $finalSampledCount records ($finalDistinctCount distinct), " +
+              s"discovered ${bins.size()} bins"
           )
           if (finalSampledCount == 0) {
             log.warn(
@@ -413,14 +426,7 @@ object Aerospike {
             )
           }
 
-          val reservedNames = Set(KeyColumnName, TtlColumnName, GenerationColumnName)
-          bins.keySet().asScala.filter(reservedNames).foreach { n =>
-            log.warn(
-              s"Aerospike bin '$n' collides with a reserved column name and will be shadowed by " +
-                "migration metadata (it will NOT be migrated). Rename the bin or use a 'schema' override."
-            )
-          }
-          val fieldSeq = if (source.bins.isDefined) {
+          val discoveredFields = if (source.bins.isDefined) {
             source.bins.get.map { binName =>
               val binType = Option(bins.get(binName)).getOrElse(StringType)
               StructField(binName, binType, nullable = true)
@@ -429,6 +435,17 @@ object Aerospike {
             bins.asScala.toSeq.sortBy(_._1).map { case (name, dataType) =>
               StructField(name, dataType, nullable = true)
             }
+          }
+          // Bins whose name collides with a reserved metadata column are dropped rather than
+          // appended, so the resulting schema can never contain duplicate column names.
+          val (shadowedFields, fieldSeq) =
+            discoveredFields.partition(f => ReservedColumnNames.contains(f.name))
+          shadowedFields.foreach { f =>
+            log.warn(
+              s"Aerospike bin '${f.name}' collides with a reserved column name and will NOT be " +
+                "migrated; that column carries migration metadata instead. Rename the bin or use " +
+                "a 'schema' override."
+            )
           }
 
           val finalKeyType = keyTypeRef.get().getOrElse(StringType)
@@ -453,6 +470,29 @@ object Aerospike {
         Seq(StructField(GenerationColumnName, IntegerType, nullable = true))
       else Seq.empty
     ttlField ++ genField
+  }
+
+  /** Column names produced by the migrator itself. A bin sharing one of these names cannot be
+    * represented as its own column, because the metadata value occupies it.
+    */
+  private[migrator] val ReservedColumnNames: Set[String] =
+    Set(KeyColumnName, TtlColumnName, GenerationColumnName)
+
+  /** Reject explicit schema overrides that declare a reserved metadata column name, which would
+    * otherwise add a second field with the same name to the resulting schema.
+    */
+  private[migrator] def validateSchemaAgainstReservedNames(
+    schema: scala.collection.immutable.ListMap[String, String]
+  ): Unit = {
+    val declared = schema.keys.filter(ReservedColumnNames.contains).toSeq
+    if (declared.nonEmpty)
+      throw new IllegalArgumentException(
+        s"Schema override declares reserved column name(s): ${declared.mkString(", ")}. " +
+          s"${ReservedColumnNames.toSeq.sorted.mkString(", ")} are generated by the migrator " +
+          s"('$KeyColumnName' is always a string; '$TtlColumnName' and '$GenerationColumnName' " +
+          "come from preserveTTL / preserveGeneration). Rename the bin(s) or drop them from the " +
+          "schema override."
+      )
   }
 
   /** Validate that when both bins filter and schema override are provided, all schema keys are a
@@ -585,13 +625,24 @@ object Aerospike {
   ): Unit =
     try runScanPartitions(client, policy, filter, namespace, set, callback, bins)
     catch {
-      case e: AerospikeException
-          if e.getResultCode == ResultCode.PARAMETER_ERROR ||
-            e.getResultCode == ResultCode.SERVER_NOT_AVAILABLE ||
-            e.getResultCode == ResultCode.ROLE_VIOLATION =>
+      // Only a rejected request parameter points at an edition/version that cannot serve
+      // partition scans; the other codes have their own, unrelated remediations.
+      case e: AerospikeException if e.getResultCode == ResultCode.PARAMETER_ERROR =>
         throw new RuntimeException(
-          "Partition scan failed. scanPartitions requires Aerospike Community Edition 6.0+ or Enterprise Edition. " +
-            s"Check your Aerospike server version. Original error (code ${e.getResultCode}): ${e.getMessage}",
+          "Partition scan was rejected by the server. scanPartitions requires Aerospike Community Edition 6.0+ " +
+            s"or Enterprise Edition. Check your Aerospike server version. Original error (code ${e.getResultCode}): ${e.getMessage}",
+          e
+        )
+      case e: AerospikeException if e.getResultCode == ResultCode.ROLE_VIOLATION =>
+        throw new RuntimeException(
+          s"Partition scan denied: the Aerospike user is not authorized to scan '$namespace.$set'. " +
+            s"Grant the user read/scan privileges on this namespace and set. Original error (code ${e.getResultCode}): ${e.getMessage}",
+          e
+        )
+      case e: AerospikeException if e.getResultCode == ResultCode.SERVER_NOT_AVAILABLE =>
+        throw new RuntimeException(
+          s"Partition scan failed: the Aerospike cluster is not available for '$namespace.$set'. " +
+            s"Check node health, connectivity and that the namespace is fully loaded. Original error (code ${e.getResultCode}): ${e.getMessage}",
           e
         )
       case e: AerospikeException =>

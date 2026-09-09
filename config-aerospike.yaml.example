@@ -58,11 +58,20 @@ source:
   # schemaDiscoveryStrategy: progressive
   # Optional - explicit schema override. When set, schema discovery is skipped entirely.
   # Useful for evolving schemas where sample-based discovery might miss bins.
-  # Supported types: string, text, long, bigint, int, integer, double, binary, blob
+  # Supported scalar types: string, text, long, bigint, int, integer, double,
+  #   boolean, bool, binary, blob
+  # Supported collection types: list<T> and map<K,V>, which may be nested,
+  #   e.g. list<string>, map<string,long>, list<map<string,long>>
+  # Note: 'aero_key', 'aero_ttl' and 'aero_generation' are reserved for migration
+  #   metadata and must not be declared here. 'aero_key' is always a string when an
+  #   explicit schema is used.
   # schema:
   #   name: string
   #   age: long
   #   score: double
+  #   active: boolean
+  #   tags: list<string>
+  #   attrs: map<string,long>
   #   data: binary
   #
   # Optional - preserve Aerospike record metadata as additional columns.
@@ -100,6 +109,6 @@ target:
   connections: 16
   stripTrailingZerosForDecimals: false
 
-savepoints:
-  path: /app/savepoints
-  intervalSeconds: 300
+# No 'savepoints' block: the Aerospike source does not support durable resume, so any
+# savepoints settings are ignored. An interrupted Aerospike migration must be restarted
+# from scratch — make sure the target table tolerates idempotent re-writes.

@@ -113,7 +113,7 @@ object Scylla {
     *
     * We drop them from the DataFrame before writing so that both sides agree on the column count.
     */
-  // Mirrors the private TableWriter.InternalColumns from spark-scylladb-connector 4.1.3.
+  // Mirrors the private TableWriter.InternalColumns from spark-scylladb-connector 4.1.4.
   // If the connector version changes, verify this set is still in sync.
   private[writers] val InternalColumns: Set[String] = Set("solr_query")
 
@@ -153,20 +153,32 @@ object Scylla {
     }
   }
 
-  /** Write rows with [[com.datastax.spark.connector.types.CassandraOption]] cells (exploded
-    * timestamp-preservation rows). Bypasses Spark's [[DataFrame]] row encoder, which cannot
-    * represent tri-state regular columns.
+  /** Shared write path used by both [[writeRowRDD]] and [[writeDataframe]], invoked once internal
+    * columns have been dropped and renames applied. `schema0` is the pre-rename schema, required by
+    * [[resolvePrimaryKeyColumns]] (which reverse-maps target primary-key names back to source
+    * names). `renamedSchema` is the post-rename schema used for the collision check, schema log,
+    * and column selector. Keeping the rename in each caller preserves their respective rename
+    * semantics (positional `renameSchemaFields` for the RDD path, `withColumnRenamed` for the
+    * DataFrame path).
     */
-  def writeRowRDD(
+  private def writeCleanedRdd(
     target: TargetSettings.Scylla,
     renames: List[Rename],
-    rdd: RDD[Row],
-    rowSchema: StructType,
+    rdd0: RDD[Row],
+    schema0: StructType,
+    renamedSchema: StructType,
     timestampColumns: Option[TimestampColumns],
     tokenRangeAccumulator: Option[TokenRangeAccumulator],
     source: SourceSettings
   )(implicit spark: SparkSession): Unit = {
-    val (rdd0, schema0) = dropInternalColumnsFromRDD(rdd, rowSchema)
+    // Contract for callers: `renamedSchema` must be a positional rename of `schema0` (same arity
+    // and field order), and each row in `rdd0` must align positionally with `schema0`. We can
+    // cheaply assert the schema arity here; row arity is the caller's responsibility.
+    require(
+      schema0.length == renamedSchema.length,
+      s"Internal error: pre-rename schema (${schema0.length} fields) and renamed schema " +
+        s"(${renamedSchema.length} fields) must have the same arity"
+    )
 
     val connector = Connectors.targetConnector(spark.sparkContext.getConf, target)
 
@@ -203,7 +215,6 @@ object Scylla {
         tempWriteConf
       }
 
-    val renamedSchema = renameSchemaFields(schema0, renames)
     requireNoCaseInsensitiveColumnNameCollisions(
       renamedSchema.fieldNames.toSeq,
       "after applying renames before writing to ScyllaDB"
@@ -216,6 +227,11 @@ object Scylla {
       ArraySeq.unsafeWrapArray(renamedSchema.fields.map(_.name: ColumnRef)): _*
     )
 
+    // Spark's conversion from its internal Decimal type to java.math.BigDecimal
+    // pads the resulting value with trailing zeros corresponding to the scale of the
+    // Decimal type. Some users don't like this so we conditionally strip those. The
+    // CassandraOption.Value case only occurs on the exploded RDD path; it is inert for
+    // plain DataFrame rows.
     val rddStripped =
       if (!target.stripTrailingZerosForDecimals) rdd0
       else
@@ -229,6 +245,9 @@ object Scylla {
           })
         }
 
+    // Optionally filter out rows where any primary key column is null to prevent
+    // infinite retries against the target database (see issue #262).
+    // Auto-detected from the source type, or overridden via target `dropNullPrimaryKeys`.
     val dropNullPks = shouldDropNullPrimaryKeys(target, source)
     log.info(s"Drop null primary key rows: ${dropNullPks}")
     val (finalRdd, nullPkRowsDropped) =
@@ -275,6 +294,33 @@ object Scylla {
     }
   }
 
+  /** Write rows with [[com.datastax.spark.connector.types.CassandraOption]] cells (exploded
+    * timestamp-preservation rows). Bypasses Spark's [[DataFrame]] row encoder, which cannot
+    * represent tri-state regular columns.
+    */
+  def writeRowRDD(
+    target: TargetSettings.Scylla,
+    renames: List[Rename],
+    rdd: RDD[Row],
+    rowSchema: StructType,
+    timestampColumns: Option[TimestampColumns],
+    tokenRangeAccumulator: Option[TokenRangeAccumulator],
+    source: SourceSettings
+  )(implicit spark: SparkSession): Unit = {
+    val (rdd0, schema0) = dropInternalColumnsFromRDD(rdd, rowSchema)
+    val renamedSchema = renameSchemaFields(schema0, renames)
+    writeCleanedRdd(
+      target,
+      renames,
+      rdd0,
+      schema0,
+      renamedSchema,
+      timestampColumns,
+      tokenRangeAccumulator,
+      source
+    )
+  }
+
   def writeDataframe(
     target: TargetSettings.Scylla,
     renames: List[Rename],
@@ -285,41 +331,6 @@ object Scylla {
   )(implicit spark: SparkSession): Unit = {
     val cleanDf = dropInternalColumns(df)
 
-    val connector = Connectors.targetConnector(spark.sparkContext.getConf, target)
-
-    val consistencyLevel = ConsistencyLevelUtils.parseConsistencyLevel(target.consistencyLevel)
-    log.info(
-      s"Using consistencyLevel [${consistencyLevel}] for TARGET based on target config [${target.consistencyLevel}]"
-    )
-
-    val tempWriteConf = WriteConf
-      .fromSparkConf(spark.sparkContext.getConf)
-      .copy(consistencyLevel = consistencyLevel)
-
-    val writeConf =
-      if (timestampColumns.nonEmpty) {
-        tempWriteConf.copy(
-          ttl = timestampColumns.map(_.ttl).fold(TTLOption.defaultValue)(TTLOption.perRow),
-          timestamp = timestampColumns
-            .map(_.writeTime)
-            .fold(TimestampOption.defaultValue)(TimestampOption.perRow)
-        )
-      } else if (target.writeTTLInS.nonEmpty || target.writeWritetimestampInuS.nonEmpty) {
-        var hardcodedTempWriteConf = tempWriteConf
-        if (target.writeTTLInS.nonEmpty) {
-          hardcodedTempWriteConf =
-            hardcodedTempWriteConf.copy(ttl = TTLOption.constant(target.writeTTLInS.get))
-        }
-        if (target.writeWritetimestampInuS.nonEmpty) {
-          hardcodedTempWriteConf = hardcodedTempWriteConf.copy(
-            timestamp = TimestampOption.constant(target.writeWritetimestampInuS.get)
-          )
-        }
-        hardcodedTempWriteConf
-      } else {
-        tempWriteConf
-      }
-
     // Similarly to createDataFrame, when using withColumnRenamed, Spark tries
     // to re-encode the dataset. Instead we just use the modified schema from this
     // DataFrame; the access to the rows is positional anyway and the field names
@@ -329,78 +340,16 @@ object Scylla {
         acc.withColumnRenamed(from, to)
       }
       .schema
-    requireNoCaseInsensitiveColumnNameCollisions(
-      renamedSchema.fieldNames.toSeq,
-      "after applying renames before writing to ScyllaDB"
+    writeCleanedRdd(
+      target,
+      renames,
+      cleanDf.rdd,
+      cleanDf.schema,
+      renamedSchema,
+      timestampColumns,
+      tokenRangeAccumulator,
+      source
     )
-
-    log.info("Schema after renames:")
-    log.info(renamedSchema.treeString)
-
-    val columnSelector = SomeColumns(
-      ArraySeq.unsafeWrapArray(renamedSchema.fields.map(_.name: ColumnRef)): _*
-    )
-
-    // Spark's conversion from its internal Decimal type to java.math.BigDecimal
-    // pads the resulting value with trailing zeros corresponding to the scale of the
-    // Decimal type. Some users don't like this so we conditionally strip those.
-    val rdd =
-      if (!target.stripTrailingZerosForDecimals) cleanDf.rdd
-      else
-        cleanDf.rdd.map { row =>
-          Row.fromSeq(row.toSeq.map {
-            case x: java.math.BigDecimal => x.stripTrailingZeros()
-            case x                       => x
-          })
-        }
-
-    // Optionally filter out rows where any primary key column is null to prevent
-    // infinite retries against the target database (see issue #262).
-    // Auto-detected from the source type, or overridden via target `dropNullPrimaryKeys`.
-    val dropNullPks = shouldDropNullPrimaryKeys(target, source)
-    log.info(s"Drop null primary key rows: ${dropNullPks}")
-    val (finalRdd, nullPkRowsDropped) =
-      if (dropNullPks) {
-        val tableDef =
-          connector.withSessionDo(Schema.tableFromCassandra(_, target.keyspace, target.table))
-        val targetPkNames = tableDef.primaryKey.map(_.columnName).toSet
-
-        val pkResolution = resolvePrimaryKeyColumns(targetPkNames, renames, cleanDf.schema)
-        pkResolution.unresolvedSourcePkNames.foreach { sourcePkName =>
-          log.warn(s"Primary key column '${sourcePkName}' not found in source DataFrame schema")
-        }
-        requireAllPrimaryKeysResolved(targetPkNames, pkResolution)
-
-        val pkColumnsInDf = pkResolution.resolvedSourcePkNames
-        val pkFieldIndices = pkResolution.fieldIndices
-        log.info(
-          s"Primary key columns in target table: ${targetPkNames.mkString(", ")}; " +
-            s"corresponding source columns: ${pkColumnsInDf.mkString(", ")}"
-        )
-
-        val accumulator =
-          spark.sparkContext.longAccumulator("Rows dropped due to null primary key")
-        (dropRowsWithNullPrimaryKeys(rdd, pkFieldIndices, accumulator), Some(accumulator))
-      } else {
-        (rdd, None)
-      }
-
-    finalRdd
-      .saveToCassandra(
-        target.keyspace,
-        target.table,
-        columnSelector,
-        writeConf,
-        tokenRangeAccumulator = tokenRangeAccumulator
-      )(connector, SqlRowWriter.Factory)
-
-    nullPkRowsDropped.foreach { acc =>
-      if (acc.value > 0) {
-        log.warn(
-          s"Dropped ${acc.value} rows with null primary key values"
-        )
-      }
-    }
   }
 
 }

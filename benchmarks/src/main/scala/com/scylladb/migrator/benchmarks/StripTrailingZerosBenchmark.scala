@@ -1,5 +1,6 @@
 package com.scylladb.migrator.benchmarks
 
+import com.datastax.spark.connector.types.CassandraOption
 import org.apache.spark.sql.Row
 import org.openjdk.jmh.annotations._
 
@@ -18,6 +19,7 @@ class StripTrailingZerosBenchmark {
 
   private var decimalRows: Array[Row] = _
   private var mixedRows: Array[Row] = _
+  private var cassandraOptionRows: Array[Row] = _
 
   @Setup(Level.Trial)
   def setup(): Unit = {
@@ -44,13 +46,30 @@ class StripTrailingZerosBenchmark {
         )
       )
     }
+
+    // Rows holding CassandraOption-wrapped decimals (exploded timestamp-preservation RDD path),
+    // which exercise the CassandraOption.Value branch of the mapping.
+    cassandraOptionRows = Array.tabulate(batchSize) { i =>
+      Row.fromSeq(
+        Seq(
+          CassandraOption.Value(new java.math.BigDecimal(s"$i.12300")),
+          CassandraOption.Value(new java.math.BigDecimal(s"${i * 10}.45600")),
+          CassandraOption.Unset
+        )
+      )
+    }
   }
 
-  /** The stripTrailingZeros mapping as used in Scylla.writeDataframe */
+  /** The stripTrailingZeros mapping as used in Scylla.writeCleanedRdd (shared by writeRowRDD and
+    * writeDataframe). The CassandraOption.Value case only matches on the exploded RDD path.
+    */
   private def stripTrailingZerosRow(row: Row): Row =
     Row.fromSeq(row.toSeq.map {
-      case x: java.math.BigDecimal => x.stripTrailingZeros()
-      case x                       => x
+      case x: java.math.BigDecimal =>
+        x.stripTrailingZeros()
+      case CassandraOption.Value(x: java.math.BigDecimal) =>
+        CassandraOption.Value(x.stripTrailingZeros())
+      case x => x
     })
 
   @Benchmark
@@ -60,4 +79,8 @@ class StripTrailingZerosBenchmark {
   @Benchmark
   def stripBatch_mixedRows(): Array[Row] =
     mixedRows.map(stripTrailingZerosRow)
+
+  @Benchmark
+  def stripBatch_cassandraOptionRows(): Array[Row] =
+    cassandraOptionRows.map(stripTrailingZerosRow)
 }

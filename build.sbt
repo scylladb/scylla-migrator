@@ -5,7 +5,7 @@ val awsSdkVersion = "2.23.19"
 val sparkVersion = "4.0.2"
 val hadoopVersion = "3.4.1"
 val circeVersion = "0.14.7"
-val connectorVersion = "4.1.3"
+val connectorVersion = "4.1.4"
 val gcsConnectorVersion = "hadoop3-2.2.26"
 val aerospikeClientVersion = "8.1.1"
 val dynamodbStreamsKinesisAdapterVersion =
@@ -64,7 +64,7 @@ lazy val migrator = (project in file("migrator"))
       "com.github.jnr" % "jnr-posix" % "3.1.19", // Needed by the Spark ScyllaDB connector
       "com.scylladb.alternator" % "emr-dynamodb-hadoop"  % "5.8.0",
       "com.aerospike"           % "aerospike-client-jdk8" % aerospikeClientVersion, // jdk8 variant works on JDK 8+; jdk21 variant requires JDK 21+ (adds virtual threads)
-      "com.scylladb.alternator" % "load-balancing"       % "2.0.3",
+      "com.scylladb.alternator" % "load-balancing"       % "2.0.5",
       "com.mysql"              % "mysql-connector-j"     % "9.7.0",
       "io.circe"               %% "circe-generic"        % circeVersion,
       "io.circe"               %% "circe-parser"         % circeVersion,
