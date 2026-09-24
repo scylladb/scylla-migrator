@@ -174,6 +174,63 @@ finds a local copy — no dependency on Hadoop URL handlers or repeated S3 fetch
 
 This setting is also accepted on a Cassandra target. See :ref:`config-cassandra-cloud-target`.
 
+.. _config-cassandra-client-routes-source:
+
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+ScyllaDB Cloud private endpoints (PrivateLink, Private Service Connect)
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+Set the ``clientRoutes`` block to reach a ScyllaDB Cloud cluster through a private endpoint.
+The driver reads the ``system.client_routes`` table for the listed connection IDs and connects to
+every node through the private endpoint address and port published for it, so the Spark driver
+and executors never need to reach the node IP addresses. Client routes require ScyllaDB Cloud
+(ScyllaDB 2026.1 or later).
+
+- ``host`` and ``port`` must point at an address of the private endpoint that reaches one node of
+  the cluster. They are only used for the initial connection.
+- ``localDC`` is required.
+- ``cloud`` must not be set.
+- ``sslOptions`` can be combined with ``clientRoutes``; the driver then uses the TLS port
+  published for each route.
+
+When a cluster spans several datacenters, ScyllaDB Cloud usually exposes one connection ID per
+datacenter. List every connection ID the migrator may use; the one serving ``localDC`` is
+mandatory. Before migrating, the migrator checks that every node of ``localDC`` has a route for
+one of the listed connection IDs, and fails with an error naming the uncovered nodes otherwise.
+
+.. code-block:: yaml
+
+  source:
+    type: scylla
+    # Private endpoint address used for the initial connection
+    host: <private-endpoint-address>
+    port: 9042
+    # Required with clientRoutes
+    localDC: <datacenter>
+    credentials:
+      username: <username>
+      password: <pass>
+    clientRoutes:
+      endpoints:
+        # Connection ID shown in the ScyllaDB Cloud console for the private endpoint
+        - connectionId: <connection-id-dc1>
+        # Optional - hostname or IP address (without port) that replaces the address
+        # published by ScyllaDB Cloud for this connection ID
+        - connectionId: <connection-id-dc2>
+          connectionAddr: <vpc-local-endpoint-alias>
+      # Optional - keep shard-aware routing through the load balancer. Only enable it when
+      # the private endpoint forwards the client source port (Proxy Protocol v2). Default: false
+      shardAwareness: false
+    keyspace: <keyspace>
+    table: <table>
+    consistencyLevel: LOCAL_QUORUM
+    preserveTimestamps: true
+    splitCount: 256
+    connections: 8
+    fetchSize: 1000
+
+This setting is also accepted on a Scylla target. See :ref:`config-scylla-client-routes-target`.
+
 ^^^^^^^^^^^^^^
 Parquet Source
 ^^^^^^^^^^^^^^
@@ -412,6 +469,35 @@ are accepted.
     credentials:
       username: <client-id>
       password: <client-secret>
+    keyspace: <keyspace>
+    table: <table>
+    consistencyLevel: LOCAL_QUORUM
+    connections: 16
+    stripTrailingZerosForDecimals: false
+
+.. _config-scylla-client-routes-target:
+
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+ScyllaDB Cloud private endpoints (PrivateLink, Private Service Connect)
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+Same semantics as :ref:`config-cassandra-client-routes-source` but on the target side:
+``host``/``port`` point at the private endpoint, ``localDC`` is required, and ``cloud`` must not
+be set.
+
+.. code-block:: yaml
+
+  target:
+    type: scylla
+    host: <private-endpoint-address>
+    port: 9042
+    localDC: <datacenter>
+    credentials:
+      username: <username>
+      password: <pass>
+    clientRoutes:
+      endpoints:
+        - connectionId: <connection-id-dc1>
     keyspace: <keyspace>
     table: <table>
     consistencyLevel: LOCAL_QUORUM

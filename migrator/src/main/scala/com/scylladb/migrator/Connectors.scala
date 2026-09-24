@@ -12,6 +12,7 @@ import com.datastax.spark.connector.cql.{
   PasswordAuthConf
 }
 import com.scylladb.migrator.config.{
+  ClientRoutesSettings,
   CloudConfig,
   Credentials,
   SSLOptions,
@@ -141,12 +142,15 @@ object Connectors {
           sourceSettings.sslOptions
         )
     }
-    CassandraConnectorConf(sparkConf).copy(
-      contactInfo = contact,
-      localDC     = if (sourceSettings.cloud.isDefined) None else sourceSettings.localDC,
-      localConnectionsPerExecutor  = sourceSettings.connections,
-      remoteConnectionsPerExecutor = sourceSettings.connections,
-      queryRetryCount              = -1
+    withClientRoutes(
+      CassandraConnectorConf(sparkConf).copy(
+        contactInfo = contact,
+        localDC     = if (sourceSettings.cloud.isDefined) None else sourceSettings.localDC,
+        localConnectionsPerExecutor  = sourceSettings.connections,
+        remoteConnectionsPerExecutor = sourceSettings.connections,
+        queryRetryCount              = -1
+      ),
+      sourceSettings.clientRoutes
     )
   }
 
@@ -167,20 +171,62 @@ object Connectors {
           targetSettings.sslOptions
         )
     }
-    CassandraConnectorConf(sparkConf).copy(
-      contactInfo = contact,
-      localDC     = if (targetSettings.cloud.isDefined) None else targetSettings.localDC,
-      localConnectionsPerExecutor  = targetSettings.connections,
-      remoteConnectionsPerExecutor = targetSettings.connections,
-      queryRetryCount              = -1
+    withClientRoutes(
+      CassandraConnectorConf(sparkConf).copy(
+        contactInfo = contact,
+        localDC     = if (targetSettings.cloud.isDefined) None else targetSettings.localDC,
+        localConnectionsPerExecutor  = targetSettings.connections,
+        remoteConnectionsPerExecutor = targetSettings.connections,
+        queryRetryCount              = -1
+      ),
+      targetSettings.clientRoutes
     )
   }
 
-  def sourceConnector(sparkConf: SparkConf, sourceSettings: SourceSettings.Cassandra) =
-    new CassandraConnector(buildSourceConf(sparkConf, sourceSettings))
+  def sourceConnector(
+    sparkConf: SparkConf,
+    sourceSettings: SourceSettings.Cassandra
+  ): CassandraConnector =
+    verifiedConnector(
+      buildSourceConf(sparkConf, sourceSettings),
+      sourceSettings.clientRoutes,
+      "Cassandra source"
+    )
 
-  def targetConnector(sparkConf: SparkConf, targetSettings: TargetSettings.Scylla) =
-    new CassandraConnector(buildTargetConf(sparkConf, targetSettings))
+  def targetConnector(
+    sparkConf: SparkConf,
+    targetSettings: TargetSettings.Scylla
+  ): CassandraConnector =
+    verifiedConnector(
+      buildTargetConf(sparkConf, targetSettings),
+      targetSettings.clientRoutes,
+      "Scylla target"
+    )
+
+  private def withClientRoutes(
+    conf: CassandraConnectorConf,
+    clientRoutes: Option[ClientRoutesSettings]
+  ): CassandraConnectorConf =
+    clientRoutes.fold(conf)(routes =>
+      conf.copy(connectionFactory = ClientRoutesConnectionFactory(routes))
+    )
+
+  private def verifiedConnector(
+    conf: CassandraConnectorConf,
+    clientRoutes: Option[ClientRoutesSettings],
+    side: String
+  ): CassandraConnector = {
+    val connector = new CassandraConnector(conf)
+    clientRoutes.foreach { routes =>
+      val localDC = conf.localDC.getOrElse(
+        throw new IllegalArgumentException(
+          s"$side: 'localDC' is required when 'clientRoutes' is set."
+        )
+      )
+      ClientRoutesPreflight.verify(connector, routes, localDC, side)
+    }
+    connector
+  }
 
   /** Map optional credentials to the connector's auth model. Missing credentials become
     * [[NoAuthConf]] rather than a parse-time error — Astra will reject unauthenticated sessions at

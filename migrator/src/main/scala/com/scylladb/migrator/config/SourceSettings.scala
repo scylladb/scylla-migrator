@@ -77,7 +77,8 @@ object SourceSettings {
     preserveTimestamps: Boolean,
     where: Option[String],
     consistencyLevel: String,
-    cloud: Option[CloudConfig] = None
+    cloud: Option[CloudConfig] = None,
+    clientRoutes: Option[ClientRoutesSettings] = None
   ) extends SourceSettings {
     val supportsSavepoints: Boolean = true
   }
@@ -137,6 +138,23 @@ object SourceSettings {
         preserveTimestamps <- c.get[Boolean]("preserveTimestamps")
         where              <- c.get[Option[String]]("where")
         consistencyLevel   <- c.get[String]("consistencyLevel")
+        clientRoutes       <- c.get[Option[ClientRoutesSettings]]("clientRoutes")
+        _ <- if (cloud.isDefined && clientRoutes.isDefined)
+               Left(
+                 DecodingFailure(
+                   "Cassandra source: 'clientRoutes' is mutually exclusive with 'cloud'.",
+                   c.history
+                 )
+               )
+             else Right(())
+        _ <- if (clientRoutes.isDefined && localDC.isEmpty)
+               Left(
+                 DecodingFailure(
+                   "Cassandra source: 'localDC' is required when 'clientRoutes' is set.",
+                   c.history
+                 )
+               )
+             else Right(())
         _ <- if (cloud.isDefined && localDC.isDefined)
                Left(
                  DecodingFailure(
@@ -170,7 +188,8 @@ object SourceSettings {
         preserveTimestamps,
         where,
         consistencyLevel,
-        cloud
+        cloud,
+        clientRoutes
       )
     }
 
@@ -186,7 +205,8 @@ object SourceSettings {
         "fetchSize"          -> c.fetchSize.asJson,
         "preserveTimestamps" -> c.preserveTimestamps.asJson,
         "where"              -> c.where.asJson,
-        "consistencyLevel"   -> c.consistencyLevel.asJson
+        "consistencyLevel"   -> c.consistencyLevel.asJson,
+        "clientRoutes"       -> c.clientRoutes.asJson
       )
       c.cloud match {
         case Some(cloud) =>

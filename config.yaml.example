@@ -64,6 +64,20 @@ source:
   #cloud:
   #  secureBundlePath: /opt/migrator/secure-connect-mycluster.zip
 
+  # Optional - Connect to ScyllaDB Cloud through a private endpoint (AWS PrivateLink,
+  # GCP Private Service Connect). 'host'/'port' must then point at the private endpoint
+  # (used for the initial connection only), 'localDC' is required and 'cloud' must not be set.
+  # List one connection ID per datacenter the migrator may use; the one serving localDC is
+  # mandatory. 'connectionAddr' optionally overrides the address published for a connection ID
+  # (hostname or IP, no port). Only enable 'shardAwareness' if the endpoint forwards the client
+  # source port (Proxy Protocol v2).
+  #clientRoutes:
+  #  endpoints:
+  #    - connectionId: <connection-id-dc1>
+  #    - connectionId: <connection-id-dc2>
+  #      connectionAddr: <vpc-local-endpoint-alias>
+  #  shardAwareness: false
+
 # Example for connecting to a DataStax Astra source via a Cloud Secure Connect bundle:
 # source:
 #   type: cassandra
@@ -335,6 +349,12 @@ target:
   # Same path rules as the source cloud block above. See source section for details.
   #cloud:
   #  secureBundlePath: /opt/migrator/secure-connect-mycluster.zip
+
+  # Optional - Connect to ScyllaDB Cloud through a private endpoint.
+  # Same rules as the source clientRoutes block above.
+  #clientRoutes:
+  #  endpoints:
+  #    - connectionId: <connection-id-dc1>
 
 # Example for loading into a DataStax Astra target via a Cloud Secure Connect bundle:
 # target:

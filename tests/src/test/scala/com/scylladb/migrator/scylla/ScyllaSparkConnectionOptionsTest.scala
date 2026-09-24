@@ -2,7 +2,14 @@ package com.scylladb.migrator.scylla
 
 import com.datastax.spark.connector.datasource.CassandraSourceUtil
 import com.scylladb.migrator.Connectors
-import com.scylladb.migrator.config.{ CloudConfig, Credentials, SSLOptions, TargetSettings }
+import com.scylladb.migrator.config.{
+  ClientRouteEndpoint,
+  ClientRoutesSettings,
+  CloudConfig,
+  Credentials,
+  SSLOptions,
+  TargetSettings
+}
 import org.apache.spark.SparkConf
 
 class ScyllaSparkConnectionOptionsTest extends munit.FunSuite {
@@ -173,6 +180,16 @@ class ScyllaSparkConnectionOptionsTest extends munit.FunSuite {
     )
     intercept[IllegalArgumentException] {
       ScyllaSparkConnectionOptions.sessionConfFromTargetSettings(cloudTarget)
+    }
+  }
+
+  test("client routes target is rejected with IllegalArgumentException") {
+    val routedTarget = baseTarget.copy(
+      localDC      = Some("dc1"),
+      clientRoutes = Some(ClientRoutesSettings(List(ClientRouteEndpoint("conn-dc1"))))
+    )
+    intercept[IllegalArgumentException] {
+      ScyllaSparkConnectionOptions.sessionConfFromTargetSettings(routedTarget)
     }
   }
 

@@ -24,11 +24,12 @@ object ScyllaSparkConnectionOptions {
     * These settings intentionally exclude table-selection properties so that credentials and SSL
     * secrets do not need to be passed through DataFrame reader options.
     *
-    * '''Cloud mode is not supported''' through this helper — cloud targets use
-    * [[Connectors.buildTargetConf]] which directly constructs a `CloudBasedContactInfo`.
+    * '''Cloud and client routes modes are not supported''' through this helper — such targets use
+    * [[Connectors.buildTargetConf]], which constructs a `CloudBasedContactInfo` or installs a
+    * client routes connection factory that SparkConf options cannot express.
     *
     * @throws IllegalArgumentException
-    *   if `t.cloud` is defined
+    *   if `t.cloud` or `t.clientRoutes` is defined
     */
   def sessionConfFromTargetSettings(
     t: TargetSettings.Scylla,
@@ -37,6 +38,11 @@ object ScyllaSparkConnectionOptions {
     require(
       t.cloud.isEmpty,
       "ScyllaSparkConnectionOptions does not support cloud targets; " +
+        "use Connectors.buildTargetConf instead."
+    )
+    require(
+      t.clientRoutes.isEmpty,
+      "ScyllaSparkConnectionOptions does not support client routes targets; " +
         "use Connectors.buildTargetConf instead."
     )
     val sessionConf =

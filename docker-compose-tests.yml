@@ -91,11 +91,15 @@ services:
     ports:
       - "8000:8000"
       - "9042:9042"
+      # ScyllaClientRoutesTest: stand-in private endpoint port and REST API (client routes).
+      - "127.0.0.1:9049:9042"
+      - "127.0.0.1:10000:10000"
     command: >
       --smp 1
       --memory 2048M
       --alternator-port 8000
       --alternator-write-isolation only_rmw_uses_lwt
+      --api-address 0.0.0.0
 
   s3:
     image: localstack/localstack:s3-community-archive
