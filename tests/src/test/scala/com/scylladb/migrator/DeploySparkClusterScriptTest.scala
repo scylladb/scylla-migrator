@@ -443,7 +443,10 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
          |        state_dir.mkdir()
          |        original_main = "# existing " + existing_provider + " configuration\\n"
          |        (state_dir / "main.tf").write_text(original_main)
-         |        (state_dir / "terraform.tfstate").write_text("{}")
+         |        module.write_json(
+         |            state_dir / "terraform.tfstate",
+         |            {"resources": [{"mode": "managed", "type": "example", "name": "node"}]},
+         |        )
          |        module.write_json(
          |            state_dir / "metadata.json",
          |            {"cloud_provider": existing_provider},
@@ -905,6 +908,366 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     )
   }
 
+  test("GCP default zones exist in regions without an -a zone") {
+    val result = runPython(
+      "-c",
+      s"""import importlib.util
+         |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
+         |module = importlib.util.module_from_spec(spec)
+         |spec.loader.exec_module(module)
+         |parser = module.build_parser()
+         |common = [
+         |    "deploy",
+         |    "--cloud-provider", "gcp",
+         |    "--gcp-project", "example-project",
+         |    "--skip-ansible",
+         |    "--allowed-ssh-cidr", "203.0.113.10/32",
+         |    "--allowed-web-cidr", "203.0.113.10/32",
+         |]
+         |for extra in (
+         |    ["--region", "us-east1"],
+         |    ["--region", "europe-west1"],
+         |    ["--region", "europe-west4"],
+         |    [],
+         |    ["--zone", "us-east1-c"],
+         |):
+         |    args = parser.parse_args(common + extra)
+         |    module.validate_cloud_args(args)
+         |    print(args.region, args.zone)
+         |""".stripMargin
+    )
+
+    assertEquals(result.exitCode, 0, result.output)
+    assertEquals(
+      result.output.linesIterator.toList,
+      List(
+        "us-east1 us-east1-b",
+        "europe-west1 europe-west1-b",
+        "europe-west4 europe-west4-a",
+        "us-central1 us-central1-a",
+        "us-east1 us-east1-c"
+      )
+    )
+  }
+
+  test("explicit GCP service account file overrides competing credential variables") {
+    val result = runPython(
+      "-c",
+      s"""import importlib.util, json, os, subprocess, tempfile
+         |from pathlib import Path
+         |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
+         |module = importlib.util.module_from_spec(spec)
+         |spec.loader.exec_module(module)
+         |competing = (
+         |    "GOOGLE_OAUTH_ACCESS_TOKEN",
+         |    "GOOGLE_CLOUD_KEYFILE_JSON",
+         |    "GCLOUD_KEYFILE_JSON",
+         |    "GOOGLE_IMPERSONATE_SERVICE_ACCOUNT",
+         |)
+         |os.environ.update({name: "other-" + name.lower() for name in competing})
+         |os.environ["GOOGLE_CREDENTIALS"] = "/tmp/other-credentials.json"
+         |os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/tmp/other-adc.json"
+         |os.environ["UNRELATED_SETTING"] = "kept"
+         |captured = {}
+         |def fake_subprocess_run(args, **kwargs):
+         |    captured.clear()
+         |    captured.update(kwargs["env"])
+         |    return subprocess.CompletedProcess(args, 0, "", "")
+         |module.subprocess.run = fake_subprocess_run
+         |with tempfile.TemporaryDirectory() as temp_dir:
+         |    credentials = Path(temp_dir) / "service-account.json"
+         |    credentials.write_text(json.dumps({
+         |        "type": "service_account",
+         |        "project_id": "example-project",
+         |        "client_email": "deployer@example-project.iam.gserviceaccount.com",
+         |        "private_key": "not-a-real-private-key",
+         |    }))
+         |    expected = str(credentials.resolve())
+         |    module.run_command(
+         |        ["terraform", "plan"],
+         |        env=module.terraform_auth_env("gcp", str(credentials)),
+         |    )
+         |    print("google_credentials=" + str(captured["GOOGLE_CREDENTIALS"] == expected))
+         |    print("adc=" + str(captured["GOOGLE_APPLICATION_CREDENTIALS"] == expected))
+         |    print("competing_removed=" + str(not any(name in captured for name in competing)))
+         |    print("unrelated=" + captured["UNRELATED_SETTING"])
+         |    module.run_command(["terraform", "plan"], env=module.terraform_auth_env("gcp", None))
+         |    print("ambient_kept=" + str(all(name in captured for name in competing)))
+         |""".stripMargin
+    )
+
+    assertEquals(result.exitCode, 0, result.output)
+    assertOutputContains(result.output, "google_credentials=True")
+    assertOutputContains(result.output, "adc=True")
+    assertOutputContains(result.output, "competing_removed=True")
+    assertOutputContains(result.output, "unrelated=kept")
+    assertOutputContains(result.output, "ambient_kept=True")
+  }
+
+  test("destroyed state directories can be reused and reset known hosts") {
+    val result = runPython(
+      "-c",
+      s"""import importlib.util, json, tempfile
+         |from pathlib import Path
+         |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
+         |module = importlib.util.module_from_spec(spec)
+         |spec.loader.exec_module(module)
+         |outputs = {
+         |    "master": {
+         |        "instance_id": "gcp-master",
+         |        "public_ip": "203.0.113.10",
+         |        "private_ip": "10.42.1.10",
+         |    },
+         |    "workers": [],
+         |    "spark_master_url": "spark://10.42.1.10:7077",
+         |    "spark_master_ui": "http://203.0.113.10:8080",
+         |    "spark_application_ui": "http://203.0.113.10:4040",
+         |    "spark_history_ui": "http://203.0.113.10:18080",
+         |    "vpc_id": "projects/example/global/networks/test",
+         |    "public_subnet_id": "projects/example/regions/us-central1/subnetworks/test",
+         |    "cluster_security_group_id": "internal-firewall",
+         |    "master_ui_security_group_id": "ui-firewall",
+         |    "key_name": "ubuntu (instance metadata)",
+         |}
+         |managed_state = {"resources": [{"mode": "managed", "type": "google_compute_instance", "name": "spark_master"}]}
+         |with tempfile.TemporaryDirectory() as temp_dir:
+         |    temp_path = Path(temp_dir)
+         |    state_dir = temp_path / "state"
+         |    state_dir.mkdir()
+         |    tfstate = state_dir / "terraform.tfstate"
+         |    for label, content in (
+         |        ("missing", None),
+         |        ("empty_object", {}),
+         |        ("no_resources", {"resources": []}),
+         |        ("data_only", {"resources": [{"mode": "data", "type": "google_compute_image", "name": "ubuntu"}]}),
+         |        ("managed", managed_state),
+         |    ):
+         |        if content is None:
+         |            tfstate.unlink(missing_ok=True)
+         |        else:
+         |            tfstate.write_text(json.dumps(content))
+         |        print(label + "=" + str(module.terraform_state_has_resources(state_dir)))
+         |    tfstate.write_text("{not json")
+         |    print("invalid=" + str(module.terraform_state_has_resources(state_dir)))
+         |
+         |    module.require_commands = lambda commands: None
+         |    def fake_run(command, **kwargs):
+         |        if command[1] == "apply":
+         |            preliminary = module.read_json(state_dir / "metadata.json")
+         |            print("preapply_outputs=" + json.dumps(preliminary["terraform_outputs"]))
+         |    module.run_command = fake_run
+         |    module.terraform_output = lambda state_dir, env=None: outputs
+         |    public_key = temp_path / "id_rsa.pub"
+         |    public_key.write_text("ssh-rsa AAAAB3NzaTest user@example\\n")
+         |    args = module.build_parser().parse_args([
+         |        "deploy",
+         |        "--cloud-provider", "gcp",
+         |        "--gcp-project", "example-project",
+         |        "--state-dir", str(state_dir),
+         |        "--skip-ansible",
+         |        "--ssh-public-key", str(public_key),
+         |        "--allowed-ssh-cidr", "203.0.113.10/32",
+         |        "--allowed-web-cidr", "203.0.113.10/32",
+         |    ])
+         |
+         |    # An AWS cluster destroyed without --delete-state-dir leaves empty state behind.
+         |    module.write_json(tfstate, {"resources": []})
+         |    module.write_json(
+         |        state_dir / "metadata.json",
+         |        {"cloud_provider": "aws", "terraform_outputs": {"stale": True}},
+         |    )
+         |    (state_dir / "known_hosts").write_text("203.0.113.10 ssh-ed25519 AAAAstale\\n")
+         |    module.handle_deploy(args)
+         |    print("provider=" + module.read_json(state_dir / "metadata.json")["cloud_provider"])
+         |    print("reset_known_hosts=" + str((state_dir / "known_hosts").read_text() == ""))
+         |
+         |    # A live deployment keeps its host keys on re-deploy.
+         |    module.write_json(tfstate, managed_state)
+         |    (state_dir / "known_hosts").write_text("203.0.113.10 ssh-ed25519 AAAAlive\\n")
+         |    module.handle_deploy(args)
+         |    print("kept_known_hosts=" + str("AAAAlive" in (state_dir / "known_hosts").read_text()))
+         |""".stripMargin
+    )
+
+    assertEquals(result.exitCode, 0, result.output)
+    val lines = result.output.linesIterator.toList
+    assertEquals(
+      lines.take(6),
+      List(
+        "missing=False",
+        "empty_object=False",
+        "no_resources=False",
+        "data_only=False",
+        "managed=True",
+        "invalid=True"
+      )
+    )
+    assertOutputContains(result.output, "preapply_outputs={}")
+    assertOutputContains(result.output, "provider=gcp")
+    assertOutputContains(result.output, "reset_known_hosts=True")
+    assertOutputContains(result.output, "kept_known_hosts=True")
+    assert(!result.output.contains("refusing to replace"), result.output)
+  }
+
+  test("Terraform receives validated SSH public key contents instead of a path") {
+    val result = runPython(
+      "-c",
+      s"""import importlib.util, json, tempfile
+         |from pathlib import Path
+         |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
+         |module = importlib.util.module_from_spec(spec)
+         |spec.loader.exec_module(module)
+         |def parse(provider, key_path):
+         |    command = [
+         |        "deploy",
+         |        "--cloud-provider", provider,
+         |        "--skip-ansible",
+         |        "--ssh-public-key", str(key_path),
+         |        "--allowed-ssh-cidr", "203.0.113.10/32",
+         |        "--allowed-web-cidr", "203.0.113.10/32",
+         |    ]
+         |    if provider == "gcp":
+         |        command.extend(["--gcp-project", "example-project"])
+         |    return module.build_parser().parse_args(command)
+         |with tempfile.TemporaryDirectory() as temp_dir:
+         |    temp_path = Path(temp_dir)
+         |    public_key = temp_path / "id_ed25519.pub"
+         |    public_key.write_text("\\nssh-ed25519 AAAAC3NzaTest user@example\\n\\n")
+         |    for provider in ("aws", "gcp"):
+         |        state_dir = temp_path / (provider + "-state")
+         |        module.write_terraform_files(parse(provider, public_key), state_dir)
+         |        tfvars = json.loads((state_dir / "terraform.tfvars.json").read_text())
+         |        main = (state_dir / "main.tf").read_text()
+         |        print(provider + "_key=" + tfvars["ssh_public_key"])
+         |        print(provider + "_uses_path=" + str("ssh_public_key_path" in tfvars or "file(" in main))
+         |    for label, content in (
+         |        ("private", "-----BEGIN OPENSSH PRIVATE KEY-----\\nnot-a-real-key\\n-----END OPENSSH PRIVATE KEY-----\\n"),
+         |        ("multiple", "ssh-rsa AAAAB3NzaOne one@example\\nssh-rsa AAAAB3NzaTwo two@example\\n"),
+         |        ("empty", "\\n"),
+         |        ("no_key_data", "ssh-ed25519\\n"),
+         |    ):
+         |        key_path = temp_path / (label + ".pub")
+         |        key_path.write_text(content)
+         |        state_dir = temp_path / (label + "-state")
+         |        try:
+         |            module.write_terraform_files(parse("gcp", key_path), state_dir)
+         |        except SystemExit as exc:
+         |            print(label + "_rejected=" + str("exactly one OpenSSH public key" in str(exc)))
+         |        print(label + "_state_created=" + str(state_dir.exists()))
+         |""".stripMargin
+    )
+
+    assertEquals(result.exitCode, 0, result.output)
+    val lines = result.output.linesIterator.toList
+    assertEquals(
+      lines,
+      List(
+        "aws_key=ssh-ed25519 AAAAC3NzaTest user@example",
+        "aws_uses_path=False",
+        "gcp_key=ssh-ed25519 AAAAC3NzaTest user@example",
+        "gcp_uses_path=False",
+        "private_rejected=True",
+        "private_state_created=False",
+        "multiple_rejected=True",
+        "multiple_state_created=False",
+        "empty_rejected=True",
+        "empty_state_created=False",
+        "no_key_data_rejected=True",
+        "no_key_data_state_created=False"
+      )
+    )
+  }
+
+  test("Terraform does not replace existing nodes when newer Ubuntu images are published") {
+    val result = runPython(
+      "-c",
+      s"""import importlib.util
+         |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
+         |module = importlib.util.module_from_spec(spec)
+         |spec.loader.exec_module(module)
+         |print(module.AWS_TERRAFORM_MAIN.count("ignore_changes = [ami]"))
+         |print(module.GCP_TERRAFORM_MAIN.count(
+         |    "ignore_changes = [boot_disk[0].initialize_params[0].image]"
+         |))
+         |""".stripMargin
+    )
+
+    assertEquals(result.exitCode, 0, result.output)
+    assertEquals(result.output.linesIterator.toList, List("2", "2"))
+  }
+
+  test("generated subnet CIDRs are normalized and sized for GCP") {
+    val tooSmall = runScript(
+      "deploy",
+      "--cloud-provider",
+      "gcp",
+      "--gcp-project",
+      "example-project",
+      "--skip-ansible",
+      "--public-subnet-cidr",
+      "10.42.1.0/30",
+      "--allowed-ssh-cidr",
+      "203.0.113.10/32",
+      "--allowed-web-cidr",
+      "203.0.113.10/32"
+    )
+    assertNotEquals(tooSmall.exitCode, 0, tooSmall.output)
+    assertOutputContains(
+      tooSmall.output,
+      "--public-subnet-cidr (10.42.1.0/30) is too small for a GCP subnetwork; use a /29 or larger range."
+    )
+
+    val normalized = runPython(
+      "-c",
+      s"""import importlib.util
+         |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
+         |module = importlib.util.module_from_spec(spec)
+         |spec.loader.exec_module(module)
+         |args = module.build_parser().parse_args([
+         |    "deploy",
+         |    "--skip-ansible",
+         |    "--vpc-cidr", "10.42.7.1/16",
+         |    "--public-subnet-cidr", "10.42.1.5/24",
+         |    "--allowed-ssh-cidr", "203.0.113.10/32",
+         |    "--allowed-web-cidr", "203.0.113.10/32",
+         |])
+         |print(args.vpc_cidr, args.public_subnet_cidr)
+         |""".stripMargin
+    )
+    assertEquals(normalized.exitCode, 0, normalized.output)
+    assertEquals(normalized.output.trim, "10.42.0.0/16 10.42.1.0/24")
+  }
+
+  test("SSH wait timeout reports the last SSH error") {
+    val result = runPython(
+      "-c",
+      s"""import importlib.util, subprocess
+         |from pathlib import Path
+         |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
+         |module = importlib.util.module_from_spec(spec)
+         |spec.loader.exec_module(module)
+         |attempts = []
+         |def fake_subprocess_run(args, **kwargs):
+         |    attempts.append(args)
+         |    return subprocess.CompletedProcess(args, 255, "", "Permission denied (publickey).\\n")
+         |module.subprocess.run = fake_subprocess_run
+         |module.time.sleep = lambda _seconds: None
+         |try:
+         |    module.wait_for_ssh(["203.0.113.10"], Path("/tmp/key"), Path("/tmp/known_hosts"), False)
+         |except SystemExit as exc:
+         |    print(exc)
+         |print("attempts=" + str(len(attempts)))
+         |""".stripMargin
+    )
+
+    assertEquals(result.exitCode, 0, result.output)
+    assertOutputContains(
+      result.output,
+      "Timed out waiting for SSH on 203.0.113.10. Last SSH error:\nPermission denied (publickey)."
+    )
+    assertOutputContains(result.output, "attempts=30")
+  }
+
   test("allow-public-access gates the public CIDR guard") {
     Files.deleteIfExists(missingPrivateKey)
 
@@ -988,7 +1351,7 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(deployScript, "known_hosts = known_hosts_path(state_dir)")
     assertOutputContains(deployScript, "\"ssh_known_hosts\": str(known_hosts_path(state_dir))")
     assert(!deployScript.contains("metadata.get(\"ssh_known_hosts\")"), deployScript)
-    assertOutputContains(deployScript, "if not (state_dir / \"terraform.tfstate\").exists():")
+    assertOutputContains(deployScript, "if not terraform_state_has_resources(state_dir):")
     assertOutputContains(deployScript, "known_hosts.write_text(\"\")")
     assertOutputContains(deployScript, "known_hosts.chmod(0o600)")
   }
@@ -1203,6 +1566,9 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(readme, "8 x86_64 vCPUs and 256 GiB")
     assertOutputContains(readme, "16 Google Axion Arm vCPUs and 128 GiB")
     assertOutputContains(readme, "key contents are never copied")
+    assertOutputContains(readme, "It takes precedence over any Google credential environment variables")
+    assertOutputContains(readme, "where it defaults to `<region>-b`")
+    assertOutputContains(readme, "only newly created instances use the latest image")
   }
 
   test("test workflow runs for deploy helper and Ansible changes") {

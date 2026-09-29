@@ -43,8 +43,23 @@ GCP_DEFAULT_REGION = "us-central1"
 GCP_DEFAULT_ZONE = "us-central1-a"
 GCP_DEFAULT_MASTER_INSTANCE_TYPE = "n2-custom-8-262144-ext"
 GCP_DEFAULT_WORKER_INSTANCE_TYPE = "c4a-highmem-16"
+# Regions that do not have an "-a" zone.
+GCP_REGION_DEFAULT_ZONES = {
+    "europe-west1": "europe-west1-b",
+    "us-east1": "us-east1-b",
+}
+GCP_MAX_SUBNET_PREFIX_LENGTH = 29
+# The Google provider prefers these variables over GOOGLE_APPLICATION_CREDENTIALS,
+# so they are removed when an explicit service account file is selected.
+GCP_COMPETING_CREDENTIAL_ENV_VARS = (
+    "GOOGLE_OAUTH_ACCESS_TOKEN",
+    "GOOGLE_CLOUD_KEYFILE_JSON",
+    "GCLOUD_KEYFILE_JSON",
+    "GOOGLE_IMPERSONATE_SERVICE_ACCOUNT",
+)
 AWS_DEFAULT_VPC_CIDR = "10.42.0.0/16"
 DEFAULT_SUBNET_CIDR = "10.42.1.0/24"
+SSH_PUBLIC_KEY_TYPE_PREFIXES = ("ssh-", "ecdsa-", "sk-")
 
 
 AWS_TERRAFORM_MAIN = """terraform {
@@ -74,7 +89,7 @@ variable "key_name" {
   type = string
 }
 
-variable "ssh_public_key_path" {
+variable "ssh_public_key" {
   type = string
 }
 
@@ -200,7 +215,7 @@ data "aws_ami" "ubuntu_worker" {
 
 resource "aws_key_pair" "spark" {
   key_name   = var.key_name
-  public_key = file(var.ssh_public_key_path)
+  public_key = var.ssh_public_key
 
   tags = {
     Name = "${var.name_prefix}-key"
@@ -352,6 +367,11 @@ resource "aws_instance" "spark_master" {
     },
     var.owner_tag == "" ? {} : { Owner = var.owner_tag }
   )
+
+  lifecycle {
+    # New AMIs are published regularly; do not replace running nodes on re-deploy.
+    ignore_changes = [ami]
+  }
 }
 
 resource "aws_instance" "spark_worker" {
@@ -380,6 +400,11 @@ resource "aws_instance" "spark_worker" {
     },
     var.owner_tag == "" ? {} : { Owner = var.owner_tag }
   )
+
+  lifecycle {
+    # New AMIs are published regularly; do not replace running nodes on re-deploy.
+    ignore_changes = [ami]
+  }
 }
 
 output "region" {
@@ -477,7 +502,7 @@ variable "name_prefix" {
   type = string
 }
 
-variable "ssh_public_key_path" {
+variable "ssh_public_key" {
   type = string
 }
 
@@ -578,7 +603,7 @@ locals {
   ssh_metadata = {
     block-project-ssh-keys = "true"
     enable-oslogin         = "FALSE"
-    ssh-keys               = "ubuntu:${trimspace(file(var.ssh_public_key_path))}"
+    ssh-keys               = "ubuntu:${var.ssh_public_key}"
   }
 }
 
@@ -690,6 +715,11 @@ resource "google_compute_instance" "spark_master" {
     enable_secure_boot          = true
     enable_vtpm                 = true
   }
+
+  lifecycle {
+    # New images are published regularly; do not replace running nodes on re-deploy.
+    ignore_changes = [boot_disk[0].initialize_params[0].image]
+  }
 }
 
 resource "google_compute_instance" "spark_worker" {
@@ -732,6 +762,11 @@ resource "google_compute_instance" "spark_worker" {
     enable_integrity_monitoring = true
     enable_secure_boot          = true
     enable_vtpm                 = true
+  }
+
+  lifecycle {
+    # New images are published regularly; do not replace running nodes on re-deploy.
+    ignore_changes = [boot_disk[0].initialize_params[0].image]
   }
 }
 
@@ -847,12 +882,15 @@ def run_command(
     *,
     cwd: Path | None = None,
     capture_output: bool = False,
-    env: dict[str, str] | None = None,
+    env: dict[str, str | None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     print(f"+ {shlex.join(args)}", file=sys.stderr)
     process_env = os.environ.copy()
-    if env:
-        process_env.update(env)
+    for key, value in (env or {}).items():
+        if value is None:
+            process_env.pop(key, None)
+        else:
+            process_env[key] = value
     return subprocess.run(
         args,
         cwd=cwd,
@@ -924,7 +962,7 @@ def parse_terraform_output_json(stdout: str) -> dict[str, Any]:
 def terraform_output(
     state_dir: Path,
     *,
-    env: dict[str, str] | None = None,
+    env: dict[str, str | None] | None = None,
 ) -> dict[str, Any]:
     completed = run_command(
         ["terraform", "output", "-json"],
@@ -957,6 +995,31 @@ def read_json(path: Path) -> dict[str, Any]:
         raise SystemExit(f"Invalid JSON in {path}: {exc}") from exc
 
 
+def terraform_state_has_resources(state_dir: Path) -> bool:
+    """Return whether local Terraform state may still track managed resources."""
+    terraform_state = state_dir / "terraform.tfstate"
+    if not terraform_state.is_file():
+        return False
+    try:
+        state = json.loads(terraform_state.read_text())
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        # Be conservative: unreadable state may still describe live infrastructure.
+        return True
+    if not isinstance(state, dict):
+        return True
+    resources = state.get("resources") or []
+    if not isinstance(resources, list):
+        return True
+    return any(
+        not isinstance(resource, dict) or resource.get("mode", "managed") == "managed"
+        for resource in resources
+    )
+
+
+def gcp_default_zone(region: str) -> str:
+    return GCP_REGION_DEFAULT_ZONES.get(region, f"{region}-a")
+
+
 def apply_cloud_defaults(args: argparse.Namespace) -> None:
     if args.cloud_provider == "aws":
         args.region = args.region or AWS_DEFAULT_REGION
@@ -972,7 +1035,7 @@ def apply_cloud_defaults(args: argparse.Namespace) -> None:
     if args.zone and not args.region:
         args.region = args.zone.rsplit("-", 1)[0]
     args.region = args.region or GCP_DEFAULT_REGION
-    args.zone = args.zone or f"{args.region}-a"
+    args.zone = args.zone or gcp_default_zone(args.region)
     args.master_instance_type = (
         args.master_instance_type or GCP_DEFAULT_MASTER_INSTANCE_TYPE
     )
@@ -1023,7 +1086,7 @@ def terraform_auth_env(
     cloud_provider: str,
     explicit_service_account_file: str | None,
     metadata: dict[str, Any] | None = None,
-) -> dict[str, str] | None:
+) -> dict[str, str | None] | None:
     if cloud_provider != "gcp":
         if explicit_service_account_file:
             raise SystemExit("--gcp-service-account-file can only be used with GCP.")
@@ -1035,13 +1098,21 @@ def terraform_auth_env(
     )
     if credentials_file is None:
         return None
-    return {"GOOGLE_APPLICATION_CREDENTIALS": str(credentials_file)}
+    # GOOGLE_CREDENTIALS has the highest precedence among the Google provider's
+    # credential environment variables. GOOGLE_APPLICATION_CREDENTIALS is also
+    # set for any ADC-based tooling Terraform may invoke.
+    env: dict[str, str | None] = {
+        "GOOGLE_CREDENTIALS": str(credentials_file),
+        "GOOGLE_APPLICATION_CREDENTIALS": str(credentials_file),
+    }
+    env.update({name: None for name in GCP_COMPETING_CREDENTIAL_ENV_VARS})
+    return env
 
 
 def saved_deployment_terraform_env(
     args: argparse.Namespace,
     metadata: dict[str, Any],
-) -> dict[str, str] | None:
+) -> dict[str, str | None] | None:
     return terraform_auth_env(
         metadata.get("cloud_provider", "aws"),
         args.gcp_service_account_file,
@@ -1251,7 +1322,11 @@ def wait_for_ssh(
             if completed.returncode == 0:
                 break
             if attempt == 30:
-                raise SystemExit(f"Timed out waiting for SSH on {host}")
+                last_error = (completed.stderr or completed.stdout or "").strip()
+                message = f"Timed out waiting for SSH on {host}"
+                if last_error:
+                    message += f". Last SSH error:\n{last_error}"
+                raise SystemExit(message)
             time.sleep(10)
 
 
@@ -1423,12 +1498,33 @@ def resolve_ssh_public_key(args: argparse.Namespace) -> Path:
     return public_key
 
 
-def aws_terraform_vars(args: argparse.Namespace, public_key: Path) -> dict[str, Any]:
+def read_ssh_public_key(public_key: Path) -> str:
+    """Read and validate a single OpenSSH public key.
+
+    The contents, rather than the path, are passed to Terraform so that later
+    destroys do not depend on the local key file still existing.
+    """
+    try:
+        lines = [line.strip() for line in public_key.read_text().splitlines()]
+    except (OSError, UnicodeError) as exc:
+        raise SystemExit(f"Unable to read SSH public key {public_key}: {exc}") from exc
+
+    keys = [line for line in lines if line]
+    fields = keys[0].split() if len(keys) == 1 else []
+    if len(fields) < 2 or not fields[0].startswith(SSH_PUBLIC_KEY_TYPE_PREFIXES):
+        raise SystemExit(
+            f"SSH public key file must contain exactly one OpenSSH public key: {public_key}. "
+            "Check that --ssh-public-key does not point to a private key."
+        )
+    return keys[0]
+
+
+def aws_terraform_vars(args: argparse.Namespace, public_key: str) -> dict[str, Any]:
     return {
         "region": args.region,
         "name_prefix": args.name_prefix,
         "key_name": args.key_name or f"{args.name_prefix}-key",
-        "ssh_public_key_path": str(public_key),
+        "ssh_public_key": public_key,
         "master_instance_type": args.master_instance_type,
         "worker_instance_type": args.worker_instance_type,
         "worker_count": args.workers,
@@ -1446,13 +1542,13 @@ def aws_terraform_vars(args: argparse.Namespace, public_key: Path) -> dict[str, 
     }
 
 
-def gcp_terraform_vars(args: argparse.Namespace, public_key: Path) -> dict[str, Any]:
+def gcp_terraform_vars(args: argparse.Namespace, public_key: str) -> dict[str, Any]:
     return {
         "project_id": args.gcp_project,
         "region": args.region,
         "zone": args.zone,
         "name_prefix": args.name_prefix,
-        "ssh_public_key_path": str(public_key),
+        "ssh_public_key": public_key,
         "master_instance_type": args.master_instance_type,
         "worker_instance_type": args.worker_instance_type,
         "worker_count": args.workers,
@@ -1479,10 +1575,10 @@ def gcp_terraform_vars(args: argparse.Namespace, public_key: Path) -> dict[str, 
 
 def write_terraform_files(args: argparse.Namespace, state_dir: Path) -> None:
     apply_cloud_defaults(args)
+    public_key = read_ssh_public_key(resolve_ssh_public_key(args))
     state_dir.mkdir(parents=True, exist_ok=True)
     state_dir.chmod(0o700)
     write_state_dir_marker(state_dir)
-    public_key = resolve_ssh_public_key(args)
 
     if args.cloud_provider == "aws":
         terraform_main = AWS_TERRAFORM_MAIN
@@ -1818,8 +1914,9 @@ def validate_existing_deployment_provider(
     requested_provider: str,
 ) -> dict[str, Any]:
     metadata_path = state_dir / "metadata.json"
-    terraform_state = state_dir / "terraform.tfstate"
-    if not metadata_path.is_file() and not terraform_state.is_file():
+    if not terraform_state_has_resources(state_dir):
+        # Nothing is deployed, or the previous deployment was destroyed without
+        # --delete-state-dir, so saved metadata does not describe live resources.
         return {}
 
     metadata = read_json(metadata_path)
@@ -1941,6 +2038,11 @@ def validate_gcp_network_args(args: argparse.Namespace) -> None:
         raise SystemExit(f"Invalid subnet CIDR: {exc}") from exc
     if subnet_network.version != 4:
         raise SystemExit("--public-subnet-cidr must be an IPv4 CIDR.")
+    if subnet_network.prefixlen > GCP_MAX_SUBNET_PREFIX_LENGTH:
+        raise SystemExit(
+            f"--public-subnet-cidr ({subnet_network}) is too small for a GCP "
+            f"subnetwork; use a /{GCP_MAX_SUBNET_PREFIX_LENGTH} or larger range."
+        )
 
 
 def validate_gcp_args(args: argparse.Namespace) -> None:
@@ -2031,7 +2133,8 @@ def handle_deploy(args: argparse.Namespace) -> None:
 
     private_key = None if args.skip_ansible else resolve_ssh_private_key(args.ssh_private_key)
     known_hosts = known_hosts_path(state_dir)
-    if not (state_dir / "terraform.tfstate").exists():
+    if not terraform_state_has_resources(state_dir):
+        # New instances may reuse public IPs from a destroyed cluster.
         known_hosts.write_text("")
         known_hosts.chmod(0o600)
 
@@ -2321,7 +2424,8 @@ def configure_deploy_parser(deploy: argparse.ArgumentParser) -> None:
         default=None,
         help=(
             f"GCP Compute Engine zone. Defaults to REGION-a "
-            f"({GCP_DEFAULT_ZONE} with the default region)."
+            f"({GCP_DEFAULT_ZONE} with the default region), or REGION-b for "
+            f"regions without an -a zone ({', '.join(sorted(GCP_REGION_DEFAULT_ZONES))})."
         ),
     )
     deploy.add_argument(
@@ -2352,10 +2456,16 @@ def configure_deploy_parser(deploy: argparse.ArgumentParser) -> None:
     deploy.add_argument("--workers", type=positive_int, default=1)
     deploy.add_argument(
         "--vpc-cidr",
+        type=ipv4_cidr,
         default=None,
         help=f"AWS VPC CIDR. AWS default: {AWS_DEFAULT_VPC_CIDR}.",
     )
-    deploy.add_argument("--public-subnet-cidr", default=DEFAULT_SUBNET_CIDR)
+    deploy.add_argument(
+        "--public-subnet-cidr",
+        type=ipv4_cidr,
+        default=DEFAULT_SUBNET_CIDR,
+        help="IPv4 CIDR for the generated AWS or GCP subnet.",
+    )
     deploy.add_argument(
         "--vpc-id",
         default="",
