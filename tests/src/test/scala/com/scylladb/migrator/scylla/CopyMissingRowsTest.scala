@@ -137,7 +137,7 @@ abstract class CopyMissingRowsTest(version: CassandraVersion) extends MigratorSu
   }
 
   withTable("BasicTest").test(
-    s"Cassandra ${version.label}: copyMissingRows rejects timestamp preservation for collection columns"
+    s"Cassandra ${version.label}: copyMissingRows rejects timestamp preservation for non-frozen collection columns"
   ) { tableName =>
     val alterTable =
       s"ALTER TABLE ${keyspace}.${tableName} ADD tags set<text>"
@@ -155,7 +155,7 @@ abstract class CopyMissingRowsTest(version: CassandraVersion) extends MigratorSu
 
     assert(
       err.getMessage.contains(
-        "TTL/Writetime preservation is unsupported for tables with collection types"
+        "TTL/Writetime preservation is unsupported for tables with non-frozen (multi-cell)"
       ),
       s"Unexpected error: ${err.getMessage}"
     )

@@ -175,6 +175,150 @@ class CassandraRowComparisonTest extends munit.FunSuite {
     )
   }
 
+  test("Per-element collection WRITETIMEs match when element-aligned lists are equal") {
+    val left = CassandraRow.fromMap(
+      Map(
+        "id"             -> "r1",
+        "tags"           -> Set(10, 20, 30),
+        "tags_ttl"       -> List(0, 0, 0),
+        "tags_writetime" -> List(1000L, 2000L, 3000L)
+      )
+    )
+    val right = CassandraRow.fromMap(
+      Map(
+        "id"             -> "r1",
+        "tags"           -> Set(10, 20, 30),
+        "tags_ttl"       -> List(0, 0, 0),
+        "tags_writetime" -> List(1000L, 2000L, 3000L)
+      )
+    )
+    assertEquals(compareItems(left, Some(right)), None)
+  }
+
+  test("Per-element collection WRITETIME mismatch is reported for the differing column") {
+    val left = CassandraRow.fromMap(
+      Map(
+        "id"             -> "r1",
+        "tags"           -> Set(10, 20, 30),
+        "tags_writetime" -> List(1000L, 2000L, 3000L)
+      )
+    )
+    val right = CassandraRow.fromMap(
+      Map(
+        "id"             -> "r1",
+        "tags"           -> Set(10, 20, 30),
+        "tags_writetime" -> List(1000L, 2000L, 9999L) // last element differs beyond tolerance
+      )
+    )
+    val result = compareItems(left, Some(right), writetimeToleranceMillis = 0L)
+    assert(
+      result.exists(_.items.exists(_.isInstanceOf[Item.DifferingWritetimes])),
+      s"expected a DifferingWritetimes failure, got ${result}"
+    )
+  }
+
+  test("Extreme writetime difference saturates instead of overflowing into a false match") {
+    // `|l - r| * scale` overflows for adversarial metadata (e.g. a hand-crafted Parquet writetime of
+    // Long.MinValue), and a WRAPPED negative difference silently passes the `diff > tolerance` test,
+    // reporting a corrupt row as identical. The comparison must saturate and still flag the row.
+    val left = CassandraRow.fromMap(
+      Map(
+        "id"             -> "r1",
+        "tags"           -> Set(10),
+        "tags_writetime" -> List(Long.MaxValue)
+      )
+    )
+    val right = CassandraRow.fromMap(
+      Map(
+        "id"             -> "r1",
+        "tags"           -> Set(10),
+        "tags_writetime" -> List(Long.MinValue)
+      )
+    )
+    val result = compareItems(left, Some(right), writetimeToleranceMillis = 0L)
+    val diffs = result.toList.flatMap(_.items).collect { case d: Item.DifferingWritetimes => d }
+    assert(diffs.nonEmpty, s"expected a DifferingWritetimes failure, got ${result}")
+    assert(
+      diffs.flatMap(_.details.map(_._2)).forall(_ > 0L),
+      s"expected a positive (saturated) difference, got ${diffs.flatMap(_.details)}"
+    )
+  }
+
+  test("Per-element collection metadata length mismatch is reported as a cardinality mismatch") {
+    val left = CassandraRow.fromMap(
+      Map("id" -> "r1", "tags_writetime" -> List(1000L, 2000L, 3000L))
+    )
+    val right = CassandraRow.fromMap(
+      Map("id" -> "r1", "tags_writetime" -> List(1000L, 2000L))
+    )
+    val result = compareItems(left, Some(right))
+    assert(
+      result.exists(_.items.exists(_.isInstanceOf[Item.MetadataCardinalityMismatch])),
+      s"expected a MetadataCardinalityMismatch failure for length mismatch, got ${result}"
+    )
+    // A length mismatch is structural, not a time delta, so it must NOT be a DifferingWritetimes.
+    assert(
+      !result.exists(_.items.exists(_.isInstanceOf[Item.DifferingWritetimes])),
+      s"length mismatch should not be reported as DifferingWritetimes, got ${result}"
+    )
+  }
+
+  test("Malformed per-element metadata is reported as MalformedMetadata, not a time delta") {
+    val left = CassandraRow.fromMap(
+      Map("id" -> "r1", "tags_writetime" -> List(1000L, "oops", 3000L))
+    )
+    val right = CassandraRow.fromMap(
+      Map("id" -> "r1", "tags_writetime" -> List(1000L, 2000L, 3000L))
+    )
+    val result = compareItems(left, Some(right))
+    assert(
+      result.exists(_.items.exists(_.isInstanceOf[Item.MalformedMetadata])),
+      s"expected a MalformedMetadata failure, got ${result}"
+    )
+    assert(
+      !result.exists(_.items.exists(_.isInstanceOf[Item.DifferingWritetimes])),
+      s"malformed metadata should not be reported as DifferingWritetimes, got ${result}"
+    )
+  }
+
+  test("Per-element metadata vs collection cardinality mismatch is reported") {
+    val left = CassandraRow.fromMap(
+      Map("id" -> "r1", "tags" -> Set(10, 20, 30), "tags_writetime" -> List(1000L, 2000L))
+    )
+    val right = CassandraRow.fromMap(
+      Map("id" -> "r1", "tags" -> Set(10, 20, 30), "tags_writetime" -> List(1000L, 2000L))
+    )
+    val result = compareItems(left, Some(right))
+    assert(
+      result.exists(_.items.exists(_.isInstanceOf[Item.MetadataCardinalityMismatch])),
+      s"expected a MetadataCardinalityMismatch failure (2 writetimes for 3 elements), got ${result}"
+    )
+  }
+
+  test("Per-element metadata comparison skipped when compareTimestamps is false") {
+    val left = CassandraRow.fromMap(
+      Map("id" -> "r1", "tags" -> Set(1), "tags_writetime" -> List(1000L))
+    )
+    val right = CassandraRow.fromMap(
+      Map("id" -> "r1", "tags" -> Set(1), "tags_writetime" -> List(9999L))
+    )
+    assertEquals(compareItems(left, Some(right), compareTimestamps = false), None)
+  }
+
+  test("metadataAsLongs handles scalar, list, and null metadata") {
+    val row = CassandraRow.fromMap(
+      Map(
+        "scalar_writetime" -> 1234L,
+        "list_writetime"   -> List(1L, 2L, 3L),
+        "null_writetime"   -> null
+      )
+    )
+    assertEquals(RowComparisonFailure.metadataAsLongs(row, "scalar_writetime"), Some(Seq(1234L)))
+    assertEquals(RowComparisonFailure.metadataAsLongs(row, "list_writetime"), Some(Seq(1L, 2L, 3L)))
+    // A null metadata value (e.g. empty/null collection) yields None.
+    assertEquals(RowComparisonFailure.metadataAsLongs(row, "null_writetime"), None)
+  }
+
   test("Direct areDifferent flags Float(1.5f) vs Double(1.5d) before hash comparison") {
     val floatVal: Option[Any] = Some(java.lang.Float.valueOf(1.5f))
     val doubleVal: Option[Any] = Some(java.lang.Double.valueOf(1.5))

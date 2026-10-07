@@ -9,7 +9,10 @@ object ParquetWithoutSavepoints {
   val log = LogManager.getLogger("com.scylladb.migrator.readers.ParquetWithoutSavepoints")
 
   def readDataFrame(spark: SparkSession, source: SourceSettings.Parquet): SourceDataFrame = {
-    log.info(s"Reading Parquet files from ${source.path} (without savepoint tracking)")
+    log.info(
+      s"Reading Parquet files from ${Parquet.redactPathForLog(source.path)} " +
+        "(without savepoint tracking)"
+    )
 
     Parquet.configureHadoopCredentials(spark, source)
 
@@ -27,13 +30,14 @@ object ParquetWithoutSavepoints {
           "Performing row explosion for TTL/writetime preservation."
       )
       val renamed = TimestampColumns.renameFromParquet(df)
-      val (explodedRdd, writeSchema, timestampColumns) =
-        Cassandra.explodeRowsFromPerColumnMeta(spark, renamed)
+      val (explodedRdd, writeSchema, timestampColumns, collectionAppendWrites) =
+        Cassandra.explodeRowsFromPerColumnMetaCollectionAware(spark, renamed)
       SourceDataFrame(
         renamed,
         Some(timestampColumns),
         savepointsSupported    = false,
-        cassandraExplodedWrite = Some((explodedRdd, writeSchema))
+        cassandraExplodedWrite = Some((explodedRdd, writeSchema)),
+        collectionAppendWrites = collectionAppendWrites
       )
     } else {
       SourceDataFrame(df, None, savepointsSupported = false)

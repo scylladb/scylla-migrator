@@ -1,0 +1,28 @@
+source:
+  type: cassandra
+  host: cassandra5
+  port: 9042
+  localDC: datacenter1
+  credentials:
+    username: dummy
+    password: dummy
+  keyspace: test
+  table: collts_pq_src
+  consistencyLevel: LOCAL_QUORUM
+  preserveTimestamps: true
+  preserveCollectionTimestamps: true
+  splitCount: 8
+  connections: 8
+  fetchSize: 1000
+
+# Per-element collection TTL/WRITETIME are exported as array sidecars
+# (__migrator_meta_<col>_ttl / __migrator_meta_<col>_writetime) alongside the collection value.
+target:
+  type: parquet
+  path: /app/parquet/collection-timestamps
+  compression: gzip
+  mode: overwrite
+
+savepoints:
+  path: /app/savepoints
+  intervalSeconds: 300
