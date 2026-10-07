@@ -237,96 +237,97 @@ object ScyllaValidator {
           buildRepairSchema(sourceTableDef, config.renamesMap, includePerColumnMetadata)
         val repairFieldNames = repairSchema.fieldNames.toIndexedSeq
 
+        // cachedJoined is already persisted, so re-deriving missingRowsRdd from it for the
+        // count and the map below is a cheap in-memory filter, not a re-read from the source
+        // or target database. No separate persist is needed here.
         val missingRowsRdd =
-          cachedJoined.filter { case (_, r) => r.isEmpty }.persist(StorageLevel.MEMORY_AND_DISK)
-        try {
-          val missingSourceRowCount = missingRowsRdd.count()
+          cachedJoined.filter { case (_, r) => r.isEmpty }
+        val missingSourceRowCount = missingRowsRdd.count()
 
-          if (missingSourceRowCount > 0) {
-            val rawRepairDf = spark.createDataFrame(
-              missingRowsRdd.map { case (sourceRow, _) =>
-                Row.fromSeq(
-                  repairFieldNames.map { fieldName =>
-                    readers.Cassandra.widenTimestampValue(
-                      readers.Cassandra.convertValue(sourceRow.getRaw(fieldName))
-                    )
-                  }
-                )
-              },
-              repairSchema
-            )
-
-            if (includePerColumnMetadata) {
-              val (repairRdd, writeRepairSchema, timestampColumns) =
-                readers.Cassandra.explodeRowsFromPerColumnMeta(spark, rawRepairDf)
-              val writetimeIdx = writeRepairSchema.fieldIndex(timestampColumns.writeTime)
-
-              def overrideWritetime(rdd: RDD[Row], micros: Long): RDD[Row] =
-                rdd.map { row =>
-                  val values = row.toSeq.toArray
-                  values(writetimeIdx) match {
-                    case com.datastax.spark.connector.types.CassandraOption.Unset =>
-                    case _ =>
-                      values(writetimeIdx) = java.lang.Long.valueOf(micros)
-                  }
-                  Row(ArraySeq.unsafeWrapArray(values): _*)
+        if (missingSourceRowCount > 0) {
+          val rawRepairDf = spark.createDataFrame(
+            missingRowsRdd.map { case (sourceRow, _) =>
+              Row.fromSeq(
+                repairFieldNames.map { fieldName =>
+                  readers.Cassandra.widenTimestampValue(
+                    readers.Cassandra.convertValue(sourceRow.getRaw(fieldName))
+                  )
                 }
+              )
+            },
+            repairSchema
+          )
 
-              val rddForWrite = validationConfig.repairWritetimeStrategy match {
-                case RepairWritetimeStrategy.Source =>
-                  log.info(
-                    "repairWritetimeStrategy=source: using original source writetime. " +
-                      "Repair writes may be shadowed by newer delete tombstones on the target."
-                  )
-                  repairRdd
+          if (includePerColumnMetadata) {
+            val (repairRdd, writeRepairSchema, timestampColumns) =
+              readers.Cassandra.explodeRowsFromPerColumnMeta(spark, rawRepairDf)
+            val writetimeIdx = writeRepairSchema.fieldIndex(timestampColumns.writeTime)
 
-                case RepairWritetimeStrategy.Coordinator =>
-                  val repairTimeMicros = System.currentTimeMillis() * 1000L
-                  log.info(
-                    s"repairWritetimeStrategy=coordinator: overriding writetime to $repairTimeMicros. " +
-                      "Repair writes will beat most tombstones but may resurrect deleted rows."
-                  )
-                  overrideWritetime(repairRdd, repairTimeMicros)
-
-                case RepairWritetimeStrategy.Config =>
-                  val configTimeMicros = targetSettings.writeWritetimestampInuS.getOrElse(
-                    sys.error(
-                      "repairWritetimeStrategy=config requires target.writeWritetimestampInuS " +
-                        "to be set in the configuration."
-                    )
-                  )
-                  log.info(
-                    s"repairWritetimeStrategy=config: overriding writetime to $configTimeMicros " +
-                      "(from target.writeWritetimestampInuS)."
-                  )
-                  overrideWritetime(repairRdd, configTimeMicros)
+            def overrideWritetime(rdd: RDD[Row], micros: Long): RDD[Row] =
+              rdd.map { row =>
+                val values = row.toSeq.toArray
+                values(writetimeIdx) match {
+                  case com.datastax.spark.connector.types.CassandraOption.Unset =>
+                  case _ =>
+                    values(writetimeIdx) = java.lang.Long.valueOf(micros)
+                }
+                Row(ArraySeq.unsafeWrapArray(values): _*)
               }
 
-              writers.Scylla.writeRowRDD(
-                targetSettings,
-                Nil,
-                rddForWrite,
-                writeRepairSchema,
-                Some(timestampColumns),
-                None,
-                sourceSettings
-              )
-            } else {
-              writers.Scylla.writeDataframe(
-                targetSettings,
-                Nil,
-                rawRepairDf,
-                None,
-                None,
-                sourceSettings
-              )
-            }
-          }
+            val rddForWrite = validationConfig.repairWritetimeStrategy match {
+              case RepairWritetimeStrategy.Source =>
+                log.info(
+                  "repairWritetimeStrategy=source: using original source writetime. " +
+                    "Repair writes may be shadowed by newer delete tombstones on the target."
+                )
+                repairRdd
 
-          log.info(
-            s"Finished copying missing rows to target: $missingSourceRowCount missing row(s) copied"
-          )
-        } finally missingRowsRdd.unpersist()
+              case RepairWritetimeStrategy.Coordinator =>
+                val repairTimeMicros = System.currentTimeMillis() * 1000L
+                log.info(
+                  s"repairWritetimeStrategy=coordinator: overriding writetime to $repairTimeMicros. " +
+                    "Repair writes will beat most tombstones but may resurrect deleted rows."
+                )
+                overrideWritetime(repairRdd, repairTimeMicros)
+
+              case RepairWritetimeStrategy.Config =>
+                val configTimeMicros = targetSettings.writeWritetimestampInuS.getOrElse(
+                  sys.error(
+                    "repairWritetimeStrategy=config requires target.writeWritetimestampInuS " +
+                      "to be set in the configuration."
+                  )
+                )
+                log.info(
+                  s"repairWritetimeStrategy=config: overriding writetime to $configTimeMicros " +
+                    "(from target.writeWritetimestampInuS)."
+                )
+                overrideWritetime(repairRdd, configTimeMicros)
+            }
+
+            writers.Scylla.writeRowRDD(
+              targetSettings,
+              Nil,
+              rddForWrite,
+              writeRepairSchema,
+              Some(timestampColumns),
+              None,
+              sourceSettings
+            )
+          } else {
+            writers.Scylla.writeDataframe(
+              targetSettings,
+              Nil,
+              rawRepairDf,
+              None,
+              None,
+              sourceSettings
+            )
+          }
+        }
+
+        log.info(
+          s"Finished copying missing rows to target: $missingSourceRowCount missing row(s) copied"
+        )
       }
 
       failures
