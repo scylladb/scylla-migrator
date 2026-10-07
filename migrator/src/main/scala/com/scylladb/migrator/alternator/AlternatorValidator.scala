@@ -109,52 +109,52 @@ object AlternatorValidator {
       if (configValidation.copyMissingRows) {
         log.info("Copying missing rows from source to target")
 
+        // cachedJoined is already persisted, so re-deriving missingRowsRdd from it for the
+        // count and the map below is a cheap in-memory filter, not a re-read from the source
+        // or target table. No separate persist is needed here.
         val missingRowsRdd =
           cachedJoined
             .filter { case (_, (_, r)) => r.isEmpty }
-            .persist(StorageLevel.MEMORY_AND_DISK)
-        try {
-          val missingRowCount = missingRowsRdd.count()
+        val missingRowCount = missingRowsRdd.count()
 
-          if (missingRowCount > 0) {
-            val missingAsHadoop = missingRowsRdd.map { case (_, (sourceItem, _)) =>
-              val item = new java.util.HashMap[String, AttributeValue]()
-              sourceItem.foreach { case (k, v) =>
-                item.put(k, DdbValue.toAttributeValue(v))
-              }
-              (new Text(), new DynamoDBItemWritable(item))
+        if (missingRowCount > 0) {
+          val missingAsHadoop = missingRowsRdd.map { case (_, (sourceItem, _)) =>
+            val item = new java.util.HashMap[String, AttributeValue]()
+            sourceItem.foreach { case (k, v) =>
+              item.put(k, DdbValue.toAttributeValue(v))
             }
-
-            val targetTableDesc = {
-              val client = DynamoUtils.buildDynamoClient(
-                targetSettings.endpoint,
-                targetSettings.finalCredentials.map(_.toProvider),
-                targetSettings.region,
-                Seq.empty,
-                targetSettings.alternatorSettings
-              )
-              try
-                client
-                  .describeTable(
-                    DescribeTableRequest.builder().tableName(targetSettings.table).build()
-                  )
-                  .table()
-              finally
-                client.close()
-            }
-
-            writers.DynamoDB.writeRDD(
-              targetSettings,
-              renamedColumn,
-              missingAsHadoop,
-              targetTableDesc
-            )
+            (new Text(), new DynamoDBItemWritable(item))
           }
 
-          log.info(
-            s"Finished copying missing rows to target: $missingRowCount missing row(s) copied"
+          val targetTableDesc = {
+            val client = DynamoUtils.buildDynamoClient(
+              targetSettings.endpoint,
+              targetSettings.finalCredentials.map(_.toProvider),
+              targetSettings.region,
+              Seq.empty,
+              targetSettings.alternatorSettings
+            )
+            try
+              client
+                .describeTable(
+                  DescribeTableRequest.builder().tableName(targetSettings.table).build()
+                )
+                .table()
+            finally
+              client.close()
+          }
+
+          writers.DynamoDB.writeRDD(
+            targetSettings,
+            renamedColumn,
+            missingAsHadoop,
+            targetTableDesc
           )
-        } finally missingRowsRdd.unpersist()
+        }
+
+        log.info(
+          s"Finished copying missing rows to target: $missingRowCount missing row(s) copied"
+        )
       }
 
       failures
