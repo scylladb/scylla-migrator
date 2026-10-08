@@ -17,6 +17,8 @@ if sys.version_info < (3, 10):
     )
 
 import argparse
+import base64
+import binascii
 import ipaddress
 import json
 import os
@@ -49,17 +51,42 @@ GCP_REGION_DEFAULT_ZONES = {
     "us-east1": "us-east1-b",
 }
 GCP_MAX_SUBNET_PREFIX_LENGTH = 29
+# Compute Engine reserves the network, gateway, second-to-last, and broadcast
+# addresses in each subnet range.
+GCP_SUBNET_RESERVED_ADDRESSES = 4
 # The Google provider prefers these variables over GOOGLE_APPLICATION_CREDENTIALS,
 # so they are removed when an explicit service account file is selected.
 GCP_COMPETING_CREDENTIAL_ENV_VARS = (
+    "GOOGLE_CREDENTIALS",
     "GOOGLE_OAUTH_ACCESS_TOKEN",
     "GOOGLE_CLOUD_KEYFILE_JSON",
     "GCLOUD_KEYFILE_JSON",
     "GOOGLE_IMPERSONATE_SERVICE_ACCOUNT",
 )
 AWS_DEFAULT_VPC_CIDR = "10.42.0.0/16"
+AWS_MAX_SUBNET_PREFIX_LENGTH = 28
+# AWS reserves the first four addresses and the last address in each subnet.
+AWS_SUBNET_RESERVED_ADDRESSES = 5
 DEFAULT_SUBNET_CIDR = "10.42.1.0/24"
-SSH_PUBLIC_KEY_TYPE_PREFIXES = ("ssh-", "ecdsa-", "sk-")
+SSH_PUBLIC_KEY_TYPES = (
+    "ssh-ed25519",
+    "ssh-rsa",
+    "ecdsa-sha2-nistp256",
+    "ecdsa-sha2-nistp384",
+    "ecdsa-sha2-nistp521",
+    "sk-ssh-ed25519@openssh.com",
+    "sk-ecdsa-sha2-nistp256@openssh.com",
+)
+# EC2 key pairs accept only RSA and ED25519 public keys.
+AWS_SSH_PUBLIC_KEY_TYPES = ("ssh-ed25519", "ssh-rsa")
+SSH_ECDSA_COORDINATE_LENGTHS = {"nistp256": 32, "nistp384": 48, "nistp521": 66}
+# OpenSSH rejects smaller RSA keys by default (RequiredRSASize).
+SSH_MIN_RSA_BITS = 1024
+DER_INTEGER = 0x02
+DER_OCTET_STRING = 0x04
+DER_OBJECT_IDENTIFIER = 0x06
+DER_SEQUENCE = 0x30
+RSA_ENCRYPTION_OID = bytes.fromhex("2a864886f70d010101")
 
 
 AWS_TERRAFORM_MAIN = """terraform {
@@ -1044,6 +1071,84 @@ def apply_cloud_defaults(args: argparse.Namespace) -> None:
     )
 
 
+def read_der_element(data: bytes, offset: int = 0) -> tuple[int, bytes, int]:
+    """Read one DER tag-length-value element, returning (tag, value, end offset)."""
+    if offset + 2 > len(data):
+        raise ValueError("truncated DER element")
+    tag = data[offset]
+    length = data[offset + 1]
+    offset += 2
+    if length & 0x80:
+        length_size = length & 0x7F
+        if length_size == 0 or length_size > 4 or offset + length_size > len(data):
+            raise ValueError("invalid DER length")
+        length = int.from_bytes(data[offset:offset + length_size], "big")
+        offset += length_size
+    if offset + length > len(data):
+        raise ValueError("truncated DER element")
+    return tag, data[offset:offset + length], offset + length
+
+
+def read_der_sequence(data: bytes) -> list[tuple[int, bytes]]:
+    elements = []
+    offset = 0
+    while offset < len(data):
+        tag, value, offset = read_der_element(data, offset)
+        elements.append((tag, value))
+    return elements
+
+
+def read_single_der_element(data: bytes, expected_tag: int) -> bytes:
+    tag, value, end = read_der_element(data)
+    if tag != expected_tag or end != len(data):
+        raise ValueError("unexpected DER structure")
+    return value
+
+
+def validate_rsa_private_key_pem(pem: str) -> None:
+    """Check that a PEM value holds a structurally valid RSA private key.
+
+    This mirrors what Google's Go auth library accepts for service account keys:
+    a PKCS#8 or PKCS#1 RSA private key.
+    """
+    match = re.fullmatch(
+        r"\s*-----BEGIN (?P<label>RSA PRIVATE KEY|PRIVATE KEY)-----"
+        r"(?P<body>[A-Za-z0-9+/=\s]+)"
+        r"-----END (?P=label)-----\s*",
+        pem,
+    )
+    if match is None:
+        raise ValueError("expected a PEM-encoded RSA private key")
+    key = read_single_der_element(
+        base64.b64decode("".join(match["body"].split()), validate=True),
+        DER_SEQUENCE,
+    )
+
+    if match["label"] == "PRIVATE KEY":
+        # PKCS#8 PrivateKeyInfo: version, algorithm, and the wrapped key.
+        elements = read_der_sequence(key)
+        if (
+            len(elements) < 3
+            or elements[0] != (DER_INTEGER, b"\x00")
+            or elements[1][0] != DER_SEQUENCE
+            or elements[2][0] != DER_OCTET_STRING
+        ):
+            raise ValueError("unexpected PKCS#8 private key structure")
+        algorithm = read_der_sequence(elements[1][1])
+        if not algorithm or algorithm[0] != (DER_OBJECT_IDENTIFIER, RSA_ENCRYPTION_OID):
+            raise ValueError("private key is not an RSA key")
+        key = read_single_der_element(elements[2][1], DER_SEQUENCE)
+
+    # PKCS#1 RSAPrivateKey: version followed by eight integers.
+    elements = read_der_sequence(key)
+    if (
+        len(elements) != 9
+        or elements[0] != (DER_INTEGER, b"\x00")
+        or any(tag != DER_INTEGER or not value for tag, value in elements)
+    ):
+        raise ValueError("unexpected RSA private key structure")
+
+
 def validate_gcp_service_account_file(path: Path) -> None:
     if not path.exists():
         raise SystemExit(f"GCP service account file does not exist: {path}")
@@ -1062,11 +1167,22 @@ def validate_gcp_service_account_file(path: Path) -> None:
         )
 
     required_fields = ("project_id", "client_email", "private_key")
-    missing = [field for field in required_fields if not credentials.get(field)]
+    missing = [
+        field
+        for field in required_fields
+        if not isinstance(credentials.get(field), str) or not credentials[field]
+    ]
     if missing:
         raise SystemExit(
             f"GCP service account file is missing required field(s): {', '.join(missing)}"
         )
+
+    try:
+        validate_rsa_private_key_pem(credentials["private_key"])
+    except ValueError as exc:
+        raise SystemExit(
+            f"GCP service account file {path} has an invalid private_key: {exc}"
+        ) from exc
 
 
 def resolve_gcp_service_account_file(
@@ -1098,13 +1214,9 @@ def terraform_auth_env(
     )
     if credentials_file is None:
         return None
-    # GOOGLE_CREDENTIALS has the highest precedence among the Google provider's
-    # credential environment variables. GOOGLE_APPLICATION_CREDENTIALS is also
-    # set for any ADC-based tooling Terraform may invoke.
-    env: dict[str, str | None] = {
-        "GOOGLE_CREDENTIALS": str(credentials_file),
-        "GOOGLE_APPLICATION_CREDENTIALS": str(credentials_file),
-    }
+    # Point ADC at the explicit file and remove every variable that the Google
+    # provider would otherwise use instead of ADC.
+    env: dict[str, str | None] = {"GOOGLE_APPLICATION_CREDENTIALS": str(credentials_file)}
     env.update({name: None for name in GCP_COMPETING_CREDENTIAL_ENV_VARS})
     return env
 
@@ -1498,7 +1610,69 @@ def resolve_ssh_public_key(args: argparse.Namespace) -> Path:
     return public_key
 
 
-def read_ssh_public_key(public_key: Path) -> str:
+def read_ssh_wire_fields(blob: bytes) -> list[bytes]:
+    """Split SSH wire-format data into its length-prefixed fields."""
+    fields = []
+    offset = 0
+    while offset < len(blob):
+        if offset + 4 > len(blob):
+            raise ValueError("truncated field length")
+        length = int.from_bytes(blob[offset:offset + 4], "big")
+        offset += 4
+        if offset + length > len(blob):
+            raise ValueError("truncated field")
+        fields.append(blob[offset:offset + length])
+        offset += length
+    return fields
+
+
+def ssh_public_key_values_are_valid(key_type: str, values: list[bytes]) -> bool:
+    """Check the fields that follow the key type in a supported public key blob."""
+    if key_type == "ssh-ed25519":
+        return len(values) == 1 and len(values[0]) == 32
+    if key_type == "sk-ssh-ed25519@openssh.com":
+        return len(values) == 2 and len(values[0]) == 32 and values[1].startswith(b"ssh:")
+    if key_type == "ssh-rsa":
+        return len(values) == 2 and all(values)
+
+    # ECDSA keys hold the curve name and an uncompressed curve point.
+    is_security_key = key_type.startswith("sk-")
+    curve = key_type.removeprefix("sk-").removeprefix("ecdsa-sha2-").removesuffix("@openssh.com")
+    coordinate_length = SSH_ECDSA_COORDINATE_LENGTHS[curve]
+    return (
+        len(values) == (3 if is_security_key else 2)
+        and values[0] == curve.encode()
+        and len(values[1]) == 1 + 2 * coordinate_length
+        and values[1][0] == 0x04
+        and (not is_security_key or values[2].startswith(b"ssh:"))
+    )
+
+
+def ssh_public_key_problem(key: str, allowed_types: tuple[str, ...]) -> str | None:
+    """Return why an OpenSSH public key line is unusable, or None if it is valid."""
+    fields = key.split()
+    if len(fields) < 2:
+        return "expected '<type> <base64 key data> [comment]'"
+    key_type, encoded_key = fields[0], fields[1]
+    if key_type not in allowed_types:
+        return f"unsupported key type {key_type!r}; supported types: {', '.join(allowed_types)}"
+
+    try:
+        blob_fields = read_ssh_wire_fields(base64.b64decode(encoded_key, validate=True))
+    except (binascii.Error, ValueError):
+        return "key data is not valid base64-encoded SSH public key data"
+    if not blob_fields or blob_fields[0] != key_type.encode():
+        return f"key data does not match key type {key_type!r}"
+    if not ssh_public_key_values_are_valid(key_type, blob_fields[1:]):
+        return f"malformed {key_type} key data"
+    if key_type == "ssh-rsa":
+        modulus_bits = int.from_bytes(blob_fields[2], "big").bit_length()
+        if modulus_bits < SSH_MIN_RSA_BITS:
+            return f"RSA key is {modulus_bits} bits; at least {SSH_MIN_RSA_BITS} bits are required"
+    return None
+
+
+def read_ssh_public_key(public_key: Path, cloud_provider: str) -> str:
     """Read and validate a single OpenSSH public key.
 
     The contents, rather than the path, are passed to Terraform so that later
@@ -1510,12 +1684,16 @@ def read_ssh_public_key(public_key: Path) -> str:
         raise SystemExit(f"Unable to read SSH public key {public_key}: {exc}") from exc
 
     keys = [line for line in lines if line]
-    fields = keys[0].split() if len(keys) == 1 else []
-    if len(fields) < 2 or not fields[0].startswith(SSH_PUBLIC_KEY_TYPE_PREFIXES):
+    if len(keys) != 1:
         raise SystemExit(
             f"SSH public key file must contain exactly one OpenSSH public key: {public_key}. "
             "Check that --ssh-public-key does not point to a private key."
         )
+
+    allowed_types = AWS_SSH_PUBLIC_KEY_TYPES if cloud_provider == "aws" else SSH_PUBLIC_KEY_TYPES
+    problem = ssh_public_key_problem(keys[0], allowed_types)
+    if problem:
+        raise SystemExit(f"Invalid SSH public key in {public_key}: {problem}.")
     return keys[0]
 
 
@@ -1575,7 +1753,7 @@ def gcp_terraform_vars(args: argparse.Namespace, public_key: str) -> dict[str, A
 
 def write_terraform_files(args: argparse.Namespace, state_dir: Path) -> None:
     apply_cloud_defaults(args)
-    public_key = read_ssh_public_key(resolve_ssh_public_key(args))
+    public_key = read_ssh_public_key(resolve_ssh_public_key(args), args.cloud_provider)
     state_dir.mkdir(parents=True, exist_ok=True)
     state_dir.chmod(0o700)
     write_state_dir_marker(state_dir)
@@ -2019,12 +2197,43 @@ def validate_generated_network_cidrs(args: argparse.Namespace) -> None:
         )
 
 
+def validate_generated_subnet_capacity(
+    args: argparse.Namespace,
+    *,
+    provider_name: str,
+    max_prefix_length: int,
+    reserved_addresses: int,
+) -> None:
+    """Reject generated subnets that cannot hold the master and every worker."""
+    subnet_network = ipaddress.ip_network(args.public_subnet_cidr, strict=False)
+    if subnet_network.prefixlen > max_prefix_length:
+        raise SystemExit(
+            f"--public-subnet-cidr ({subnet_network}) is too small for the generated "
+            f"{provider_name} subnet; use a /{max_prefix_length} or larger range."
+        )
+
+    required_addresses = args.workers + 1
+    usable_addresses = subnet_network.num_addresses - reserved_addresses
+    if usable_addresses < required_addresses:
+        raise SystemExit(
+            f"--public-subnet-cidr ({subnet_network}) has {usable_addresses} usable "
+            f"addresses after the {reserved_addresses} that {provider_name} reserves, but "
+            f"{required_addresses} are needed for the master and {args.workers} worker(s)."
+        )
+
+
 def validate_aws_network_args(args: argparse.Namespace) -> None:
     if bool(args.vpc_id) != bool(args.subnet_id):
         raise SystemExit("--vpc-id and --subnet-id must be provided together.")
     if args.vpc_id and args.subnet_id:
         return
     validate_generated_network_cidrs(args)
+    validate_generated_subnet_capacity(
+        args,
+        provider_name="AWS",
+        max_prefix_length=AWS_MAX_SUBNET_PREFIX_LENGTH,
+        reserved_addresses=AWS_SUBNET_RESERVED_ADDRESSES,
+    )
 
 
 def validate_gcp_network_args(args: argparse.Namespace) -> None:
@@ -2038,11 +2247,12 @@ def validate_gcp_network_args(args: argparse.Namespace) -> None:
         raise SystemExit(f"Invalid subnet CIDR: {exc}") from exc
     if subnet_network.version != 4:
         raise SystemExit("--public-subnet-cidr must be an IPv4 CIDR.")
-    if subnet_network.prefixlen > GCP_MAX_SUBNET_PREFIX_LENGTH:
-        raise SystemExit(
-            f"--public-subnet-cidr ({subnet_network}) is too small for a GCP "
-            f"subnetwork; use a /{GCP_MAX_SUBNET_PREFIX_LENGTH} or larger range."
-        )
+    validate_generated_subnet_capacity(
+        args,
+        provider_name="GCP",
+        max_prefix_length=GCP_MAX_SUBNET_PREFIX_LENGTH,
+        reserved_addresses=GCP_SUBNET_RESERVED_ADDRESSES,
+    )
 
 
 def validate_gcp_args(args: argparse.Namespace) -> None:
@@ -2119,13 +2329,17 @@ def handle_deploy(args: argparse.Namespace) -> None:
     state_dir = resolve_state_dir(args.state_dir)
     deploy_config_file = resolve_path(args.config_file)
     validate_local_config_file(deploy_config_file)
+    has_live_deployment = terraform_state_has_resources(state_dir)
     existing_metadata = validate_existing_deployment_provider(
         state_dir,
         args.cloud_provider,
     )
+    # Updating a live deployment reuses its saved GCP credentials unless
+    # --gcp-service-account-file overrides them.
     terraform_env = terraform_auth_env(
         args.cloud_provider,
         args.gcp_service_account_file,
+        existing_metadata,
     )
     gcp_service_account_file = (
         Path(terraform_env["GOOGLE_APPLICATION_CREDENTIALS"]) if terraform_env else None
@@ -2133,7 +2347,7 @@ def handle_deploy(args: argparse.Namespace) -> None:
 
     private_key = None if args.skip_ansible else resolve_ssh_private_key(args.ssh_private_key)
     known_hosts = known_hosts_path(state_dir)
-    if not terraform_state_has_resources(state_dir):
+    if not has_live_deployment:
         # New instances may reuse public IPs from a destroyed cluster.
         known_hosts.write_text("")
         known_hosts.chmod(0o600)
@@ -2149,13 +2363,17 @@ def handle_deploy(args: argparse.Namespace) -> None:
         cwd=state_dir,
         env=terraform_env,
     )
-    save_metadata(
-        args,
-        state_dir=state_dir,
-        private_key=private_key,
-        gcp_service_account_file=gcp_service_account_file,
-        outputs=existing_metadata.get("terraform_outputs", {}),
-    )
+    if not has_live_deployment:
+        # Record the provider and credentials before the first apply so that a
+        # partially created deployment can still be destroyed. A live deployment
+        # keeps its last successful metadata until this apply succeeds.
+        save_metadata(
+            args,
+            state_dir=state_dir,
+            private_key=private_key,
+            gcp_service_account_file=gcp_service_account_file,
+            outputs={},
+        )
     run_command(
         ["terraform", "apply", "-auto-approve"],
         cwd=state_dir,
@@ -2409,6 +2627,19 @@ def handle_destroy(args: argparse.Namespace) -> None:
         print(f"Deleted {state_dir}")
 
 
+class DefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
+    """Show defaults only for options whose default is known when parsing.
+
+    Options defaulting to None or "" get provider- or metadata-dependent values
+    after parsing, so their help text describes the effective default instead.
+    """
+
+    def _get_help_string(self, action: argparse.Action) -> str | None:
+        if action.default is None or action.default == "":
+            return action.help
+        return super()._get_help_string(action)
+
+
 def configure_deploy_parser(deploy: argparse.ArgumentParser) -> None:
     deploy.add_argument("--cloud-provider", choices=CLOUD_PROVIDERS, default="aws")
     deploy.add_argument(
@@ -2434,9 +2665,20 @@ def configure_deploy_parser(deploy: argparse.ArgumentParser) -> None:
         help="GCP project ID. Required when --cloud-provider=gcp.",
     )
     deploy.add_argument("--name-prefix", default="scylla-migrator-spark")
-    deploy.add_argument("--key-name", default=None, help="AWS key pair name to create.")
+    deploy.add_argument(
+        "--key-name",
+        default=None,
+        help="AWS key pair name to create. Defaults to NAME_PREFIX-key.",
+    )
     deploy.add_argument("--ssh-private-key", default="~/.ssh/id_rsa")
-    deploy.add_argument("--ssh-public-key", default=None)
+    deploy.add_argument(
+        "--ssh-public-key",
+        default=None,
+        help=(
+            "SSH public key to register in the AWS key pair or GCP instance "
+            "metadata. Defaults to SSH_PRIVATE_KEY.pub."
+        ),
+    )
     deploy.add_argument(
         "--master-instance-type",
         default=None,
@@ -2569,6 +2811,23 @@ def configure_deploy_parser(deploy: argparse.ArgumentParser) -> None:
     deploy.set_defaults(func=handle_deploy)
 
 
+def add_saved_ssh_and_migration_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--ssh-private-key",
+        default=None,
+        help="SSH private key. Defaults to the key saved in deployment metadata.",
+    )
+    parser.add_argument(
+        "--migration-type",
+        choices=MIGRATION_TYPES,
+        default=None,
+        help=(
+            "Migration type. Defaults to the type saved in deployment metadata, "
+            "or cql if none was saved."
+        ),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
@@ -2588,14 +2847,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         description="Deploy and operate a Spark cluster for ScyllaDB Migrator.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=DefaultsHelpFormatter,
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     deploy = subparsers.add_parser(
         "deploy",
         parents=[common],
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=DefaultsHelpFormatter,
         help="Create AWS or GCP infrastructure and configure Spark with Ansible.",
     )
     configure_deploy_parser(deploy)
@@ -2603,7 +2862,7 @@ def build_parser() -> argparse.ArgumentParser:
     show = subparsers.add_parser(
         "show",
         parents=[common],
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=DefaultsHelpFormatter,
         help="Show Terraform-managed infrastructure details.",
     )
     show.add_argument("--json", action="store_true")
@@ -2612,12 +2871,18 @@ def build_parser() -> argparse.ArgumentParser:
     run = subparsers.add_parser(
         "run",
         parents=[common],
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=DefaultsHelpFormatter,
         help="Run the configured Migrator Spark job on the master node.",
     )
-    run.add_argument("--ssh-private-key", default=None)
-    run.add_argument("--migration-type", choices=MIGRATION_TYPES, default=None)
-    run.add_argument("--config-file", default=None)
+    add_saved_ssh_and_migration_arguments(run)
+    run.add_argument(
+        "--config-file",
+        default=None,
+        help=(
+            "Optional Migrator config to upload before running. "
+            "Defaults to the config file saved in deployment metadata."
+        ),
+    )
     run.add_argument("--validator", action="store_true")
     run.add_argument(
         "--insecure-ssh",
@@ -2633,11 +2898,10 @@ def build_parser() -> argparse.ArgumentParser:
         "redeploy",
         parents=[common],
         description="Rerun Ansible on the current Terraform-managed nodes.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=DefaultsHelpFormatter,
         help="Rerun Ansible on the current Terraform-managed nodes.",
     )
-    redeploy.add_argument("--ssh-private-key", default=None)
-    redeploy.add_argument("--migration-type", choices=MIGRATION_TYPES, default=None)
+    add_saved_ssh_and_migration_arguments(redeploy)
     redeploy.add_argument(
         "--config-file",
         default=None,
@@ -2664,7 +2928,7 @@ def build_parser() -> argparse.ArgumentParser:
     destroy = subparsers.add_parser(
         "destroy",
         parents=[common],
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=DefaultsHelpFormatter,
         help="Destroy Terraform-managed infrastructure.",
     )
     destroy.add_argument("--yes", action="store_true", help="Skip confirmation prompt.")

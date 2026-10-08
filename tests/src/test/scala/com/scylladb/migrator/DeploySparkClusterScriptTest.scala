@@ -12,6 +12,15 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
   private val python = sys.env.getOrElse("PYTHON", "python3")
   private val missingPrivateKey =
     repoRoot.resolve("target/deploy-script-test/nonexistent-key")
+  // Structurally valid fixtures. Neither is a usable credential: the SSH key
+  // holds the bytes 0..31, and the RSA key is the textbook n = 3233 example.
+  private val testPublicKey =
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f user@example"
+  private val testServiceAccountKeyBody =
+    "MDMCAQAwDQYJKoZIhvcNAQEBBQAEHzAdAgEAAgIMoQIBEQICCsECAT0CATUCATUCATECASY="
+  // Embedded in Python string literals, so newlines stay escaped.
+  private val testServiceAccountPrivateKey =
+    s"-----BEGIN PRIVATE KEY-----\\n$testServiceAccountKeyBody\\n-----END PRIVATE KEY-----\\n"
 
   test("deploy_spark_cluster.py compiles with Python") {
     val result = runPython("-m", "py_compile", script.toString)
@@ -437,7 +446,7 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
          |with tempfile.TemporaryDirectory() as temp_dir:
          |    temp_path = Path(temp_dir)
          |    public_key = temp_path / "id_rsa.pub"
-         |    public_key.write_text("ssh-rsa AAAAB3NzaTest user@example\\n")
+         |    public_key.write_text("${testPublicKey}\\n")
          |    for existing_provider, requested_provider in (("aws", "gcp"), ("gcp", "aws")):
          |        state_dir = temp_path / (existing_provider + "-state")
          |        state_dir.mkdir()
@@ -513,7 +522,7 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
          |with tempfile.TemporaryDirectory() as temp_dir:
          |    state_dir = Path(temp_dir) / "state"
          |    public_key = Path(temp_dir) / "id_rsa.pub"
-         |    public_key.write_text("ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCtest user@example\\n")
+         |    public_key.write_text("${testPublicKey}\\n")
          |    args = module.build_parser().parse_args([
          |        "deploy",
          |        "--state-dir",
@@ -569,13 +578,13 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
          |    temp_path = Path(temp_dir)
          |    state_dir = temp_path / "state"
          |    public_key = temp_path / "id_rsa.pub"
-         |    public_key.write_text("ssh-rsa AAAAB3NzaTest user@example\\n")
+         |    public_key.write_text("${testPublicKey}\\n")
          |    credentials = temp_path / "service-account.json"
          |    credentials.write_text(json.dumps({
          |        "type": "service_account",
          |        "project_id": "example-project",
          |        "client_email": "deployer@example-project.iam.gserviceaccount.com",
-         |        "private_key": "not-a-real-private-key",
+         |        "private_key": "${testServiceAccountPrivateKey}",
          |    }))
          |    expected_credentials = str(credentials.resolve())
          |    module.require_commands = lambda commands: print("required=" + ",".join(commands))
@@ -697,7 +706,7 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
          |with tempfile.TemporaryDirectory() as temp_dir:
          |    temp_path = Path(temp_dir)
          |    public_key = temp_path / "id_rsa.pub"
-         |    public_key.write_text("ssh-rsa AAAAB3NzaTest user@example\\n")
+         |    public_key.write_text("${testPublicKey}\\n")
          |    args = module.build_parser().parse_args([
          |        "deploy",
          |        "--cloud-provider", "gcp",
@@ -769,7 +778,7 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
   test("GCP service account files are validated and exported to Terraform") {
     val result = runPython(
       "-c",
-      s"""import importlib.util, json, tempfile
+      s"""import base64, importlib.util, json, tempfile
          |from pathlib import Path
          |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
          |module = importlib.util.module_from_spec(spec)
@@ -781,7 +790,7 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
          |        "type": "service_account",
          |        "project_id": "example-project",
          |        "client_email": "deployer@example-project.iam.gserviceaccount.com",
-         |        "private_key": "not-a-real-private-key",
+         |        "private_key": "${testServiceAccountPrivateKey}",
          |    }))
          |    env = module.terraform_auth_env("gcp", str(valid))
          |    print(env["GOOGLE_APPLICATION_CREDENTIALS"] == str(valid.resolve()))
@@ -799,12 +808,38 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
          |    missing_file = temp_path / "missing.json"
          |    credential_directory = temp_path / "credential-directory"
          |    credential_directory.mkdir()
+         |    def key_file(name, private_key):
+         |        path = temp_path / (name + ".json")
+         |        path.write_text(json.dumps({
+         |            "type": "service_account",
+         |            "project_id": "example-project",
+         |            "client_email": "deployer@example-project.iam.gserviceaccount.com",
+         |            "private_key": private_key,
+         |        }))
+         |        return path
+         |    pem = "-----BEGIN {0}-----\\n{1}\\n-----END {0}-----\\n"
+         |    rsa_pkcs8 = "${testServiceAccountKeyBody}"
+         |    # The PKCS#1 key wrapped by the PKCS#8 fixture.
+         |    rsa_pkcs1 = base64.b64encode(base64.b64decode(rsa_pkcs8)[-31:]).decode()
+         |    # The same wrapped key labelled with the EC algorithm identifier.
+         |    ec_pkcs8 = "MDkCAQAwEwYHKoZIzj0CAQYIKoZIzj0DAQcEHzAdAgEAAgIMoQIBEQICCsECAT0CATUCATUCATECASY="
+         |    pkcs1_env = module.terraform_auth_env(
+         |        "gcp", str(key_file("pkcs1", pem.format("RSA PRIVATE KEY", rsa_pkcs1)))
+         |    )
+         |    print(pkcs1_env is not None)
          |    for path in (
          |        missing_file,
          |        credential_directory,
          |        invalid_json,
          |        wrong_type,
          |        missing_fields,
+         |        key_file("not-pem", "not-a-real-private-key"),
+         |        key_file("truncated", pem.format("PRIVATE KEY", rsa_pkcs8[:-12])),
+         |        key_file("ec", pem.format("PRIVATE KEY", ec_pkcs8)),
+         |        key_file("mismatched-labels", pem.format("PRIVATE KEY", rsa_pkcs8).replace(
+         |            "END PRIVATE", "END RSA PRIVATE"
+         |        )),
+         |        key_file("not-string", 42),
          |    ):
          |        try:
          |            module.terraform_auth_env("gcp", str(path))
@@ -819,16 +854,27 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
 
     assertEquals(result.exitCode, 0, result.output)
     val lines = result.output.linesIterator.toList
-    assertEquals(lines.take(3), List("True", "True", "True"))
-    assertOutputContains(lines(3), "GCP service account file does not exist")
-    assertOutputContains(lines(4), "GCP service account path is not a file")
-    assertOutputContains(lines(5), "Invalid JSON in GCP service account file")
-    assertOutputContains(lines(6), "is not a service account key")
+    assertEquals(lines.take(4), List("True", "True", "True", "True"))
+    assertOutputContains(lines(4), "GCP service account file does not exist")
+    assertOutputContains(lines(5), "GCP service account path is not a file")
+    assertOutputContains(lines(6), "Invalid JSON in GCP service account file")
+    assertOutputContains(lines(7), "is not a service account key")
     assertOutputContains(
-      lines(7),
+      lines(8),
       "missing required field(s): project_id, client_email, private_key"
     )
-    assertEquals(lines(8), "--gcp-service-account-file can only be used with GCP.")
+    assertOutputContains(
+      lines(9),
+      "has an invalid private_key: expected a PEM-encoded RSA private key"
+    )
+    assertOutputContains(lines(10), "has an invalid private_key:")
+    assertOutputContains(lines(11), "has an invalid private_key: private key is not an RSA key")
+    assertOutputContains(
+      lines(12),
+      "has an invalid private_key: expected a PEM-encoded RSA private key"
+    )
+    assertOutputContains(lines(13), "missing required field(s): private_key")
+    assertEquals(lines(14), "--gcp-service-account-file can only be used with GCP.")
   }
 
   test("GCP argument validation reports provider-specific mistakes") {
@@ -959,13 +1005,13 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
          |module = importlib.util.module_from_spec(spec)
          |spec.loader.exec_module(module)
          |competing = (
+         |    "GOOGLE_CREDENTIALS",
          |    "GOOGLE_OAUTH_ACCESS_TOKEN",
          |    "GOOGLE_CLOUD_KEYFILE_JSON",
          |    "GCLOUD_KEYFILE_JSON",
          |    "GOOGLE_IMPERSONATE_SERVICE_ACCOUNT",
          |)
          |os.environ.update({name: "other-" + name.lower() for name in competing})
-         |os.environ["GOOGLE_CREDENTIALS"] = "/tmp/other-credentials.json"
          |os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/tmp/other-adc.json"
          |os.environ["UNRELATED_SETTING"] = "kept"
          |captured = {}
@@ -980,14 +1026,13 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
          |        "type": "service_account",
          |        "project_id": "example-project",
          |        "client_email": "deployer@example-project.iam.gserviceaccount.com",
-         |        "private_key": "not-a-real-private-key",
+         |        "private_key": "${testServiceAccountPrivateKey}",
          |    }))
          |    expected = str(credentials.resolve())
          |    module.run_command(
          |        ["terraform", "plan"],
          |        env=module.terraform_auth_env("gcp", str(credentials)),
          |    )
-         |    print("google_credentials=" + str(captured["GOOGLE_CREDENTIALS"] == expected))
          |    print("adc=" + str(captured["GOOGLE_APPLICATION_CREDENTIALS"] == expected))
          |    print("competing_removed=" + str(not any(name in captured for name in competing)))
          |    print("unrelated=" + captured["UNRELATED_SETTING"])
@@ -997,7 +1042,6 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     )
 
     assertEquals(result.exitCode, 0, result.output)
-    assertOutputContains(result.output, "google_credentials=True")
     assertOutputContains(result.output, "adc=True")
     assertOutputContains(result.output, "competing_removed=True")
     assertOutputContains(result.output, "unrelated=kept")
@@ -1058,7 +1102,7 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
          |    module.run_command = fake_run
          |    module.terraform_output = lambda state_dir, env=None: outputs
          |    public_key = temp_path / "id_rsa.pub"
-         |    public_key.write_text("ssh-rsa AAAAB3NzaTest user@example\\n")
+         |    public_key.write_text("${testPublicKey}\\n")
          |    args = module.build_parser().parse_args([
          |        "deploy",
          |        "--cloud-provider", "gcp",
@@ -1112,7 +1156,7 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
   test("Terraform receives validated SSH public key contents instead of a path") {
     val result = runPython(
       "-c",
-      s"""import importlib.util, json, tempfile
+      s"""import base64, importlib.util, json, tempfile
          |from pathlib import Path
          |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
          |module = importlib.util.module_from_spec(spec)
@@ -1129,51 +1173,83 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
          |    if provider == "gcp":
          |        command.extend(["--gcp-project", "example-project"])
          |    return module.build_parser().parse_args(command)
+         |def ssh_blob(*fields):
+         |    return base64.b64encode(b"".join(len(f).to_bytes(4, "big") + f for f in fields)).decode()
+         |valid_key_data = "${testPublicKey}".split()[1]
          |with tempfile.TemporaryDirectory() as temp_dir:
          |    temp_path = Path(temp_dir)
          |    public_key = temp_path / "id_ed25519.pub"
-         |    public_key.write_text("\\nssh-ed25519 AAAAC3NzaTest user@example\\n\\n")
+         |    public_key.write_text("\\n${testPublicKey}\\n\\n")
          |    for provider in ("aws", "gcp"):
          |        state_dir = temp_path / (provider + "-state")
          |        module.write_terraform_files(parse(provider, public_key), state_dir)
          |        tfvars = json.loads((state_dir / "terraform.tfvars.json").read_text())
          |        main = (state_dir / "main.tf").read_text()
-         |        print(provider + "_key=" + tfvars["ssh_public_key"])
+         |        print(provider + "_key_saved=" + str(tfvars["ssh_public_key"] == "${testPublicKey}"))
          |        print(provider + "_uses_path=" + str("ssh_public_key_path" in tfvars or "file(" in main))
-         |    for label, content in (
-         |        ("private", "-----BEGIN OPENSSH PRIVATE KEY-----\\nnot-a-real-key\\n-----END OPENSSH PRIVATE KEY-----\\n"),
-         |        ("multiple", "ssh-rsa AAAAB3NzaOne one@example\\nssh-rsa AAAAB3NzaTwo two@example\\n"),
-         |        ("empty", "\\n"),
-         |        ("no_key_data", "ssh-ed25519\\n"),
+         |    ecdsa_point = b"\\x04" + bytes(64)
+         |    ecdsa_key = "ecdsa-sha2-nistp256 " + ssh_blob(b"ecdsa-sha2-nistp256", b"nistp256", ecdsa_point)
+         |    gcp_ecdsa = temp_path / "ecdsa.pub"
+         |    gcp_ecdsa.write_text(ecdsa_key + "\\n")
+         |    module.write_terraform_files(parse("gcp", gcp_ecdsa), temp_path / "gcp-ecdsa-state")
+         |    print("gcp_ecdsa_accepted=True")
+         |    for provider, label, content in (
+         |        ("gcp", "private", "-----BEGIN OPENSSH PRIVATE KEY-----\\nnot-a-real-key\\n-----END OPENSSH PRIVATE KEY-----"),
+         |        ("gcp", "multiple", "${testPublicKey}\\n${testPublicKey}"),
+         |        ("gcp", "empty", ""),
+         |        ("gcp", "no_key_data", "ssh-ed25519"),
+         |        ("gcp", "fabricated", "ssh-ed25519 AAAAC3NzaTest user@example"),
+         |        ("gcp", "truncated", "ssh-ed25519 " + valid_key_data[:-8]),
+         |        ("gcp", "type_mismatch", "ssh-rsa " + valid_key_data),
+         |        ("gcp", "short_ed25519", "ssh-ed25519 " + ssh_blob(b"ssh-ed25519", bytes(31))),
+         |        ("gcp", "trailing_data", "ssh-ed25519 " + ssh_blob(b"ssh-ed25519", bytes(32), b"extra")),
+         |        ("gcp", "small_rsa", "ssh-rsa " + ssh_blob(b"ssh-rsa", b"\\x01\\x00\\x01", (3233).to_bytes(2, "big"))),
+         |        ("gcp", "bad_curve", "ecdsa-sha2-nistp256 " + ssh_blob(b"ecdsa-sha2-nistp256", b"nistp384", ecdsa_point)),
+         |        ("gcp", "dsa", "ssh-dss " + ssh_blob(b"ssh-dss", b"p", b"q", b"g", b"y")),
+         |        ("aws", "aws_ecdsa", ecdsa_key),
          |    ):
          |        key_path = temp_path / (label + ".pub")
-         |        key_path.write_text(content)
+         |        key_path.write_text(content + "\\n")
          |        state_dir = temp_path / (label + "-state")
          |        try:
-         |            module.write_terraform_files(parse("gcp", key_path), state_dir)
+         |            module.write_terraform_files(parse(provider, key_path), state_dir)
+         |            print(label + "=accepted")
          |        except SystemExit as exc:
-         |            print(label + "_rejected=" + str("exactly one OpenSSH public key" in str(exc)))
-         |        print(label + "_state_created=" + str(state_dir.exists()))
+         |            message = str(exc)
+         |            if "exactly one OpenSSH public key" in message:
+         |                print(label + "=one key")
+         |            else:
+         |                # Drop the "Invalid SSH public key in PATH: " prefix.
+         |                print(label + "=" + message.split(": ", 1)[1])
+         |        if state_dir.exists():
+         |            print(label + "_state_created=True")
          |""".stripMargin
     )
 
     assertEquals(result.exitCode, 0, result.output)
-    val lines = result.output.linesIterator.toList
     assertEquals(
-      lines,
+      result.output.linesIterator.toList,
       List(
-        "aws_key=ssh-ed25519 AAAAC3NzaTest user@example",
+        "aws_key_saved=True",
         "aws_uses_path=False",
-        "gcp_key=ssh-ed25519 AAAAC3NzaTest user@example",
+        "gcp_key_saved=True",
         "gcp_uses_path=False",
-        "private_rejected=True",
-        "private_state_created=False",
-        "multiple_rejected=True",
-        "multiple_state_created=False",
-        "empty_rejected=True",
-        "empty_state_created=False",
-        "no_key_data_rejected=True",
-        "no_key_data_state_created=False"
+        "gcp_ecdsa_accepted=True",
+        "private=one key",
+        "multiple=one key",
+        "empty=one key",
+        "no_key_data=expected '<type> <base64 key data> [comment]'.",
+        "fabricated=key data is not valid base64-encoded SSH public key data.",
+        "truncated=key data is not valid base64-encoded SSH public key data.",
+        "type_mismatch=key data does not match key type 'ssh-rsa'.",
+        "short_ed25519=malformed ssh-ed25519 key data.",
+        "trailing_data=malformed ssh-ed25519 key data.",
+        "small_rsa=RSA key is 12 bits; at least 1024 bits are required.",
+        "bad_curve=malformed ecdsa-sha2-nistp256 key data.",
+        "dsa=unsupported key type 'ssh-dss'; supported types: " +
+          "ssh-ed25519, ssh-rsa, ecdsa-sha2-nistp256, ecdsa-sha2-nistp384, ecdsa-sha2-nistp521, " +
+          "sk-ssh-ed25519@openssh.com, sk-ecdsa-sha2-nistp256@openssh.com.",
+        "aws_ecdsa=unsupported key type 'ecdsa-sha2-nistp256'; supported types: ssh-ed25519, ssh-rsa."
       )
     )
   }
@@ -1196,7 +1272,7 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertEquals(result.output.linesIterator.toList, List("2", "2"))
   }
 
-  test("generated subnet CIDRs are normalized and sized for GCP") {
+  test("generated subnet CIDRs are normalized and sized for the cluster") {
     val tooSmall = runScript(
       "deploy",
       "--cloud-provider",
@@ -1214,7 +1290,54 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertNotEquals(tooSmall.exitCode, 0, tooSmall.output)
     assertOutputContains(
       tooSmall.output,
-      "--public-subnet-cidr (10.42.1.0/30) is too small for a GCP subnetwork; use a /29 or larger range."
+      "--public-subnet-cidr (10.42.1.0/30) is too small for the generated GCP subnet; use a /29 or larger range."
+    )
+
+    val capacity = runPython(
+      "-c",
+      s"""import importlib.util
+         |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
+         |module = importlib.util.module_from_spec(spec)
+         |spec.loader.exec_module(module)
+         |parser = module.build_parser()
+         |for provider, cidr, workers in (
+         |    ("gcp", "10.42.1.0/29", 3),
+         |    ("gcp", "10.42.1.0/29", 4),
+         |    ("aws", "10.42.1.0/28", 10),
+         |    ("aws", "10.42.1.0/28", 11),
+         |    ("aws", "10.42.1.0/29", 1),
+         |):
+         |    command = [
+         |        "deploy",
+         |        "--cloud-provider", provider,
+         |        "--skip-ansible",
+         |        "--public-subnet-cidr", cidr,
+         |        "--workers", str(workers),
+         |        "--allowed-ssh-cidr", "203.0.113.10/32",
+         |        "--allowed-web-cidr", "203.0.113.10/32",
+         |    ]
+         |    if provider == "gcp":
+         |        command.extend(["--gcp-project", "example-project"])
+         |    try:
+         |        module.validate_cloud_args(parser.parse_args(command))
+         |        print(provider, cidr, workers, "ok")
+         |    except SystemExit as exc:
+         |        print(provider, cidr, workers, exc)
+         |""".stripMargin
+    )
+    assertEquals(capacity.exitCode, 0, capacity.output)
+    assertEquals(
+      capacity.output.linesIterator.toList,
+      List(
+        "gcp 10.42.1.0/29 3 ok",
+        "gcp 10.42.1.0/29 4 --public-subnet-cidr (10.42.1.0/29) has 4 usable addresses after " +
+          "the 4 that GCP reserves, but 5 are needed for the master and 4 worker(s).",
+        "aws 10.42.1.0/28 10 ok",
+        "aws 10.42.1.0/28 11 --public-subnet-cidr (10.42.1.0/28) has 11 usable addresses after " +
+          "the 5 that AWS reserves, but 12 are needed for the master and 11 worker(s).",
+        "aws 10.42.1.0/29 1 --public-subnet-cidr (10.42.1.0/29) is too small for the generated AWS subnet; " +
+          "use a /28 or larger range."
+      )
     )
 
     val normalized = runPython(
@@ -1266,6 +1389,128 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
       "Timed out waiting for SSH on 203.0.113.10. Last SSH error:\nPermission denied (publickey)."
     )
     assertOutputContains(result.output, "attempts=30")
+  }
+
+  test("re-deploys reuse saved GCP credentials and keep metadata until apply succeeds") {
+    val result = runPython(
+      "-c",
+      s"""import importlib.util, json, subprocess, tempfile
+         |from pathlib import Path
+         |spec = importlib.util.spec_from_file_location("deploy_spark_cluster", "${script}")
+         |module = importlib.util.module_from_spec(spec)
+         |spec.loader.exec_module(module)
+         |outputs = {
+         |    "master": {
+         |        "instance_id": "gcp-master",
+         |        "public_ip": "203.0.113.10",
+         |        "private_ip": "10.42.1.10",
+         |    },
+         |    "workers": [],
+         |    "spark_master_url": "spark://10.42.1.10:7077",
+         |    "spark_master_ui": "http://203.0.113.10:8080",
+         |    "spark_application_ui": "http://203.0.113.10:4040",
+         |    "spark_history_ui": "http://203.0.113.10:18080",
+         |    "vpc_id": "projects/example/global/networks/test",
+         |    "public_subnet_id": "projects/example/regions/us-central1/subnetworks/test",
+         |    "cluster_security_group_id": "internal-firewall",
+         |    "master_ui_security_group_id": "ui-firewall",
+         |    "key_name": "ubuntu (instance metadata)",
+         |}
+         |apply_credentials = []
+         |fail_apply = [False]
+         |def fake_run(command, **kwargs):
+         |    if command[1] == "apply":
+         |        apply_credentials.append((kwargs.get("env") or {}).get("GOOGLE_APPLICATION_CREDENTIALS"))
+         |        if fail_apply[0]:
+         |            raise subprocess.CalledProcessError(1, command)
+         |module.require_commands = lambda commands: None
+         |module.run_command = fake_run
+         |module.terraform_output = lambda state_dir, env=None: outputs
+         |with tempfile.TemporaryDirectory() as temp_dir:
+         |    temp_path = Path(temp_dir)
+         |    public_key = temp_path / "id_ed25519.pub"
+         |    public_key.write_text("${testPublicKey}\\n")
+         |    credentials = temp_path / "service-account.json"
+         |    credentials.write_text(json.dumps({
+         |        "type": "service_account",
+         |        "project_id": "example-project",
+         |        "client_email": "deployer@example-project.iam.gserviceaccount.com",
+         |        "private_key": "${testServiceAccountPrivateKey}",
+         |    }))
+         |    expected = str(credentials.resolve())
+         |    def deploy(state_dir, *extra):
+         |        module.handle_deploy(module.build_parser().parse_args([
+         |            "deploy",
+         |            "--cloud-provider", "gcp",
+         |            "--gcp-project", "example-project",
+         |            "--state-dir", str(state_dir),
+         |            "--skip-ansible",
+         |            "--ssh-public-key", str(public_key),
+         |            "--allowed-ssh-cidr", "203.0.113.10/32",
+         |            "--allowed-web-cidr", "203.0.113.10/32",
+         |            *extra,
+         |        ]))
+         |    def failed_deploy(state_dir, *extra):
+         |        fail_apply[0] = True
+         |        try:
+         |            deploy(state_dir, *extra)
+         |        except subprocess.CalledProcessError:
+         |            print("apply_failed=True")
+         |        fail_apply[0] = False
+         |
+         |    state_dir = temp_path / "state"
+         |    deploy(state_dir, "--gcp-service-account-file", str(credentials), "--owner-tag", "first")
+         |    module.write_json(
+         |        state_dir / "terraform.tfstate",
+         |        {"resources": [{"mode": "managed", "type": "google_compute_instance", "name": "spark_master"}]},
+         |    )
+         |    deploy(state_dir, "--owner-tag", "second")
+         |    metadata = module.read_json(state_dir / "metadata.json")
+         |    print("reused_saved_credentials=" + str(apply_credentials[-1] == expected))
+         |    print("credentials_kept=" + str(metadata["gcp_service_account_file"] == expected))
+         |    print("owner_after_success=" + metadata["owner_tag"])
+         |
+         |    failed_deploy(state_dir, "--owner-tag", "failed", "--gcp-service-account-file", "")
+         |    metadata = module.read_json(state_dir / "metadata.json")
+         |    print("empty_flag_uses_adc=" + str(apply_credentials[-1] is None))
+         |    print("owner_after_failure=" + metadata["owner_tag"])
+         |    print("credentials_after_failure=" + str(metadata["gcp_service_account_file"] == expected))
+         |
+         |    fresh_state_dir = temp_path / "fresh-state"
+         |    failed_deploy(fresh_state_dir, "--gcp-service-account-file", str(credentials))
+         |    metadata = module.read_json(fresh_state_dir / "metadata.json")
+         |    print("fresh_failure_provider=" + metadata["cloud_provider"])
+         |    print("fresh_failure_credentials=" + str(metadata["gcp_service_account_file"] == expected))
+         |""".stripMargin
+    )
+
+    assertEquals(result.exitCode, 0, result.output)
+    assertOutputContains(result.output, "reused_saved_credentials=True")
+    assertOutputContains(result.output, "credentials_kept=True")
+    assertOutputContains(result.output, "owner_after_success=second")
+    assertEquals(result.output.split("apply_failed=True", -1).length - 1, 2)
+    assertOutputContains(result.output, "empty_flag_uses_adc=True")
+    assertOutputContains(result.output, "owner_after_failure=second")
+    assertOutputContains(result.output, "credentials_after_failure=True")
+    assertOutputContains(result.output, "fresh_failure_provider=gcp")
+    assertOutputContains(result.output, "fresh_failure_credentials=True")
+  }
+
+  test("help omits defaults that are resolved after parsing") {
+    for (command <- Seq("deploy", "run", "redeploy", "show", "destroy")) {
+      val result = runScript(command, "--help")
+      val help = result.output.replaceAll("\\s+", " ")
+
+      assertEquals(result.exitCode, 0, result.output)
+      assert(!help.contains("(default: None)"), result.output)
+      assert(!help.contains("(default: )"), result.output)
+    }
+
+    val deployHelp = runScript("deploy", "--help").output.replaceAll("\\s+", " ")
+    assertOutputContains(deployHelp, "AWS default: x2iedn.2xlarge")
+    assertOutputContains(deployHelp, "(default: 10.42.1.0/24)")
+    val runHelp = runScript("run", "--help").output.replaceAll("\\s+", " ")
+    assertOutputContains(runHelp, "Defaults to the key saved in deployment metadata.")
   }
 
   test("allow-public-access gates the public CIDR guard") {
@@ -1569,6 +1814,8 @@ class DeploySparkClusterScriptTest extends munit.FunSuite {
     assertOutputContains(readme, "It takes precedence over any Google credential environment variables")
     assertOutputContains(readme, "where it defaults to `<region>-b`")
     assertOutputContains(readme, "only newly created instances use the latest image")
+    assertOutputContains(readme, "it reuses the saved credential path")
+    assertOutputContains(readme, "after the addresses the provider reserves")
   }
 
   test("test workflow runs for deploy helper and Ansible changes") {

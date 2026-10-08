@@ -87,7 +87,7 @@ To explicitly use a service account key file:
   --allowed-web-cidr "$MY_CIDR"
 ```
 
-The explicit file must be a valid service account JSON key containing `project_id`, `client_email`, and `private_key`. It takes precedence over any Google credential environment variables: the script passes it to Terraform as both `GOOGLE_CREDENTIALS` and `GOOGLE_APPLICATION_CREDENTIALS`, and removes `GOOGLE_OAUTH_ACCESS_TOKEN`, `GOOGLE_CLOUD_KEYFILE_JSON`, `GCLOUD_KEYFILE_JSON`, and `GOOGLE_IMPERSONATE_SERVICE_ACCOUNT` from Terraform's environment. The key contents are never copied into the state directory or onto cluster VMs. The provider and resolved credential path are saved in restricted deployment metadata before Terraform apply, so a partially created deployment can still be destroyed with the selected credentials. Successful applies refresh that metadata with Terraform outputs. Pass `--gcp-service-account-file` again to override the saved path if the file moves. Treat both the key and the state directory as sensitive.
+The explicit file must be a valid service account JSON key containing `project_id`, `client_email`, and a PEM-encoded RSA `private_key`; the script checks the key structure locally before running Terraform. It takes precedence over any Google credential environment variables: the script passes it to Terraform as `GOOGLE_APPLICATION_CREDENTIALS` and removes `GOOGLE_CREDENTIALS`, `GOOGLE_OAUTH_ACCESS_TOKEN`, `GOOGLE_CLOUD_KEYFILE_JSON`, `GCLOUD_KEYFILE_JSON`, and `GOOGLE_IMPERSONATE_SERVICE_ACCOUNT` from Terraform's environment. The key contents are never copied into the state directory or onto cluster VMs. The provider and resolved credential path are saved in restricted deployment metadata before the first Terraform apply, so a partially created deployment can still be destroyed with the selected credentials. Successful applies refresh that metadata with Terraform outputs. When `deploy` is re-run against a live deployment, it reuses the saved credential path and keeps the last successful metadata until the new apply succeeds. Pass `--gcp-service-account-file` again to override the saved path if the file moves, or pass an empty value to use ADC instead. Treat both the key and the state directory as sensitive.
 
 Provisioning credentials and VM runtime credentials are separate. `--gcp-service-account-file` authenticates local Terraform only. To give the cluster VMs access to Google Cloud APIs, use `--gcp-instance-service-account SERVICE_ACCOUNT_EMAIL`; the script attaches it with the `cloud-platform` OAuth scope, while its effective access remains limited by IAM roles granted outside this script.
 
@@ -304,7 +304,7 @@ Run `./deploy_spark_cluster.py --help` or `./deploy_spark_cluster.py <subcommand
 All subcommands accept:
 
 - `--state-dir`: Directory for generated Terraform files, Terraform state, generated inventory, metadata, and SSH `known_hosts`. Defaults to `.deploy_spark_cluster`.
-- `--gcp-service-account-file`: Explicit service account JSON key used instead of the normal GCP ADC lookup. On commands after `deploy`, defaults to the path saved in deployment metadata.
+- `--gcp-service-account-file`: Explicit service account JSON key used instead of the normal GCP ADC lookup. On `show`, `run`, `redeploy`, `destroy`, and a repeated `deploy` of a live deployment, defaults to the path saved in deployment metadata.
 
 #### `deploy`
 
@@ -324,7 +324,7 @@ Common arguments:
 - `--name-prefix`: Prefix for generated resource names. Defaults to `scylla-migrator-spark`. GCP prefixes must satisfy Compute Engine naming rules.
 - `--key-name`: AWS key pair name to create. Defaults to `<name-prefix>-key`.
 - `--ssh-private-key`: SSH private key for connecting to instances. Defaults to `~/.ssh/id_rsa`.
-- `--ssh-public-key`: SSH public key to register in the AWS key pair or GCP instance metadata. Defaults to `<ssh-private-key>.pub`. The file must contain exactly one OpenSSH public key. Its contents are written to `terraform.tfvars.json`, so `destroy` still works if the local key file later moves.
+- `--ssh-public-key`: SSH public key to register in the AWS key pair or GCP instance metadata. Defaults to `<ssh-private-key>.pub`. The file must contain exactly one well-formed OpenSSH public key. AWS accepts RSA and ED25519 keys; GCP also accepts ECDSA and FIDO security keys (`sk-*`). RSA keys must be at least 1024 bits. Its contents are written to `terraform.tfvars.json`, so `destroy` still works if the local key file later moves.
 - `--master-instance-type`: Spark master machine type. Defaults to `x2iedn.2xlarge` on AWS and `n2-custom-8-262144-ext` on GCP.
 - `--worker-instance-type`: Spark worker machine type. Defaults to `i8g.4xlarge` on AWS and `c4a-highmem-16` on GCP.
 - `--workers`: Number of Spark worker instances. Defaults to `1`.
@@ -335,7 +335,7 @@ Common arguments:
 Networking and infrastructure arguments:
 
 - `--vpc-cidr`: AWS VPC CIDR. Defaults to `10.42.0.0/16` on AWS. GCP VPC networks do not have a network-wide CIDR.
-- `--public-subnet-cidr`: CIDR for a generated AWS or GCP subnet. Defaults to `10.42.1.0/24`. GCP subnetworks must be `/29` or larger.
+- `--public-subnet-cidr`: CIDR for a generated AWS or GCP subnet. Defaults to `10.42.1.0/24`. The generated subnet must have room for the master and every worker after the addresses the provider reserves (5 on AWS, 4 on GCP). AWS subnets must be `/28` or larger, and GCP subnetworks must be `/29` or larger.
 - `--vpc-id`: Existing AWS VPC ID to use instead of creating a new VPC. Must be provided with `--subnet-id`.
 - `--subnet-id`: Existing subnet ID for EC2 instances when `--vpc-id` is set. The subnet must have outbound internet access.
 - `--network`: Existing GCP VPC network name. Must be provided with `--subnetwork`.
