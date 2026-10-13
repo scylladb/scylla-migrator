@@ -117,7 +117,7 @@ lazy val tests = project
     Test / parallelExecution := false,
     // Needed to build a Spark session on Java 17+, see https://stackoverflow.com/questions/73465937/apache-spark-3-3-0-breaks-on-java-17-with-cannot-access-class-sun-nio-ch-direct
     Test / javaOptions ++= {
-      val e2eProps = Seq("e2e.cql.rows", "e2e.ddb.rows").flatMap { key =>
+      val e2eProps = Seq("e2e.cql.rows", "e2e.ddb.rows", "e2e.aerospike.rows").flatMap { key =>
         sys.props.get(key).map(v => s"-D${key}=${v}")
       }
       Seq("--add-exports", "java.base/sun.nio.ch=ALL-UNNAMED") ++ e2eProps
