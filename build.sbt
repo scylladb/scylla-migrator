@@ -7,6 +7,7 @@ val hadoopVersion = "3.4.1"
 val circeVersion = "0.14.7"
 val connectorVersion = "4.1.4"
 val gcsConnectorVersion = "hadoop3-2.2.26"
+val aerospikeClientVersion = "8.1.1"
 val dynamodbStreamsKinesisAdapterVersion =
   "1.5.4" // Note This version still depends on AWS SDK 1.x, but there is no more recent version that supports AWS SDK v2.
 
@@ -14,6 +15,7 @@ inThisBuild(
   List(
     organization := "com.scylladb",
     scalaVersion := "2.13.14",
+    // All migrator modules target JDK 17+; the Aerospike reader also uses java.util.HexFormat.
     scalacOptions ++= Seq("-release:17", "-deprecation", "-unchecked", "-feature")
   )
 )
@@ -61,6 +63,7 @@ lazy val migrator = (project in file("migrator"))
       "com.scylladb"          %% "spark-scylladb-connector" % connectorVersion,
       "com.github.jnr" % "jnr-posix" % "3.1.19", // Needed by the Spark ScyllaDB connector
       "com.scylladb.alternator" % "emr-dynamodb-hadoop"  % "5.9.2",
+      "com.aerospike"           % "aerospike-client-jdk8" % aerospikeClientVersion, // jdk8 variant works on JDK 8+; jdk21 variant requires JDK 21+ (adds virtual threads)
       "com.scylladb.alternator" % "load-balancing"       % "2.0.5",
       "com.mysql"              % "mysql-connector-j"     % "9.7.0",
       "io.circe"               %% "circe-generic"        % circeVersion,
@@ -108,6 +111,7 @@ lazy val tests = project
         "shaded"
       ),
       "com.google.cloud.bigdataoss" % "util-hadoop" % gcsConnectorVersion,
+      "com.aerospike"             % "aerospike-client-jdk8"     % aerospikeClientVersion % Test,
       "org.scalameta"            %% "munit"                     % "1.0.1"
     ),
     Test / parallelExecution := false,
