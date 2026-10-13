@@ -200,8 +200,12 @@ class AerospikeConnectionTest extends munit.FunSuite {
       "host:65535"
     )
     for (entry <- entries) {
-      val source =
-        decodeSource(sourceJson.mapObject(_.add("hosts", Json.arr(Json.fromString(entry)))))
+      val source = decodeSource(
+        sourceJson.mapObject(
+          _.add("hosts", Json.arr(Json.fromString(entry)))
+            .add("tlsName", Json.fromString("global-tls"))
+        )
+      )
       assertEquals(source.hosts, Seq(entry))
       val actual =
         AerospikeHosts.parse(source.hosts, 3000).toSeq.map(h => (h.name, h.tlsName, h.port))
@@ -299,12 +303,37 @@ class AerospikeConnectionTest extends munit.FunSuite {
     assertEquals(policy.scanPolicyDefault.totalTimeout, 30000)
   }
 
-  test("TLS names in SDK seed specifications enable TLS without a global override") {
-    for (seed <- Seq("host:node-tls:4333", "[::1]:node-tls:4333")) {
-      val source = decodeSource(
-        sourceJson.mapObject(_.add("hosts", Json.arr(Json.fromString(seed))))
+  test("inline SDK seed TLS names without source.tlsName fail before connection") {
+    val sources = Seq(
+      Seq("unreachable.invalid:node-tls:4333"),
+      Seq("[::1]:node-tls:4333"),
+      Seq("plain.invalid", "unreachable.invalid:node-tls:4333"),
+      Seq("plain.invalid,unreachable.invalid:node-tls:4333")
+    )
+    for (seeds <- sources) {
+      val json = sourceJson.mapObject(_.add("hosts", Json.arr(seeds.map(Json.fromString): _*)))
+      val decodedError = json.as[SourceSettings].swap.toOption.get
+      assert(decodedError.getMessage.contains("source.tlsName"))
+      val source = decodeSource(sourceJson).copy(hosts = seeds)
+      val config = Aerospike.connectionConfig(source)
+      val errors = Seq(
+        intercept[IllegalArgumentException](Aerospike.readDataframe(null, source)),
+        intercept[IllegalArgumentException](Aerospike.buildClientPolicy(config, None)),
+        intercept[IllegalArgumentException](Aerospike.buildClient(config, None))
       )
-      assertEquals(source.tlsName, None)
+      errors.foreach(error => assert(error.getMessage.contains("source.tlsName")))
+    }
+  }
+
+  test("top-level tlsName enables TLS when seed strings have inline TLS names") {
+    for (seed <- Seq("127.0.0.1:node-tls:4333", "[::1]:node-tls:4333")) {
+      val source = decodeSource(
+        sourceJson.mapObject(
+          _.add("hosts", Json.arr(Json.fromString(seed)))
+            .add("tlsName", Json.fromString("global-tls"))
+        )
+      )
+      assertEquals(source.tlsName, Some("global-tls"))
       val config = Aerospike.connectionConfig(source)
       val hosts = AerospikeHosts.parse(config.hosts, config.port)
       assertEquals(hosts.head.tlsName, "node-tls")
@@ -395,6 +424,36 @@ class AerospikeConnectionTest extends munit.FunSuite {
       Some(("env-user", "env-pass"))
     )
   }
+
+  for {
+    (username, password, variable) <- Seq(
+                                        ("", "env-password-secret", "AEROSPIKE_USERNAME"),
+                                        ("env-username-secret", "", "AEROSPIKE_PASSWORD"),
+                                        ("", "", "AEROSPIKE_USERNAME")
+                                      )
+    fallback <- Seq(None, Some(("config-user-secret", "config-password-secret")))
+    required <- Seq(false, true)
+  }
+    test(
+      s"empty credentials user=${username.isEmpty}, pass=${password.isEmpty}, " +
+        s"fallback=${fallback.isDefined}, required=$required"
+    ) {
+      val env = Map("AEROSPIKE_USERNAME" -> username, "AEROSPIKE_PASSWORD" -> password)
+      val error = intercept[IllegalArgumentException] {
+        Aerospike.resolveCredentialsFromEnvOr(
+          fallback,
+          requireEnvironmentCredentials = required,
+          getenv                        = name => env.getOrElse(name, null)
+        )
+      }
+      assertEquals(error.getMessage, s"requirement failed: $variable must not be empty")
+      for (
+        secret <- Seq(username, password).filter(_.nonEmpty) ++ fallback.toSeq.flatMap {
+                    case (user, pass) => Seq(user, pass)
+                  }
+      )
+        assert(!error.getMessage.contains(secret))
+    }
 
   test("partial environment credentials are rejected without exposing values or using a fallback") {
     for (name <- Seq("AEROSPIKE_USERNAME", "AEROSPIKE_PASSWORD")) {
