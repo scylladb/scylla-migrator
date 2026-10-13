@@ -26,7 +26,7 @@ See https://migrator.docs.scylladb.com.
 To test a custom version of the migrator that has not been [released](https://github.com/scylladb/scylla-migrator/releases), you can build it yourself by cloning this Git repository and following the steps below:
 
 Build locally:
-1. Make sure the Java 8+ JDK and `sbt` are installed on your machine.
+1. Make sure the Java 17+ JDK and `sbt` are installed on your machine.
 2. Export the `JAVA_HOME` environment variable with the path to the JDK installation.
 3. Run `make build`
 

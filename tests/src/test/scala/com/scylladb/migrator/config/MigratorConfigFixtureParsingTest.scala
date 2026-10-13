@@ -48,6 +48,13 @@ class MigratorConfigFixtureParsingTest extends munit.FunSuite {
     val exampleFiles = Seq(
       resolveExistingPath(
         Seq(
+          Paths.get("config-aerospike.yaml.example"),
+          Paths.get("..", "config-aerospike.yaml.example")
+        ),
+        "config-aerospike.yaml.example"
+      ),
+      resolveExistingPath(
+        Seq(
           Paths.get("ansible", "files", "config.dynamodb.yml"),
           Paths.get("..", "ansible", "files", "config.dynamodb.yml")
         ),

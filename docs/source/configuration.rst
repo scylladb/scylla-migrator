@@ -56,6 +56,7 @@ Valid values for the source ``type`` are:
 - ``dynamodb`` for a DynamoDB source.
 - ``alternator`` for a ScyllaDB Alternator source.
 - ``dynamodb-s3-export`` for a DynamoDB table exported to S3.
+- ``aerospike`` for an Aerospike source.
 
 The following subsections detail the schema of each source type.
 
@@ -377,6 +378,190 @@ A source of type ``dynamodb-s3-export`` can be used together with a target of ty
         # ... other key schema definitions
     # Optional - Whether to use “path-style access” in S3 (see https://docs.aws.amazon.com/AmazonS3/latest/userguide/VirtualHosting.html). Default is false.
     usePathStyleAccess: true
+
+^^^^^^^^^^^^^^^^
+Aerospike Source
+^^^^^^^^^^^^^^^^
+
+An Aerospike source migrates to a CQL-compatible target. Use JDK 17 or later on
+the driver and every executor. Create the destination keyspace and table before
+starting the migration.
+
+The required settings are ``hosts`` (a list of seed hosts), ``namespace``,
+``set``, ``schema``, and ``keyMode``. The namespace and set must be nonempty.
+``port`` defaults to 3000 for seeds without an inline port.
+
+For records with stored string keys, this configuration selects four bins and
+exports the TTL and generation as ordinary metadata columns:
+
+.. code-block:: yaml
+
+  source:
+    type: aerospike
+    hosts:
+      - aerospike.example.com
+    port: 3000
+    namespace: test
+    set: users
+    keyMode: string
+    schema:
+      name: string
+      age: long
+      tags: list<string>
+      attrs: map<string,long>
+    invalidRecordHandling: skip
+    preserveTTL: true
+    preserveGeneration: true
+
+  target:
+    type: scylla
+    host: scylla.example.com
+    port: 9042
+    keyspace: migration
+    table: users
+    consistencyLevel: LOCAL_QUORUM
+    connections: 16
+    stripTrailingZerosForDecimals: false
+
+In an existing ``migration`` keyspace, a matching table is:
+
+.. code-block:: cql
+
+  CREATE TABLE migration.users (
+    aero_key text PRIMARY KEY,
+    name text,
+    age bigint,
+    tags frozen<list<text>>,
+    attrs frozen<map<text, bigint>>,
+    aero_ttl int,
+    aero_generation int
+  );
+
+**Schema and record identity**
+
+``schema`` is a required mapping from bin names to types. Only declared bins are
+migrated; undeclared bins are omitted and missing declared bins remain null.
+An explicit ``schema: {}`` selects only the generated key and enabled metadata.
+Automatic inference, ``schemaSampleSize``, ``schemaDiscoveryStrategy``, and a
+separate ``bins`` filter are not supported.
+
+Supported types are ``string``/``text``, ``long``/``bigint``/``int``/``integer``,
+``double``, ``boolean``/``bool``, and ``binary``/``blob``, plus nested ``list<T>``
+and ``map<K,V>``. Integer aliases all produce Spark long values. Boolean types
+require native Boolean bins; integer-backed flags must use long or string.
+A string schema selects a textual representation: binary values use hex,
+collections use Java-style punctuation, and GeoJSON uses JSON text. Collection
+text does not promise parseable or round-trip serialization.
+
+``keyMode`` is required independently of ``schema``:
+
+.. list-table:: Record-key modes
+   :header-rows: 1
+   :widths: 15 45 40
+
+   * - Mode
+     - Generated key
+     - Required target CQL type
+   * - ``string``
+     - Original stored string key
+     - ``text`` or ``varchar``
+   * - ``integer``
+     - Original stored integer key
+     - ``bigint``
+   * - ``binary``
+     - Original stored binary key
+     - ``blob``
+   * - ``digest``
+     - Lowercase 40-character hex digest
+     - ``text`` or ``varchar``
+
+Stored-key modes require records written with ``sendKey=true``. This is an
+Aerospike writer setting, not a migration read option. Missing or mismatched
+stored keys skip the record in both invalid-record modes, without coercion or
+digest fallback. Digest mode supports mixed key types and records without stored
+keys; it emits the digest for every record instead of the original key.
+
+The generated key column defaults to ``aero_key``. ``keyColumn``, ``ttlColumn``,
+and ``generationColumn`` customize generated names to avoid collisions with bins.
+Only enabled generated columns reserve their names. Top-level ``renames`` can
+map emitted columns to destination names.
+
+**Target schema and invalid records**
+
+Every emitted column must exist in the target table. The generated record key
+must belong to its primary key with the exact CQL type listed above. All other
+target primary-key columns must also be supplied and non-null. When writing
+static columns, the generated key must belong to the partition key so distinct
+records cannot overwrite shared static values.
+
+Native lists require CQL lists to preserve order and duplicates; maps require
+compatible CQL maps. Nested CQL collections must be frozen. Null collection
+members, converted map-key collisions, and empty non-frozen target collections
+are invalid field values. Use frozen collections when empty collections must be
+preserved. Incompatible source/target schema mappings fail the job.
+
+``invalidRecordHandling`` controls source conversion and per-record destination
+validation, except for list-budget overflow described below:
+
+- ``skip`` (default) omits the entire record when a declared value is invalid.
+- ``"null"`` retains valid fields and replaces each invalid top-level field with
+  null where the destination permits it. Quote ``"null"`` in YAML; unquoted null
+  is not a valid policy. A bad collection member invalidates the whole field.
+
+Numeric overflow, rounding, and truncation are invalid values, including at the
+target CQL boundary. Double-to-decimal conversion must preserve the source's
+exact mathematical value: 0.1 is rejected, while 0.5 is valid. Missing or invalid
+record keys and invalid or null target primary-key values skip the whole record
+in either mode. Configuration, connection, exhausted scan retries, and write
+errors remain fatal. Null writes follow the destination's existing settings;
+when nulls are ignored, an older destination cell may remain unchanged.
+
+``listOverflowHandling`` independently selects ``skip`` (default), ``nullify``,
+or ``empty`` when retained top-level non-frozen lists exceed the shared budget
+of 131,072 outer elements in one row INSERT. Frozen lists and nested frozen
+contents do not add to this count. After ordinary validation, ``skip`` omits the
+record; ``nullify`` replaces every contributing list with null; ``empty`` binds
+every contributing list as empty. Both replacement modes preserve other surviving
+fields and leave originally null or already nulled fields null. The budget resets
+for each row. Source empty lists still follow ordinary validation. Empty bindings
+clear those destination columns under normal write semantics, even when nulls
+are ignored; non-frozen CQL collections do not retain a distinct empty value.
+Null bindings can leave older values when null writes are ignored.
+
+**Metadata and restarts**
+
+``preserveTTL`` and ``preserveGeneration`` default to false. When enabled, they
+add ``aero_ttl`` and ``aero_generation`` columns, respectively, which require
+compatible target columns (normally CQL ``int``). TTL is remaining seconds at
+read time, with -1 for no expiration; generation is the record's version counter.
+These are ordinary values: they do not apply per-record target write TTLs or
+preserve write timestamps or conflict resolution.
+
+Aerospike scans have at-least-once semantics: retries can replay emitted records.
+Durable resume is not supported. Omit ``savepoints``; configured savepoints are
+ignored for this source. A failed job can leave written rows in the destination,
+and a restart scans from the beginning without rolling them back. Use a target
+that tolerates repeated writes.
+
+**Authentication and TLS**
+
+Set ``AEROSPIKE_USERNAME`` and ``AEROSPIKE_PASSWORD`` as a nonempty pair on the
+driver and every executor to use environment credentials. They take precedence
+over ``source.credentials``. An empty value or a partial pair fails before
+connection. Configured credentials are used only when both environment variables
+are absent. When the driver selects environment credentials, configured
+credentials are not broadcast; every executor must supply its own nonempty pair.
+When both variables are absent on the driver, configured credentials are sent to
+executors in a Spark broadcast.
+
+TLS is enabled only by ``source.tlsName``. This verification name applies to every
+seed and overrides TLS names in seed strings. Inline seed TLS names alone do not
+enable TLS: a seed with an inline TLS name and no top-level ``source.tlsName``
+fails configuration validation before connecting. Set ``source.tlsName`` to enable
+TLS. Per-host TLS activation and distinct seed verification names are not supported.
+
+TLS uses the JVM default trust store. Configure a custom trust store on both the
+driver and executors with ``-Djavax.net.ssl.trustStore``.
 
 ------
 Target
