@@ -62,3 +62,23 @@ If ``savepoints.target.jobId`` is omitted, the migrator derives a stable id from
 
 .. warning::
    Target-database savepoints store redacted YAML. Resume restores only progress and keeps the launch credentials and other settings. Missing or failed lookups warn and continue; they can cause completed work to be repeated.
+
+Metadata consistency and availability
+-------------------------------------
+
+Target-table savepoint writes, resume reads, and coordinate seed reads use
+``LOCAL_QUORUM``, independently of the migration target's bulk-data consistency.
+Successful writes and subsequent reads in the same datacenter use intersecting
+local majorities, improving visibility of newly acknowledged savepoints. This
+requires a majority of the metadata table's replicas in that datacenter to be
+available and can add latency compared with a single-replica operation.
+
+A failed resume lookup still warns and continues with the launch configuration.
+Coordinate seeding during savepoint-manager startup must succeed, so an unavailable
+local majority can stop startup. A failed final savepoint write can fail the
+migration even after data was written. There is no automatic consistency downgrade.
+
+This policy does not strengthen older writes made with weaker consistency, guarantee
+recovery in another datacenter, or coordinate multiple simultaneous writers for the
+same job. It applies to metadata INSERTs and reads, not to schema creation or bulk-data
+writes.

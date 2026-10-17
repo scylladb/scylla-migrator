@@ -1,6 +1,7 @@
 package com.scylladb.migrator
 
 import com.datastax.spark.connector.cql.CassandraConnector
+import com.datastax.oss.driver.api.core.DefaultConsistencyLevel.LOCAL_QUORUM
 import com.scylladb.migrator.config.{
   MigratorConfig,
   SavepointTarget,
@@ -313,7 +314,7 @@ private[migrator] class ScyllaTargetSavepointStore(
           s"SELECT epoch_millis, sequence, config_sha256 FROM ${tableName} WHERE job_id = ? ORDER BY epoch_millis DESC, sequence DESC"
         )
       val rows = session
-        .execute(statement.bind(jobId))
+        .execute(statement.bind(jobId).setConsistencyLevel(LOCAL_QUORUM))
         .iterator()
         .asScala
         .map(row =>
@@ -343,16 +344,18 @@ private[migrator] class ScyllaTargetSavepointStore(
              |) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""".stripMargin
         )
       session.execute(
-        statement.bind(
-          jobId,
-          java.lang.Long.valueOf(record.coordinates.epochMillis),
-          java.lang.Long.valueOf(record.coordinates.sequence),
-          Integer.valueOf(schemaVersion),
-          record.reason,
-          BuildInfo.version,
-          configSha256,
-          record.yaml
-        )
+        statement
+          .bind(
+            jobId,
+            java.lang.Long.valueOf(record.coordinates.epochMillis),
+            java.lang.Long.valueOf(record.coordinates.sequence),
+            Integer.valueOf(schemaVersion),
+            record.reason,
+            BuildInfo.version,
+            configSha256,
+            record.yaml
+          )
+          .setConsistencyLevel(LOCAL_QUORUM)
       )
       s"${tableName} job_id=${jobId} epoch_millis=${record.coordinates.epochMillis} sequence=${record.coordinates.sequence}"
     }
@@ -364,7 +367,7 @@ private[migrator] class ScyllaTargetSavepointStore(
           s"SELECT epoch_millis, sequence, config_sha256, config_yaml FROM ${tableName} WHERE job_id = ? ORDER BY epoch_millis DESC, sequence DESC"
         )
       val rows = session
-        .execute(statement.bind(jobId))
+        .execute(statement.bind(jobId).setConsistencyLevel(LOCAL_QUORUM))
         .iterator()
         .asScala
         .map(row =>

@@ -9,7 +9,100 @@ import com.scylladb.migrator.config.{
   TargetSettings
 }
 
+import com.datastax.oss.driver.api.core.{ ConsistencyLevel, CqlSession, DefaultConsistencyLevel }
+import com.datastax.oss.driver.api.core.cql.{ BoundStatement, PreparedStatement, ResultSet, Row }
+import com.datastax.spark.connector.cql.CassandraConnector
+import org.apache.spark.SparkConf
+import java.lang.reflect.{ InvocationHandler, Method, Proxy }
+
 class SavepointStoreTest extends munit.FunSuite {
+
+  Seq(
+    ("ks", "savepoints", "ks.savepoints"),
+    ("MyKs", "MySavepoints", "myks.mysavepoints"),
+    ("my-keyspace", "my\"table", "\"my-keyspace\".\"my\"\"table\""),
+    ("\"MyKs\"", "\"MySavepoints\"", "\"MyKs\".\"MySavepoints\"")
+  ).foreach { case (keyspace, table, expectedReference) =>
+    test(
+      s"metadata queries use ${expectedReference} and LOCAL_QUORUM independently of bulk consistency"
+    ) {
+      val captured = scala.collection.mutable.ArrayBuffer.empty[(String, ConsistencyLevel)]
+      def proxy[A](iface: Class[A])(handler: (Method, Array[AnyRef]) => AnyRef): A =
+        Proxy
+          .newProxyInstance(
+            iface.getClassLoader,
+            Array(iface),
+            new InvocationHandler {
+              override def invoke(instance: Any, method: Method, args: Array[AnyRef]): AnyRef =
+                handler(method, Option(args).getOrElse(Array.empty[AnyRef]))
+            }
+          )
+          .asInstanceOf[A]
+      def prepared(query: String): PreparedStatement =
+        proxy(classOf[PreparedStatement]) { (method, _) =>
+          method.getName match {
+            case "bind"     => bound(query, null)
+            case "getQuery" => query
+            case name       => fail(s"Unexpected prepared statement method: ${name}")
+          }
+        }
+      def bound(query: String, consistency: ConsistencyLevel): BoundStatement =
+        proxy(classOf[BoundStatement]) { (method, args) =>
+          method.getName match {
+            // Driver statements are immutable: the executed object must be the returned value.
+            case "setConsistencyLevel"  => bound(query, args(0).asInstanceOf[ConsistencyLevel])
+            case "getConsistencyLevel"  => consistency
+            case "getPreparedStatement" => prepared(query)
+            case name                   => fail(s"Unexpected bound statement method: ${name}")
+          }
+        }
+      val emptyResult = proxy(classOf[ResultSet]) { (method, _) =>
+        method.getName match {
+          case "iterator" => java.util.Collections.emptyIterator[Row]()
+          case name       => fail(s"Unexpected result set method: ${name}")
+        }
+      }
+      val session = proxy(classOf[CqlSession]) { (method, args) =>
+        method.getName match {
+          case "prepare" => prepared(args(0).asInstanceOf[String])
+          case "execute" =>
+            val statement = args(0).asInstanceOf[BoundStatement]
+            captured += statement.getPreparedStatement.getQuery -> statement.getConsistencyLevel
+            emptyResult
+          case name => fail(s"Unexpected session method: ${name}")
+        }
+      }
+      val target = tableConfig(Set.empty).target
+        .asInstanceOf[TargetSettings.Scylla]
+        .copy(consistencyLevel = "ONE")
+      val connector =
+        new CassandraConnector(Connectors.buildTargetConf(new SparkConf(false), target)) {
+          override def withSessionDo[T](action: CqlSession => T): T = action(session)
+        }
+      val store = new ScyllaTargetSavepointStore(connector, keyspace, table, "job", "identity", 1)
+      store.save(SavepointRecord(SavepointCoordinates(1000L, 1L), "test", "payload"))
+      assertEquals(store.seedState(), None)
+      intercept[IllegalStateException](
+        store.latestConfig()
+      ) // Empty read still executes the statement.
+      assertEquals(captured.size, 3)
+      assert(captured(0)._1.startsWith(s"INSERT INTO ${expectedReference} ("))
+      assert(
+        captured(1)._1.startsWith(
+          s"SELECT epoch_millis, sequence, config_sha256 FROM ${expectedReference} WHERE"
+        )
+      )
+      assert(
+        captured(2)._1.startsWith(
+          s"SELECT epoch_millis, sequence, config_sha256, config_yaml FROM ${expectedReference} WHERE"
+        )
+      )
+      captured.foreach { case (_, consistency) =>
+        assertEquals(consistency, DefaultConsistencyLevel.LOCAL_QUORUM: ConsistencyLevel)
+      }
+    }
+
+  }
 
   test("target store newestValidConfig returns newest valid savepoint") {
     val older = tableConfig(skipFiles = Set("older")).render

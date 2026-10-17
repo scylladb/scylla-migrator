@@ -573,6 +573,8 @@ case of ``target.keyspace`` as used by the data connector.
 
 The ``target-table`` backend supports migration ``target.type: scylla`` and its
 ``cassandra`` alias.
+Metadata writes, resume reads, and seed reads use ``LOCAL_QUORUM`` independently of bulk-data
+consistency. See :doc:`resume-interrupted-migration` for availability costs and limitations.
 The migrator creates the metadata table automatically, but it does not create the keyspace. Each
 savepoint is stored as an append-only version in this table:
 
