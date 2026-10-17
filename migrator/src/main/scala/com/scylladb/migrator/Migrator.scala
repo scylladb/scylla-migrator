@@ -13,13 +13,13 @@ object Migrator {
 
   def main(args: Array[String]): Unit = {
     val sparkConf = new SparkConf()
+    config.SparkTaskRetries.applyDefault(sparkConf)
     SparkSecretRedaction.ensureMigratorRedactionRegex(sparkConf)
 
     implicit val spark: SparkSession = SparkSession
       .builder()
       .config(sparkConf)
       .appName("scylla-migrator")
-      .config("spark.task.maxFailures", "1024")
       .config("spark.stage.maxConsecutiveAttempts", "60")
       .config("spark.streaming.stopGracefullyOnShutdown", "true")
       .getOrCreate()
@@ -83,6 +83,10 @@ object Migrator {
       case (mysqlSource: SourceSettings.MySQL, scyllaTarget: TargetSettings.Scylla) =>
         log.info("Starting MySQL to ScyllaDB migration")
         val sourceDF = readers.MySQL.readDataframe(spark, mysqlSource)
+        ScyllaMigrator.migrate(config, scyllaTarget, sourceDF)
+      case (aerospikeSource: SourceSettings.Aerospike, scyllaTarget: TargetSettings.Scylla) =>
+        log.info("Starting Aerospike to ScyllaDB migration")
+        val sourceDF = readers.Aerospike.readDataframe(spark, aerospikeSource)
         ScyllaMigrator.migrate(config, scyllaTarget, sourceDF)
       case (parquetSource: SourceSettings.Parquet, scyllaTarget: TargetSettings.Scylla) =>
         readers.Parquet.migrateToScylla(config, parquetSource, scyllaTarget)

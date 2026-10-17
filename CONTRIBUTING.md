@@ -6,6 +6,8 @@ Tests are implemented in the `tests` sbt submodule. They simulate the submission
 
 ### Prerequisites
 
+- **JDK 17+** is required (the Aerospike reader uses `java.util.HexFormat`, a JDK 17 API).
+
 Build the migrator fat-jar (re-build every time you change the implementation):
 
 ~~~ sh
@@ -58,6 +60,11 @@ Tests are organized into categories using JUnit `@Category` annotations. The Mak
 
    # AWS tests (requires `aws configure` first)
    AWS_REGION=us-east-1 make test-integration-aws
+
+   # Aerospike integration tests only
+   make start-services-aerospike
+   make wait-for-services-aerospike
+   make test-integration-aerospike
    ~~~
 
 3. Stop the Docker containers:
@@ -82,6 +89,7 @@ E2E benchmarks exercise every supported migration path end-to-end: seed data int
 | `test-benchmark-e2e-cassandra-parquet` | Cassandra | Parquet files |
 | `test-benchmark-e2e-dynamodb-s3export` | DynamoDB | S3 Export format |
 | `test-benchmark-e2e-s3export-alternator` | S3 Export | Alternator |
+| `test-benchmark-e2e-aerospike-scylla` | Aerospike | ScyllaDB |
 
 **Dependencies:** `parquet-scylla` requires `scylla-parquet` to run first (produces the Parquet files), and `s3export-alternator` requires `dynamodb-s3export`. The Makefile encodes these as target dependencies.
 
