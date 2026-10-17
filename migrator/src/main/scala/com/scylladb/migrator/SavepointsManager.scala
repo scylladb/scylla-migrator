@@ -5,8 +5,6 @@ import org.apache.hadoop.conf.Configuration
 import org.apache.logging.log4j.LogManager
 import sun.misc.{ Signal, SignalHandler }
 
-import java.nio.charset.StandardCharsets
-import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
@@ -32,15 +30,12 @@ import scala.util.control.NonFatal
   * `updateConfigWithMigrationState`.
   *
   * Concurrency and ordering guarantees:
-  *   - `dumpMigrationState` is serialized so that the accumulator snapshot and the storage write
-  *     happen atomically with respect to other dumps. This prevents a scheduled dump from
-  *     overwriting a later terminal dump with a stale snapshot.
-  *   - Savepoint filenames embed a zero-padded millisecond timestamp and a zero-padded per-instance
-  *     monotonic counter (`savepoint_<epochMillis>_<counter>.yaml`). The timestamp is clamped to a
-  *     monotonic non-decreasing value within the manager instance, so a backward wall-clock step
-  *     cannot make a later savepoint sort earlier than an older one. Zero-padding keeps
-  *     lexicographical order consistent with chronological order, so `ls | tail -n 1` also returns
-  *     the newest savepoint.
+  *   - `dumpMigrationState` is serialized so that the accumulator snapshot and the store write
+  *     happen atomically with respect to other dumps. This prevents a scheduled dump from writing
+  *     after a later terminal dump with a stale snapshot.
+  *   - Savepoint versions order monotonically by (millisecond timestamp, sequence). The timestamp
+  *     never decreases; when the sequence reaches its limit, the timestamp advances and the
+  *     sequence resets to 1. Backward wall-clock steps cannot reverse savepoint ordering.
   *   - `close()` awaits the scheduler so no scheduled tick races the final dump issued by the
   *     caller after `close()`. The wait is bounded by `MaxCloseAwaitMillis` so a stuck filesystem
   *     cannot hang shutdown indefinitely.
@@ -52,18 +47,30 @@ import scala.util.control.NonFatal
   */
 abstract class SavepointsManager(
   migratorConfig: MigratorConfig,
-  hadoopConfiguration: Option[Configuration] = None,
-  redactionRegex: Option[String] = None
+  maybeSavepointStore: Option[SavepointStore] = None
 ) extends AutoCloseable {
+
+  def this(
+    migratorConfig: MigratorConfig,
+    hadoopConfiguration: Option[Configuration],
+    redactionRegex: Option[String]
+  ) =
+    this(
+      migratorConfig,
+      Some(
+        SavepointStore.forConfig(
+          migratorConfig,
+          sparkContext        = None,
+          redactionRegex      = redactionRegex,
+          hadoopConfiguration = hadoopConfiguration
+        )
+      )
+    )
 
   import SavepointsManager._
 
   val log = LogManager.getLogger(this.getClass.getName)
-  private val savepointsPath = migratorConfig.savepoints.storagePath
-  private val pathIO = PathIO.forPath(
-    savepointsPath,
-    Some(SavepointStorage.hadoopConfiguration(migratorConfig, hadoopConfiguration, redactionRegex))
-  )
+  private val savepointStore = maybeSavepointStore.getOrElse(SavepointStore.file(migratorConfig))
   private val scheduler = new ScheduledThreadPoolExecutor(1)
   private var oldUsr2Handler: SignalHandler = _
   private var oldTermHandler: SignalHandler = _
@@ -77,8 +84,8 @@ abstract class SavepointsManager(
   // signal before SIGKILL. The driver and scheduler paths still acquire the lock unconditionally
   // because they have no deadline pressure.
   private val dumpLock = new ReentrantLock()
-  // Per-instance monotonic counter: disambiguates dumps that share the same millisecond timestamp
-  // and makes the filename order consistent with the logical order of dumps.
+  // Disambiguates dumps within a millisecond; rolls back to 1 only when the timestamp advances.
+  // The timestamp/sequence pair preserves the logical order of dumps.
   private val savepointSequence = new AtomicLong(0L)
   // First signal writes a savepoint before exit; the second skips dumping and exits immediately.
   private val signalDumpInProgress = new AtomicBoolean(false)
@@ -86,110 +93,62 @@ abstract class SavepointsManager(
   // earlier than an older one.
   private var lastSavepointMillis = 0L
 
-  createSavepointsDirectory()
+  savepointStore.prepare()
   seedStateFromExistingSavepoints()
   addUSR2Handler()
   startSavepointSchedule()
 
-  private def createSavepointsDirectory(): Unit = {
-    val savepointsDirectory = savepointsPath
-    if (!pathIO.exists(savepointsDirectory)) {
-      log.debug(
-        s"Directory ${pathIO.normalize(savepointsDirectory)} does not exist. Creating it..."
-      )
-      pathIO.createDirectories(savepointsDirectory)
-    }
-  }
-
-  /** Scan the savepoints directory once at startup and seed `lastSavepointMillis` /
-    * `savepointSequence` so that filenames written by this instance are strictly greater than any
-    * filename already on disk.
+  /** Scan the savepoint store once at startup and seed `lastSavepointMillis` / `savepointSequence`
+    * so that versions written by this instance are strictly greater than any savepoint version
+    * already in the configured store.
     *
     * Without this seed, a JVM restart on a host whose wall clock has drifted backwards (NTP
-    * step-back, VM migration, docker host time skew) would make new savepoints sort *earlier* than
-    * savepoints written by the previous run still present in the same directory. Resume would then
+    * step-back, VM migration, docker host time skew) could make new savepoints sort *earlier* than
+    * savepoints written by the previous run still present in the same store. Resume would then
     * silently pick a stale savepoint and lose progress. Seeding closes that window by ensuring the
-    * `(millis, seq)` key monotonically increases across process boundaries as long as the directory
-    * is not wiped.
+    * `(millis, seq)` key monotonically increases across process boundaries as long as previous
+    * savepoints are still present.
     */
-  private def seedStateFromExistingSavepoints(): Unit = {
-    val savepointsDirectory = savepointsPath
-    if (!pathIO.exists(savepointsDirectory)) return
-
-    var maxMillis = 0L
-    var maxSeq = 0L
-    try
-      pathIO.listFileNames(savepointsDirectory).foreach { name =>
-        name match {
-          case SavepointsManager.SavepointName(head, tailOrNull) =>
-            val millis =
-              try
-                if (tailOrNull == null)
-                  // Legacy filenames carry epoch seconds; scale to millis but reject values
-                  // that would silently overflow `Long`. `multiplyExact` throws
-                  // `ArithmeticException` instead of wrapping around to a negative number,
-                  // so a hostile filename like `savepoint_99999999999999999.yaml` cannot
-                  // poison the seeded `lastSavepointMillis` with a bogus huge value.
-                  java.lang.Math.multiplyExact(java.lang.Long.parseLong(head), 1000L)
-                else java.lang.Long.parseLong(head)
-              catch {
-                case _: NumberFormatException | _: ArithmeticException => 0L
-              }
-            val seq =
-              if (tailOrNull == null) 0L
-              else
-                try java.lang.Long.parseLong(tailOrNull)
-                catch { case _: NumberFormatException => 0L }
-            // Reject hostile near-`Long.MAX_VALUE` values; a single planted file must not be
-            // allowed to push `savepointSequence` to within one `incrementAndGet` of overflow
-            // (which would emit a negative counter in the next filename and permanently break
-            // the `\d{10}` regex on resume).
-            if (millis >= MaxReasonableSeedValue || seq >= MaxReasonableSeedValue) {
-              log.warn(
-                s"Ignoring hostile/corrupted savepoint filename ${name} during seed " +
-                  s"(millis=${millis}, seq=${seq} exceeds ${MaxReasonableSeedValue})."
-              )
-            } else if (millis > maxMillis || (millis == maxMillis && seq > maxSeq)) {
-              maxMillis = millis
-              maxSeq    = seq
-            }
-          case _ => ()
-        }
-      }
-    catch {
-      case NonFatal(e) =>
-        log.warn(
-          s"Could not scan ${pathIO.normalize(savepointsDirectory)} to seed savepoint state; " +
-            s"falling back to clock-only ordering: ${e.getMessage}"
+  private def seedStateFromExistingSavepoints(): Unit =
+    savepointStore.seedState().foreach {
+      case coordinates if isReasonableSeed(coordinates) =>
+        lastSavepointMillis = coordinates.epochMillis
+        savepointSequence.set(coordinates.sequence)
+        log.info(
+          s"Seeded savepoint state from existing savepoints: " +
+            s"lastSavepointMillis=${coordinates.epochMillis}, sequence=${coordinates.sequence}"
         )
-        return
+      case coordinates =>
+        log.warn(
+          s"Ignoring hostile/corrupted savepoint seed from ${savepointStore.getClass.getSimpleName}: " +
+            s"epoch_millis=${coordinates.epochMillis}, sequence=${coordinates.sequence} outside " +
+            s"the accepted range (0 < epoch_millis < ${MaxReasonableSeedValue}, " +
+            s"0 <= sequence <= ${MaxSavepointSequenceValue}, and max-sequence seeds must " +
+            s"leave room for millisecond rollover)."
+        )
     }
 
-    if (maxMillis > 0L) {
-      lastSavepointMillis = maxMillis
-      savepointSequence.set(maxSeq)
-      log.info(
-        s"Seeded savepoint state from existing files: " +
-          s"lastSavepointMillis=${maxMillis}, nextSequence=${maxSeq + 1}"
-      )
-    }
-  }
+  // A max-sequence seed makes the next dump advance epoch_millis by one. That rollover must
+  // still stay below MaxReasonableSeedValue, because resume lookup rejects the boundary value.
+  private def isReasonableSeed(coordinates: SavepointCoordinates): Boolean =
+    isResumeSafeCoordinate(coordinates.epochMillis, coordinates.sequence)
 
-  private def savepointFilename(path: String): String = {
+  private def nextCoordinates(): SavepointCoordinates = {
     val millis = math.max(lastSavepointMillis, System.currentTimeMillis())
-    lastSavepointMillis = millis
-    val seq = savepointSequence.incrementAndGet()
-    // Zero-padded so that lexicographical order matches chronological order (handy for `ls`).
-    // `Locale.ROOT` pins the numeric formatter to ASCII digits; the JVM default locale on some
-    // hosts (e.g. `ar-SA`, `th-TH`) would otherwise emit non-ASCII numerals that break the
-    // filename regex and chronological sort used for resume.
-    String.format(
-      Locale.ROOT,
-      "%s/savepoint_%013d_%010d.yaml",
-      path,
-      java.lang.Long.valueOf(millis),
-      java.lang.Long.valueOf(seq)
-    )
+    val seq = savepointSequence.get() + 1L
+    val next =
+      if (seq <= MaxSavepointSequenceValue)
+        SavepointCoordinates(millis, seq)
+      else
+        SavepointCoordinates(java.lang.Math.addExact(millis, 1L), 1L)
+    if (!isResumeSafeCoordinate(next.epochMillis, next.sequence))
+      throw new IllegalStateException(
+        s"Savepoint coordinate space exhausted after epoch_millis=${lastSavepointMillis}, " +
+          s"sequence=${savepointSequence.get()}; refusing to write an unresumable savepoint."
+      )
+    lastSavepointMillis = next.epochMillis
+    savepointSequence.set(next.sequence)
+    next
   }
 
   private def addUSR2Handler(): Unit = {
@@ -268,15 +227,12 @@ abstract class SavepointsManager(
     )
   }
 
-  /** Dump the current state of the migration into a configuration file that can be used to resume
-    * the migration.
+  /** Dump the current state of the migration into a configuration payload that can be used to
+    * resume the migration.
     *
-    * Snapshotting the current state and writing it to storage are performed under a lock so that
-    * concurrent callers (scheduler, driver, signal handler) cannot interleave and overwrite each
-    * other with stale snapshots. The file is first written to a temporary path and then renamed
-    * into place. Local filesystems use atomic rename when available; object stores depend on the
-    * Hadoop connector's rename semantics. The temp file is deleted if the rename does not succeed,
-    * so failures do not leak sibling `*.yaml.tmp` files.
+    * Snapshotting the current state and writing it to the configured store are performed under a
+    * lock so that concurrent callers (scheduler, driver, signal handler) cannot interleave with
+    * stale snapshots.
     *
     * @param reason
     *   Human-readable, informal, event that caused the dump.
@@ -320,21 +276,19 @@ abstract class SavepointsManager(
   }
 
   private def doDump(reason: String): Unit = {
-    val finalPath =
-      savepointFilename(savepointsPath)
-
+    val coordinates = nextCoordinates()
     val modifiedConfig = updateConfigWithMigrationState()
-    // Persist a redacted copy: savepoint files live in long-lived object storage (GCS/S3) or on
-    // disk and must not leak source/target credentials in the clear. The skip-state fields
-    // (skipTokenRanges/skipSegments/skipParquetFiles) are not secrets and are preserved, so the
-    // startup auto-resume resolver can still recover progress; the live config supplies the real
-    // credentials on resume. See `SavepointsResume`.
-    val payload = modifiedConfig.renderRedacted.getBytes(StandardCharsets.UTF_8)
-
-    pathIO.writeUtf8Atomically(finalPath, payload)
+    // Resume merges progress into the live configuration; persisted credentials stay redacted.
+    val location = savepointStore.save(
+      SavepointRecord(
+        coordinates = coordinates,
+        reason      = reason,
+        yaml        = SavepointStore.renderSavepoint(modifiedConfig)
+      )
+    )
 
     log.info(
-      s"Created a savepoint config at ${pathIO.normalize(finalPath)} due to ${reason}. ${describeMigrationState()}"
+      s"Created a savepoint config at ${location} due to ${reason}. ${describeMigrationState()}"
     )
   }
 
@@ -397,32 +351,43 @@ object SavepointsManager {
   // after the bounded wait, even if a scheduled dump is wedged on slow/unhealthy storage.
   private[migrator] val SignalDumpLockTimeoutMillis: Long = 5_000L
 
-  // Sanity ceiling for values read from filenames during seed. Any field at or above this
-  // threshold is treated as hostile / corrupted: ignoring it keeps a single planted file from
-  // poisoning `lastSavepointMillis` / `savepointSequence` to within one increment of
-  // `Long.MAX_VALUE`, which would wrap the next counter to `Long.MIN_VALUE` and break the
-  // `\d{10}` filename regex. Chosen as half of `Long.MAX_VALUE` (~year 146,135,510 AD for
-  // millis) so legitimate values have effectively infinite headroom.
+  // Sanity ceiling for epoch-millis values read from savepoint stores during seed. Values at or
+  // above this threshold are treated as hostile / corrupted. Chosen as half of `Long.MAX_VALUE`
+  // (~year 146,135,510 AD for millis) so legitimate values have effectively infinite headroom.
   private[migrator] val MaxReasonableSeedValue: Long = java.lang.Long.MAX_VALUE / 2L
+
+  // Highest counter value that still fits the documented ten-digit savepoint filename component.
+  // If a restored seed is already at this value, the next dump advances the millisecond component
+  // and starts the counter at 1 so filename ordering remains stable.
+  private[migrator] val MaxSavepointSequenceValue: Long = 9_999_999_999L
+
+  private[migrator] def isResumeSafeCoordinate(epochMillis: Long, sequence: Long): Boolean =
+    epochMillis > 0L &&
+      epochMillis < MaxReasonableSeedValue &&
+      sequence >= 0L &&
+      sequence <= MaxSavepointSequenceValue &&
+      (
+        sequence < MaxSavepointSequenceValue ||
+          epochMillis < MaxReasonableSeedValue - 1L
+      )
 
   // Filename grammar for savepoints. Two groups:
   //   - new format: `savepoint_<epochMillis>_<counter>.yaml` (tail is the counter)
   //   - legacy:     `savepoint_<epochSeconds>.yaml`          (tail is null)
   // This regex is the single source of truth for parsing filenames produced by this manager.
-  // Test helpers and the startup seed both reuse it to stay in sync with what `savepointFilename`
-  // writes.
+  // The file writer, startup resolver and seed parser share this filename convention.
   private[migrator] val SavepointName: scala.util.matching.Regex =
     """^savepoint_(\d+)(?:_(\d+))?\.yaml$""".r
 
   /** Parse a savepoint filename into its chronological sort key `(millis, seq)`.
     *
     * Returns `None` for names that do not match the savepoint grammar, for numeric fields that
-    * overflow `Long`, and for hostile near-`Long.MAX_VALUE` values (see `MaxReasonableSeedValue`).
-    * Legacy single-component filenames (`savepoint_<epochSeconds>.yaml`) are scaled to millis with
-    * a `0` sequence so they order before the two-component files written within the same second.
+    * overflow `Long`, and for coordinates outside the resume-safe bounds (including counter
+    * rollover limits). Legacy single-component filenames (`savepoint_<epochSeconds>.yaml`) are
+    * scaled to millis with a `0` sequence so they order before the two-component files written
+    * within the same second.
     *
-    * This mirrors the parsing in `seedStateFromExistingSavepoints` so that the startup auto-resume
-    * resolver picks exactly the same "newest" file that seeding accounts for.
+    * Both file seeding and startup auto-resume use this parser and its coordinate bounds.
     */
   private[migrator] def savepointSortKey(name: String): Option[(Long, Long)] =
     name match {
@@ -445,19 +410,19 @@ object SavepointsManager {
         for {
           millis <- millisOpt
           seq    <- seqOpt
-          if millis < MaxReasonableSeedValue && seq < MaxReasonableSeedValue
+          if isResumeSafeCoordinate(millis, seq)
         } yield (millis, seq)
       case _ => None
     }
 
   /** @return
     *   the newest savepoint filename from `names` by `(millis, seq)` order, or `None` if none of
-    *   the names match the savepoint grammar.
+    *   the names have resume-safe filename coordinates.
     */
   private[migrator] def latestSavepointName(names: Iterable[String]): Option[String] =
     savepointNamesNewestFirst(names).headOption
 
-  /** All savepoint names from `names` that match the grammar, ordered newest-first by
+  /** All savepoint names from `names` with resume-safe coordinates, ordered newest-first by
     * `(millis, seq)`.
     *
     * Single source of truth for "newest savepoint" selection: the startup auto-resume resolver

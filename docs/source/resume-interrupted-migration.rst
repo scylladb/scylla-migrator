@@ -2,10 +2,7 @@
 Resume an Interrupted Migration Where it Left Off
 =================================================
 
-.. note:: Savepoints (and automatic resume) are available for sources that track migration
-   progress: Apache Cassandra, DynamoDB (including Scylla Alternator), and Parquet. They are not
-   available for MySQL sources or the DynamoDB S3-export source, which must be restarted from
-   scratch if interrupted.
+.. note:: Savepoints support Apache Cassandra/ScyllaDB CQL, DynamoDB/Alternator, and Parquet with file-level tracking. MySQL and DynamoDB S3-export sources are not resumable.
 
 If, for some reason, the migration is interrupted (e.g., because of a networking issue, or if you need to manually stop it for some reason), the migrator is able to resume it from a “savepoint”.
 
@@ -26,6 +23,8 @@ You can control the savepoints location and the interval at which they are gener
 Savepoint file names
 ====================
 
+File-backed savepoints are the default. With this backend, savepoints are generated as files in the configured directory.
+
 During the migration, the savepoints are generated with file names like ``savepoint_<epochMillis>_<counter>.yaml``, where:
 
 * ``<epochMillis>`` is a 13-digit, zero-padded millisecond timestamp (monotonic within a migrator instance), and
@@ -35,3 +34,51 @@ Both components are zero-padded so that **lexicographical order matches chronolo
 
 .. note::
    Older versions of the migrator produced file names like ``savepoint_1234567890.yaml`` (a single Unix-epoch-seconds component). The migrator still reads those files, but any new savepoint written during a resumed migration follows the two-component format above.
+
+Target-Database Savepoints
+==========================
+
+When the migration uses a CQL target (``target.type: scylla`` or its ``cassandra`` alias), savepoints can be stored in the target database instead of on the Spark driver filesystem:
+
+.. code-block:: yaml
+
+  savepoints:
+    intervalSeconds: 300
+    autoResume: true
+    target:
+      type: target-table
+      # Optional. Default: target.keyspace.
+      keyspace: null
+      # Optional. Created automatically.
+      table: scylla_migrator_savepoints
+      # Optional stable job id override.
+      jobId: null
+
+An omitted ``savepoints.target.keyspace`` inherits the exact case of ``target.keyspace``. Explicit metadata keyspace and table names use CQL identifier rules: ``MyKs`` resolves to ``myks``, while the YAML value ``'"MyKs"'`` preserves case. See the :ref:`configuration reference <config-savepoints>` for a complete quoted-name example.
+
+The metadata keyspace must already exist. The migrator creates the metadata table automatically and appends one row per savepoint version. Re-running the original configuration automatically resumes from the newest valid matching table savepoint. Set ``savepoints.autoResume: false`` to disable lookup.
+
+If ``savepoints.target.jobId`` is omitted, the migrator derives a stable id from the redacted configuration identity, including source, target and renames, excluding ``skipTokenRanges``, ``skipSegments``, ``skipParquetFiles``, ``savepoints``, and ``validation``. Use the same original config to resume so the derived job id stays the same. An explicit ``savepoints.target.jobId`` selects the rows to inspect but does not bypass configuration identity checks: changes to identity settings such as source, target or renames prevent those rows from being resumed. During lookup, the migrator reads rows for that job from newest to oldest and skips corrupt or unparseable YAML rows with warnings.
+
+.. warning::
+   Target-database savepoints store redacted YAML. Resume restores only progress and keeps the launch credentials and other settings. Missing or failed lookups warn and continue; they can cause completed work to be repeated.
+
+Metadata consistency and availability
+-------------------------------------
+
+Target-table savepoint writes, resume reads, and coordinate seed reads use
+``LOCAL_QUORUM``, independently of the migration target's bulk-data consistency.
+Successful writes and subsequent reads in the same datacenter use intersecting
+local majorities, improving visibility of newly acknowledged savepoints. This
+requires a majority of the metadata table's replicas in that datacenter to be
+available and can add latency compared with a single-replica operation.
+
+A failed resume lookup still warns and continues with the launch configuration.
+Coordinate seeding during savepoint-manager startup must succeed, so an unavailable
+local majority can stop startup. A failed final savepoint write can fail the
+migration even after data was written. There is no automatic consistency downgrade.
+
+This policy does not strengthen older writes made with weaker consistency, guarantee
+recovery in another datacenter, or coordinate multiple simultaneous writers for the
+same job. It applies to metadata INSERTs and reads, not to schema creation or bulk-data
+writes.
