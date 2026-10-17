@@ -114,6 +114,9 @@ source:
   # Use frozen CQL collections to preserve empty collections; an empty non-frozen target
   # collection follows invalidRecordHandling. Nested CQL collections must be frozen.
   # List-to-set and incompatible source/target schema mappings are configuration errors.
+  # Spark task retries are separate from maxScanRetries. spark.task.maxFailures defaults
+  # to 1024; an explicit spark-submit --conf value is honored. A lower budget bounds
+  # retries after scan/write failures but also reduces tolerance of transient failures.
 
 target:
   type: scylla

@@ -13,13 +13,13 @@ object Migrator {
 
   def main(args: Array[String]): Unit = {
     val sparkConf = new SparkConf()
+    config.SparkTaskRetries.applyDefault(sparkConf)
     SparkSecretRedaction.ensureMigratorRedactionRegex(sparkConf)
 
     implicit val spark: SparkSession = SparkSession
       .builder()
       .config(sparkConf)
       .appName("scylla-migrator")
-      .config("spark.task.maxFailures", "1024")
       .config("spark.stage.maxConsecutiveAttempts", "60")
       .config("spark.streaming.stopGracefullyOnShutdown", "true")
       .getOrCreate()
