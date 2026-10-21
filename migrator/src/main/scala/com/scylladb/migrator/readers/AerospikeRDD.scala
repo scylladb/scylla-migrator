@@ -394,8 +394,10 @@ private[migrator] class AerospikeRDD(
               if (Aerospike.log.isDebugEnabled)
                 Aerospike.log.debug(s"Partition ${asPart.index}: scan cancelled")
             case e: Throwable =>
-              Aerospike.log.error(s"Partition ${asPart.index}: scan thread failed", e)
               scanError.set(e)
+              // Diagnostics must not hide the scan failure from the iterator or uncaught handler.
+              try Aerospike.log.error(s"Partition ${asPart.index}: scan thread failed", e)
+              catch { case _: Throwable => }
               e match {
                 case _: VirtualMachineError | _: ThreadDeath | _: LinkageError =>
                   // Fatal JVM error — re-throw so the uncaught exception handler can act.
