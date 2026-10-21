@@ -1,0 +1,47 @@
+source:
+  type: cassandra
+  host: scylla2026
+  port: 9042
+  localDC: datacenter1
+  credentials:
+    username: dummy
+    password: dummy
+  keyspace: test
+  table: collts_src
+  consistencyLevel: LOCAL_QUORUM
+  preserveTimestamps: true
+  preserveCollectionTimestamps: true
+  splitCount: 8
+  connections: 8
+  fetchSize: 1000
+
+# Both ends are ScyllaDB 2026.2, which reads per-element non-frozen collection WRITETIME()/TTL()
+# via the subscript form WRITETIME(col[key]). The migrator auto-detects this and uses the subscript
+# metadata read path (the Cassandra 5.0 collection-wide WRITETIME(col) list form is rejected by
+# ScyllaDB).
+target:
+  type: scylla
+  host: scylla2026
+  port: 9042
+  localDC: datacenter1
+  credentials:
+    username: dummy
+    password: dummy
+  keyspace: test
+  table: collts_dst
+  consistencyLevel: LOCAL_QUORUM
+  connections: 16
+  stripTrailingZerosForDecimals: false
+
+savepoints:
+  path: /app/savepoints
+  intervalSeconds: 300
+
+validation:
+  compareTimestamps: true
+  ttlToleranceMillis: 60000
+  writetimeToleranceMillis: 1000
+  failuresToFetch: 100
+  floatingPointTolerance: 0.001
+  timestampMsTolerance: 0
+  copyMissingRows: false

@@ -87,9 +87,48 @@ A source of type ``cassandra`` can be used together with a target of type ``cass
     # Options are: LOCAL_ONE, ONE, LOCAL_QUORUM, QUORUM.
     # We recommend using LOCAL_QUORUM. If using ONE or LOCAL_ONE, ensure the source system is fully repaired.
     consistencyLevel: LOCAL_QUORUM
-    # Preserve TTLs and WRITETIMEs of cells in the source database. Note that this
-    # option is *incompatible* when copying tables with collections (lists, maps, sets).
+    # Preserve TTLs and WRITETIMEs of cells in the source database. Frozen collections
+    # (frozen<list/map/set>) are stored as a single cell and ARE supported. By default this
+    # option is *incompatible* with non-frozen (multi-cell) collections (lists, maps, sets),
+    # whose elements each carry their own TTL/WRITETIME (see preserveCollectionTimestamps).
     preserveTimestamps: true
+    # Opt-in: also preserve the per-element TTL/WRITETIME of non-frozen (multi-cell) collection
+    # columns. Each element's original TTL/WRITETIME is re-applied via collection appends after the
+    # base row write. Requires a source that can read collection-element metadata: Cassandra 5.0+
+    # (WRITETIME(col)/TTL(col)) or ScyllaDB 2026.2+ (per-element subscript WRITETIME(col[key]),
+    # auto-detected). Supported for non-frozen sets and maps whose element/key type has a
+    # well-defined order (text/ascii/varchar and integer types); non-frozen lists and other
+    # key/element types remain unsupported.
+    # Because elements are restored with collection appends (col = col + ?), this only converges
+    # correctly when the target collection starts empty (a fresh migration into an empty/nonexistent
+    # target) and the source is not concurrently modified: appends never delete, so elements deleted
+    # on the source or pre-existing on the target are not reconciled. Very large non-frozen
+    # collections are expanded into up to one update per distinct element TTL/WRITETIME, which can
+    # be memory- and throughput-intensive. Has no effect unless preserveTimestamps is also true.
+    #
+    # Source-quiescence is REQUIRED. On the ScyllaDB 2026.2+ subscript path, element values and their
+    # metadata are read in two phases (a base scan then per-row point reads), so a concurrent write in
+    # between can: (a) delete an element -> it is dropped from the migrated row and logged; (b) add an
+    # element -> it is never queried and is silently absent (it is not in the base scan, so it is not
+    # counted in the dropped-element warning); (c) update a MAP value in place -> the older value can
+    # be paired with the newer writetime, which then permanently shadows the correct value on the
+    # target. Sets are immune to (c) because an element's value IS its identity. On the Cassandra 5.0+
+    # array path values and metadata come from one scan, so none of these apply. Stop writes to the
+    # source before migrating.
+    #
+    # TTL note: TTLs are read as remaining seconds and re-applied on write, so long-running migrations
+    # (and validation) see the clock advance between read and write/compare; use validation's
+    # ttlToleranceMillis to absorb this drift. A short-lived element can even expire on the source
+    # between the read and the append, in which case it is still written to the target with its
+    # remaining-TTL-at-read-time and briefly reappears there. Prefer migrating tables whose collection
+    # TTLs are comfortably longer than the expected job duration.
+    #
+    # Validation: per-element collection TTL/WRITETIME are compared only when the endpoints accept the
+    # collection-wide WRITETIME(col)/TTL(col) form (Cassandra 5.0+). Against ScyllaDB 2026.2+ (subscript
+    # only), the validator compares non-frozen collection columns by VALUE only and copyMissingRows for
+    # such tables is rejected (re-run the migration to converge instead).
+    # Defaults to false.
+    preserveCollectionTimestamps: false
     # Number of splits to use - this should be at minimum the amount of cores
     # available in the Spark cluster, and optimally more; higher splits will lead
     # to more fine-grained resumes. Aim for 8 * (Spark cores).

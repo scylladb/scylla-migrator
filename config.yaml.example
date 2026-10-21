@@ -30,9 +30,43 @@ source:
   # Connector driver default is LOCAL_ONE. Our recommendation is LOCAL_QUORUM.
   # If using ONE or LOCAL_ONE, ensure the source system is fully repaired.
   consistencyLevel: LOCAL_QUORUM
-  # Preserve TTLs and WRITETIMEs of cells in the source database. Note that this
-  # option is *incompatible* when copying tables with collections (lists, maps, sets).
+  # Preserve TTLs and WRITETIMEs of cells in the source database. Frozen collections
+  # (frozen<list/map/set>) are stored as a single cell and ARE supported. By default this
+  # option is *incompatible* with non-frozen (multi-cell) collections (lists, maps, sets),
+  # whose elements each carry their own TTL/WRITETIME (see preserveCollectionTimestamps).
   preserveTimestamps: true
+  # Opt-in: also preserve the per-element TTL/WRITETIME of non-frozen (multi-cell) collection
+  # columns. When enabled, each element's original TTL/WRITETIME is re-applied via collection
+  # appends after the base row write. Requires a source that can read collection-element metadata:
+  # Cassandra 5.0+ (via WRITETIME(col)/TTL(col)) or ScyllaDB 2026.2+ (via the per-element subscript
+  # form WRITETIME(col[key])/TTL(col[key]), auto-detected). Supported for non-frozen sets and maps whose element/key
+  # type has a well-defined order (text/ascii/varchar and integer types); non-frozen lists and
+  # other key/element types remain unsupported (freeze them, or leave this disabled).
+  # Because elements are restored with collection appends (col = col + ?), this only converges
+  # correctly when the target collection starts empty (a fresh migration into an empty/nonexistent
+  # target) and the source is not concurrently modified: appends never delete, so elements deleted
+  # on the source or pre-existing on the target are not reconciled. Very large non-frozen
+  # collections are expanded into up to one update per distinct element TTL/WRITETIME, which can be
+  # memory- and throughput-intensive. Has no effect unless preserveTimestamps is also true.
+  #
+  # Source-quiescence is REQUIRED. On the ScyllaDB 2026.2+ subscript path values and metadata are read
+  # in two phases (base scan + per-row point reads), so a concurrent write in between can: delete an
+  # element (dropped + logged), add an element (never queried, silently absent, not counted in the
+  # dropped-element warning), or update a MAP value in place (a stale value can be paired with the
+  # newer writetime and then permanently shadow the correct value on the target). Sets are immune to
+  # the last case since an element's value is its identity. The Cassandra 5.0+ array path reads values
+  # and metadata in one scan and is unaffected. Stop source writes before migrating.
+  #
+  # TTLs are read as remaining seconds and re-applied on write, so the clock advances between read and
+  # write/compare on long runs; use validation's ttlToleranceMillis to absorb this drift. A short-lived
+  # element can expire on the source between read and append and still be written to the target, where
+  # it briefly reappears; prefer collection TTLs comfortably longer than the job duration.
+  #
+  # Validation compares per-element collection TTL/WRITETIME only on the collection-wide form
+  # (Cassandra 5.0+). Against ScyllaDB 2026.2+ (subscript only) it compares non-frozen collection
+  # columns by VALUE only, and copyMissingRows for such tables is rejected (re-run the migration).
+  # Defaults to false.
+  preserveCollectionTimestamps: false
   # Number of splits to use - this should be at minimum the amount of cores
   # available in the Spark cluster, and optimally more; higher splits will lead
   # to more fine-grained resumes. Aim for 8 * (Spark cores).
