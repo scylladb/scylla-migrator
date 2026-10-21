@@ -73,7 +73,9 @@ source:
   # Optional - connection and socket timeouts in milliseconds
   # connectTimeoutMs: 10000
   # socketTimeoutMs: 10000  # default: 10000
-  # Optional - TLS name for secure connections. Setting this enables TLS.
+  # Optional - one TLS verification name for all seeds. Setting this enables TLS.
+  # It overrides TLS names in seed strings; inline names alone do not enable TLS.
+  # Per-host TLS activation and distinct seed verification names are not supported.
   # The JVM default trust store is used; configure via -Djavax.net.ssl.trustStore JVM arguments.
   # tlsName: <tls-name>
   # Optional - total timeout in milliseconds for Aerospike operations. If not set,

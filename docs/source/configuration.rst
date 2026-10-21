@@ -56,6 +56,7 @@ Valid values for the source ``type`` are:
 - ``dynamodb`` for a DynamoDB source.
 - ``alternator`` for a ScyllaDB Alternator source.
 - ``dynamodb-s3-export`` for a DynamoDB table exported to S3.
+- ``aerospike`` for an Aerospike source.
 
 The following subsections detail the schema of each source type.
 
@@ -316,6 +317,20 @@ A source of type ``dynamodb-s3-export`` can be used together with a target of ty
         # ... other key schema definitions
     # Optional - Whether to use “path-style access” in S3 (see https://docs.aws.amazon.com/AmazonS3/latest/userguide/VirtualHosting.html). Default is false.
     usePathStyleAccess: true
+
+^^^^^^^^^^^^^^^^
+Aerospike Source
+^^^^^^^^^^^^^^^^
+
+Use ``type: aerospike`` with the settings in ``config-aerospike.yaml.example``.
+
+TLS is enabled only by ``source.tlsName``. This verification name applies to every
+seed and overrides TLS names in seed strings. Inline seed TLS names alone do not
+enable TLS. Per-host TLS activation and distinct seed verification names are not
+supported.
+
+TLS uses the JVM default trust store. Configure a custom trust store on both the
+driver and executors with ``-Djavax.net.ssl.trustStore``.
 
 ------
 Target
