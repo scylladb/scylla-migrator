@@ -15,6 +15,7 @@ import com.scylladb.migrator.config.{
   Rename
 }
 import org.apache.spark.sql.Row
+import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.types._
 
@@ -450,6 +451,61 @@ class AerospikeSchemaValidationTest extends munit.FunSuite {
     val row = Row(42L, "value")
     assertEquals(validation.validateRow(row, columns), Some(row))
     assertEquals(validation.validateRow(Row(null, "value"), columns), None)
+  }
+
+  test("Aerospike schema renames match Spark resolution and retain destination spelling") {
+    val source = StructType(
+      Seq(
+        StructField("record_id", StringType),
+        StructField("SourceValue", LongType),
+        StructField("neighbor", StringType)
+      )
+    )
+    val renames =
+      List(Rename("sourcevalue", "IntermediateValue"), Rename("intermediatevalue", "FinalValue"))
+    // RDD and timestamp callers retain their existing exact-name behavior.
+    assertEquals(Scylla.renameSchemaFields(source, renames), source)
+    val baseSpark = SparkSession
+      .builder()
+      .master("local[1]")
+      .appName("aerospike-schema-rename-test")
+      .config("spark.driver.host", "localhost")
+      .getOrCreate()
+    try
+      for (caseSensitive <- Seq(false, true)) {
+        val spark = baseSpark.newSession()
+        spark.conf.set("spark.sql.caseSensitive", caseSensitive.toString)
+        val df = spark.createDataFrame(java.util.Collections.emptyList[Row](), source)
+        val resolver = df.sparkSession.sessionState.conf.resolver
+        val renamed = Scylla.renameSchemaFields(source, renames, resolver)
+        val sparkRenamed = renames.foldLeft(df) { case (acc, Rename(from, to)) =>
+          acc.withColumnRenamed(from, to)
+        }
+        assertEquals(renamed, sparkRenamed.schema)
+        val expectedName = if (caseSensitive) "SourceValue" else "FinalValue"
+        assertEquals(renamed.fieldNames.toSeq, Seq("record_id", expectedName, "neighbor"))
+        val target = table(
+          "record_id",
+          columns = Seq(
+            "SourceValue" -> cql.BigIntType,
+            "FinalValue"  -> cql.BigIntType,
+            "neighbor"    -> cql.TextType
+          )
+        )
+        val columns = validation.prepare(source, renamed, "record_id", target)
+        assertEquals(columns.map(_.name), Vector("record_id", expectedName, "neighbor"))
+        val row = Row("key", 42L, "kept")
+        assertEquals(validation.validateRow(row, columns), Some(row))
+
+        val exactRenames = List(
+          Rename("SourceValue", "IntermediateValue"),
+          Rename("IntermediateValue", "FinalValue")
+        )
+        val exact = Scylla.renameSchemaFields(source, exactRenames, resolver)
+        assertEquals(exact, Scylla.renameSchemaFields(source, exactRenames))
+        assertEquals(exact.fieldNames.toSeq, Seq("record_id", "FinalValue", "neighbor"))
+      }
+    finally baseSpark.stop()
   }
 
   test("a source solr_query bin is accepted after renaming and rejected under the internal name") {

@@ -128,10 +128,14 @@ object Scylla {
     } else df
   }
 
-  private[writers] def renameSchemaFields(schema: StructType, renames: List[Rename]): StructType =
+  private[writers] def renameSchemaFields(
+    schema: StructType,
+    renames: List[Rename],
+    resolver: (String, String) => Boolean = _ == _
+  ): StructType =
     renames.foldLeft(schema) { case (st, Rename(from, to)) =>
       StructType(st.fields.map { f =>
-        if (f.name == from) f.copy(name = to) else f
+        if (resolver(f.name, from)) f.copy(name = to) else f
       })
     }
 
@@ -400,7 +404,12 @@ object Scylla {
     // DataFrame; the access to the rows is positional anyway and the field names
     // are only used to construct the columns part of the INSERT statement.
     val renamedSchema = source match {
-      case _: SourceSettings.Aerospike => renameSchemaFields(cleanDf.schema, renames)
+      case _: SourceSettings.Aerospike =>
+        renameSchemaFields(
+          cleanDf.schema,
+          renames,
+          cleanDf.sparkSession.sessionState.conf.resolver
+        )
       case _ =>
         renames
           .foldLeft(cleanDf) { case (acc, Rename(from, to)) =>

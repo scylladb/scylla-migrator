@@ -284,6 +284,26 @@ class ConversionMigrationTest extends MigratorSuite {
     assertEquals(row.getString("query_text"), "ordinary data")
   }
 
+  withSet(setName).test("case-varied source rename writes to the configured destination column") {
+    _ =>
+      createTable(
+        """aero_key text PRIMARY KEY, "SourceValue" text, "FinalValue" text, neighbor bigint"""
+      )
+      put("identity", new Bin("SourceValue", "renamed value"), new Bin("neighbor", 17L))
+      migrate(
+        "{SourceValue: string, neighbor: long}",
+        renames = """renames:
+                    |  - {from: sourcevalue, to: FinalValue}""".stripMargin
+      )
+      val actual = rows
+      assertEquals(actual.size, 1)
+      val row = actual.head
+      assertEquals(row.getString("aero_key"), "identity")
+      assertEquals(row.getString("\"FinalValue\""), "renamed value")
+      assert(row.isNull("\"SourceValue\""))
+      assertEquals(row.getLong("neighbor"), 17L)
+  }
+
   withSet(setName).test("custom metadata names preserve user bins alongside TTL and generation") {
     _ =>
       createTable(
