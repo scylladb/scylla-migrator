@@ -491,8 +491,41 @@ savepoints:
   #   # credentials:
   #   #   accessKey: ...
   #   #   secretKey: ...
-  # Interval in which savepoints will be created
+
+  # Interval in which savepoints will be created. Required for file/cloud destinations.
+  # For target-table (alias: target-database), defaults to 300 seconds when omitted.
   intervalSeconds: 300
+
+  # Optional, enabled by default. Merge saved progress into this launch configuration.
+  # Set false to start without saved progress. Credentials always come from this configuration.
+  autoResume: true
+
+  # Optional target-table savepoints for CQL targets (type: scylla or cassandra):
+  # Remove the active path above before enabling this target block.
+  # The metadata table is created automatically. The keyspace must already exist.
+  # The config_yaml column stores redacted savepoint YAML. Resume restores progress only.
+  # Its unsalted source WHERE digest allows confirming guessed low-entropy filters.
+  # Protect access to the metadata table and saved payloads.
+  # Metadata reads/writes always use LOCAL_QUORUM, independent of bulk consistency.
+  # Run one migration per savepoint job: stop the previous run before restarting.
+  # Use separate job IDs for separate migrations. Accidental overlap can overwrite progress.
+  # History is append-only with full payloads: monitor table/partition and payload sizes.
+  # Small read pages preserve older fallback but do not bound history or payload size.
+  # Large payloads can fail writes. No automatic retention or bounded payload representation.
+  # target:
+  #   type: target-table # Alias: target-database
+  #   # Default: target.keyspace, preserving its exact case.
+  #   keyspace: null
+  #   # Names allow only ASCII letters, digits and underscores, even inside quotes.
+  #   # Explicit keyspace/table names use CQL case rules: MyKs becomes myks;
+  #   # use the YAML value '"MyKs"' to preserve case.
+  #   # Default metadata table name
+  #   table: scylla_migrator_savepoints
+  #   # Optional stable job id override. Matching configuration identity is still required.
+  #   # If omitted, the migrator derives one from the
+  #   # redacted configuration identity, including renames but excluding progress,
+  #   # savepoints, and validation.
+  #   jobId: null
 
   # Optional - enables file-level savepoint tracking for parquet migrations.
   # When enabled (default), the migrator tracks which parquet files have been fully migrated

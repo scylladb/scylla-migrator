@@ -44,7 +44,8 @@ object Migrator {
       SavepointsResume.resume(
         loadedConfig,
         Some(spark.sparkContext.hadoopConfiguration),
-        SparkSecretRedaction.redactionRegex(spark)
+        SparkSecretRedaction.redactionRegex(spark),
+        Some(spark.sparkContext)
       )
 
     log.info(s"Loaded config:\n${migratorConfig.renderRedacted}")
