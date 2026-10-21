@@ -366,6 +366,22 @@ class AerospikeSchemaValidationTest extends munit.FunSuite {
     assert(error.getMessage.contains("distinct map keys"))
   }
 
+  test("target validation accepts every long map key when their hashes collide") {
+    val size = 32768
+    val values = scala.collection.immutable.TreeMap.from(
+      (0 until size).iterator.map(i => ((i.toLong << 32) | i.toLong) -> -i.toLong)
+    )
+    val source = StructType(
+      Seq(StructField("id", StringType), StructField("payload", MapType(LongType, LongType)))
+    )
+    val target =
+      table("id", columns = Seq("payload" -> cql.MapType(cql.BigIntType, cql.BigIntType)))
+    val columns = validation.prepare(source, source, "id", target)
+    val row = Row("id", values)
+    assertEquals(values.size, size)
+    assertEquals(validation.validateRow(row, columns), Some(row))
+  }
+
   test("lists cannot implicitly become sets or scalar text, preserving order and duplicates") {
     for (target <- Seq(cql.SetType(cql.BigIntType), cql.TextType))
       intercept[IllegalArgumentException] {

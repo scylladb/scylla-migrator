@@ -114,14 +114,25 @@ object AerospikeTypes {
             val seenKeys = scala.collection.mutable.TreeSet.empty[Any](
               TypeUtils.getInterpretedOrdering(k)
             )
-            v.asScala.iterator.zipWithIndex.map { case ((mk, mv), index) =>
+            // Retain Spark's key comparison in the result without retaining its runtime helpers
+            // across Row serialization. Hash collisions must not make map construction quadratic.
+            val externalKeyOrdering = new Ordering[Any] {
+              @transient private lazy val toCatalyst =
+                CatalystTypeConverters.createToCatalystConverter(k)
+              @transient private lazy val ordering = TypeUtils.getInterpretedOrdering(k)
+
+              override def compare(left: Any, right: Any): Int =
+                ordering.compare(toCatalyst(left), toCatalyst(right))
+            }
+            val entries = v.asScala.iterator.zipWithIndex.map { case ((mk, mv), index) =>
               val convertedKey = convertCollectionMember(mk, k, s"$path.map key[$index]")
               if (!seenKeys.add(toCatalystKey(convertedKey)))
                 throw new InvalidValue(
                   s"Distinct Aerospike map keys at $path become the same Spark key after conversion to $k"
                 )
               convertedKey -> convertCollectionMember(mv, vt, s"$path.map value[$index]")
-            }.toMap
+            }
+            scala.collection.immutable.TreeMap.from(entries)(externalKeyOrdering)
           case StringType =>
             v.asScala.iterator
               .map { case (key, value) =>

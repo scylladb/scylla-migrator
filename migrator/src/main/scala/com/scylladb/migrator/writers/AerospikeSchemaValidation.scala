@@ -336,7 +336,7 @@ private[writers] object AerospikeSchemaValidation {
             path,
             "an empty collection becomes null in a non-frozen CQL column; use frozen<map<...>>"
           )
-        val keys = scala.collection.mutable.HashSet.empty[Any]
+        val keys = new java.util.HashSet[Any]()
         values.foreach { case (key, element) =>
           if (key == null || element == null)
             fail(path, "CQL maps cannot contain null keys or values")
