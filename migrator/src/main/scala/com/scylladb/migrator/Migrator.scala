@@ -88,8 +88,9 @@ object Migrator {
       case (aerospikeSource: SourceSettings.Aerospike, scyllaTarget: TargetSettings.Scylla) =>
         log.info("Starting Aerospike to ScyllaDB migration")
         val read = readers.Aerospike.readWithMetrics(spark, aerospikeSource)
-        ScyllaMigrator.migrate(config, scyllaTarget, read.source)
-        read.metrics.report()
+        read.metrics.withMigrationReport {
+          ScyllaMigrator.migrate(config, scyllaTarget, read.source)
+        }
       case (parquetSource: SourceSettings.Parquet, scyllaTarget: TargetSettings.Scylla) =>
         readers.Parquet.migrateToScylla(config, parquetSource, scyllaTarget)
       case (cqlSource: SourceSettings.Cassandra, parquetTarget: TargetSettings.Parquet) =>

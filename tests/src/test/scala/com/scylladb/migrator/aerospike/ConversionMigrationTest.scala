@@ -70,7 +70,10 @@ class ConversionMigrationTest extends MigratorSuite {
     SparkUtils.withSparkSession()(spark => Migrator.migrate(config)(spark))
   }
 
-  private def sourceSummaries(run: => Unit): Seq[org.apache.logging.log4j.core.LogEvent] = {
+  private def sourceSummaries(
+    run: => Unit,
+    prefix: String = "Aerospike source evaluated records:"
+  ): Seq[org.apache.logging.log4j.core.LogEvent] = {
     val logger = Aerospike.log.asInstanceOf[org.apache.logging.log4j.core.Logger]
     val events =
       new java.util.concurrent.ConcurrentLinkedQueue[org.apache.logging.log4j.core.LogEvent]()
@@ -82,7 +85,7 @@ class ConversionMigrationTest extends MigratorSuite {
       Array.empty[org.apache.logging.log4j.core.config.Property]
     ) {
       override def append(event: org.apache.logging.log4j.core.LogEvent): Unit = {
-        if (event.getMessage.getFormattedMessage.startsWith("Aerospike source evaluated records:"))
+        if (event.getMessage.getFormattedMessage.startsWith(prefix))
           events.add(event.toImmutable)
         ()
       }
@@ -722,10 +725,26 @@ class ConversionMigrationTest extends MigratorSuite {
     withSet(setName).test(s"$handling preserves fatal static target identity errors") { _ =>
       createTable("aero_key bigint PRIMARY KEY, value text")
       put("01", new Bin("value", "distinct string identity"))
-      val summaries = sourceSummaries {
-        assertRejected("key")(migrate("{value: string}", s"invalidRecordHandling: \"$handling\""))
-      }
+      val reports = sourceSummaries(
+        assertRejected("key")(migrate("{value: string}", s"invalidRecordHandling: \"$handling\"")),
+        "Aerospike source "
+      )
+      val summaries = reports.filter(
+        _.getMessage.getFormattedMessage.startsWith("Aerospike source evaluated records:")
+      )
       assert(summaries.isEmpty, "A fatal migration must not report a successful source summary")
+      val failedSummaries = reports.filter(
+        _.getMessage.getFormattedMessage.startsWith(
+          "Aerospike source INCOMPLETE evaluated records after migration failure:"
+        )
+      )
+      assertEquals(failedSummaries.size, 1)
+      assertEquals(failedSummaries.head.getLevel, org.apache.logging.log4j.Level.WARN)
+      assertEquals(
+        failedSummaries.head.getMessage.getFormattedMessage,
+        "Aerospike source INCOMPLETE evaluated records after migration failure: read=0, invalid=0, skipped=0. " +
+          "Best-effort partial counts can include replay and omit accumulator updates from failed tasks."
+      )
     }
   }
 
