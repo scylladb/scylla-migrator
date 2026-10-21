@@ -62,6 +62,25 @@ private[migrator] class CancellableScanQueue(capacity: Int, cancelled: AtomicBoo
 
 private[migrator] object AerospikeRDD {
 
+  /** Transfer the acquired reference to the producer only after its thread starts successfully. */
+  private[migrator] def startScanThread(
+    connectionKey: AerospikeConnectionKey,
+    connConfig: AerospikeConnectionConfig,
+    credentials: Option[(String, String)]
+  )(createThread: AerospikeClient => Thread): Thread = {
+    val client = AerospikeClientHolder.acquire(connectionKey, connConfig, credentials)
+    try {
+      val thread = createThread(client)
+      thread.start()
+      thread
+    } catch {
+      case error: Throwable =>
+        try AerospikeClientHolder.releaseOne(connectionKey)
+        catch { case _: Throwable => () }
+        throw error
+    }
+  }
+
   private[migrator] def shouldRetryScan(
     error: AerospikeException,
     retryCount: Int,
@@ -272,7 +291,6 @@ private[migrator] class AerospikeRDD(
     // Prefer environment variables on executors to avoid relying on broadcast credentials
     val credentials = Aerospike.resolveCredentialsFromEnvOr(broadcastCredentials.value)
     val connectionKey = AerospikeConnectionKey.fromConfig(connConfig, credentials)
-    val client = AerospikeClientHolder.acquire(connectionKey, connConfig, credentials)
     val scanPolicy = AerospikeRDD.buildScanPolicy(
       connConfig,
       binNames.nonEmpty
@@ -292,111 +310,116 @@ private[migrator] class AerospikeRDD(
     // mistake the (intentional) gap in records for a fatal poll timeout.
     val retryInProgress = new AtomicBoolean(false)
 
-    val scanThread = new Thread(() =>
-      try {
-        val binOpt: Option[Seq[String]] =
-          if (binNames.isEmpty) None else Some(binNames)
-        var retryCount = 0
-        var scanDone = false
-        while (!scanDone) {
-          val gen = scanGeneration.get()
-          var loggedQueueFull = false
-          val callback = new ScanCallback {
-            override def scanCallback(key: Key, record: Record): Unit = {
-              if (cancelled.get() || Thread.currentThread().isInterrupted)
-                throw new ScanCancelledException
-              if (queue.remainingCapacity() == 0) {
-                if (!loggedQueueFull) {
-                  loggedQueueFull = true
-                  if (Aerospike.log.isDebugEnabled)
-                    Aerospike.log.debug(
-                      s"Partition ${asPart.index}: scan queue full (size=${readConfig.queueSize}), " +
-                        "scan thread will block. Consider increasing 'queueSize' if this happens frequently."
-                    )
-                }
-              } else {
-                loggedQueueFull = false
-              }
-              queue.enqueue(ScanData(gen, key, record))
-            }
-          }
-          // Create a fresh PartitionFilter for each attempt. PartitionFilter is stateful —
-          // it tracks which partitions have been scanned. Reusing it after a failed scan
-          // may skip partitions or re-scan them inconsistently.
-          val partitionFilter = PartitionFilter.range(asPart.partBegin, asPart.partCount)
+    val scanThread = AerospikeRDD.startScanThread(connectionKey, connConfig, credentials) {
+      client =>
+        val thread = new Thread(() =>
           try {
-            scanPartitions(client, scanPolicy, partitionFilter, callback, binOpt)
-            scanDone = true
+            val binOpt: Option[Seq[String]] =
+              if (binNames.isEmpty) None else Some(binNames)
+            var retryCount = 0
+            var scanDone = false
+            while (!scanDone) {
+              val gen = scanGeneration.get()
+              var loggedQueueFull = false
+              val callback = new ScanCallback {
+                override def scanCallback(key: Key, record: Record): Unit = {
+                  if (cancelled.get() || Thread.currentThread().isInterrupted)
+                    throw new ScanCancelledException
+                  if (queue.remainingCapacity() == 0) {
+                    if (!loggedQueueFull) {
+                      loggedQueueFull = true
+                      if (Aerospike.log.isDebugEnabled)
+                        Aerospike.log.debug(
+                          s"Partition ${asPart.index}: scan queue full (size=${readConfig.queueSize}), " +
+                            "scan thread will block. Consider increasing 'queueSize' if this happens frequently."
+                        )
+                    }
+                  } else {
+                    loggedQueueFull = false
+                  }
+                  queue.enqueue(ScanData(gen, key, record))
+                }
+              }
+              // Create a fresh PartitionFilter for each attempt. PartitionFilter is stateful —
+              // it tracks which partitions have been scanned. Reusing it after a failed scan
+              // may skip partitions or re-scan them inconsistently.
+              val partitionFilter = PartitionFilter.range(asPart.partBegin, asPart.partCount)
+              try {
+                scanPartitions(client, scanPolicy, partitionFilter, callback, binOpt)
+                scanDone = true
+              } catch {
+                case e: AerospikeException
+                    if AerospikeRDD.shouldRetryScan(
+                      e,
+                      retryCount,
+                      readConfig.maxScanRetries,
+                      cancelled.get()
+                    ) =>
+                  retryCount += 1
+                  Aerospike.log.warn(
+                    s"Partition ${asPart.index}: retryable scan error (code ${e.getResultCode}), " +
+                      s"attempt $retryCount/${readConfig.maxScanRetries}",
+                    e
+                  )
+                  // Advance generation so the iterator discards records from the failed scan,
+                  // then clear the queue to make room for the retry's records.
+                  // Mark backoff before waking the iterator, so its next poll observes the gap.
+                  retryInProgress.set(true)
+                  val staleGen = scanGeneration.get()
+                  scanGeneration.incrementAndGet()
+                  queue.clear()
+                  // Unblock the iterator thread if it's stuck in poll() — the stale-generation
+                  // entry will be discarded by the generation filter.
+                  queue.enqueue(ScanRetry(staleGen))
+                  // Exponential backoff: 2s, 4s, 8s with default maxScanRetries=3.
+                  // Cap at 30s for users who configure higher retry counts.
+                  val backoffMs = math.min(1000L * (1L << math.min(retryCount, 20)), 30000L)
+                  try Thread.sleep(backoffMs)
+                  finally retryInProgress.set(false)
+              }
+            }
           } catch {
-            case e: AerospikeException
-                if AerospikeRDD.shouldRetryScan(
-                  e,
-                  retryCount,
-                  readConfig.maxScanRetries,
-                  cancelled.get()
-                ) =>
-              retryCount += 1
-              Aerospike.log.warn(
-                s"Partition ${asPart.index}: retryable scan error (code ${e.getResultCode}), " +
-                  s"attempt $retryCount/${readConfig.maxScanRetries}",
-                e
-              )
-              // Advance generation so the iterator discards records from the failed scan,
-              // then clear the queue to make room for the retry's records.
-              // Mark backoff before waking the iterator, so its next poll observes the gap.
-              retryInProgress.set(true)
-              val staleGen = scanGeneration.get()
-              scanGeneration.incrementAndGet()
-              queue.clear()
-              // Unblock the iterator thread if it's stuck in poll() — the stale-generation
-              // entry will be discarded by the generation filter.
-              queue.enqueue(ScanRetry(staleGen))
-              // Exponential backoff: 2s, 4s, 8s with default maxScanRetries=3.
-              // Cap at 30s for users who configure higher retry counts.
-              val backoffMs = math.min(1000L * (1L << math.min(retryCount, 20)), 30000L)
-              try Thread.sleep(backoffMs)
-              finally retryInProgress.set(false)
-          }
-        }
-      } catch {
-        case _: ScanCancelledException =>
-          // Expected on task cancellation (limit()/take()), don't log as error
-          if (Aerospike.log.isDebugEnabled)
-            Aerospike.log.debug(s"Partition ${asPart.index}: scan cancelled")
-        case _: InterruptedException if cancelled.get() =>
-          // Backoff sleep interrupted due to task cancellation — treat as normal shutdown
-          if (Aerospike.log.isDebugEnabled)
-            Aerospike.log.debug(s"Partition ${asPart.index}: scan interrupted during cancellation")
-        case _: AerospikeException if cancelled.get() =>
-          // Multi-node scans wrap callback cancellation in AerospikeException.
-          if (Aerospike.log.isDebugEnabled)
-            Aerospike.log.debug(s"Partition ${asPart.index}: scan cancelled")
-        case e: Throwable =>
-          Aerospike.log.error(s"Partition ${asPart.index}: scan thread failed", e)
-          scanError.set(e)
-          e match {
-            case _: VirtualMachineError | _: ThreadDeath | _: LinkageError =>
-              // Fatal JVM error — re-throw so the uncaught exception handler can act.
-              // The error is also recorded in scanError for the iterator thread.
-              throw e
-            case _ => // non-fatal, recorded in scanError for the iterator to surface
-          }
-      } finally
-        try {
-          if (scanError.get() != null) queue.clear()
-          try queue.enqueue(ScanComplete)
-          catch {
-            case _: ScanCancelledException                  =>
+            case _: ScanCancelledException =>
+              // Expected on task cancellation (limit()/take()), don't log as error
+              if (Aerospike.log.isDebugEnabled)
+                Aerospike.log.debug(s"Partition ${asPart.index}: scan cancelled")
             case _: InterruptedException if cancelled.get() =>
-          }
-        } finally {
-          queue.stopProducers()
-          AerospikeClientHolder.releaseOne(connectionKey)
-        }
-    )
-    scanThread.setName(s"aerospike-scan-p${asPart.index}")
-    scanThread.setDaemon(true)
-    scanThread.start()
+              // Backoff sleep interrupted due to task cancellation — treat as normal shutdown
+              if (Aerospike.log.isDebugEnabled)
+                Aerospike.log.debug(
+                  s"Partition ${asPart.index}: scan interrupted during cancellation"
+                )
+            case _: AerospikeException if cancelled.get() =>
+              // Multi-node scans wrap callback cancellation in AerospikeException.
+              if (Aerospike.log.isDebugEnabled)
+                Aerospike.log.debug(s"Partition ${asPart.index}: scan cancelled")
+            case e: Throwable =>
+              Aerospike.log.error(s"Partition ${asPart.index}: scan thread failed", e)
+              scanError.set(e)
+              e match {
+                case _: VirtualMachineError | _: ThreadDeath | _: LinkageError =>
+                  // Fatal JVM error — re-throw so the uncaught exception handler can act.
+                  // The error is also recorded in scanError for the iterator thread.
+                  throw e
+                case _ => // non-fatal, recorded in scanError for the iterator to surface
+              }
+          } finally
+            try {
+              if (scanError.get() != null) queue.clear()
+              try queue.enqueue(ScanComplete)
+              catch {
+                case _: ScanCancelledException                  =>
+                case _: InterruptedException if cancelled.get() =>
+              }
+            } finally {
+              queue.stopProducers()
+              AerospikeClientHolder.releaseOne(connectionKey)
+            }
+        )
+        thread.setName(s"aerospike-scan-p${asPart.index}")
+        thread.setDaemon(true)
+        thread
+    }
 
     context.addTaskCompletionListener[Unit] { _ =>
       cancelled.set(true)

@@ -127,6 +127,105 @@ class AerospikeRetryTest extends munit.FunSuite {
     override def close(): Unit = { closeCount.incrementAndGet(); super.close() }
   }
 
+  private def withStartupClient(
+    action: (AerospikeConnectionConfig, AerospikeConnectionKey, DisconnectedClient) => Unit
+  ): Unit = {
+    val config =
+      connectionConfig.copy(hosts = List(s"startup-fixture-${java.util.UUID.randomUUID()}.invalid"))
+    val key = AerospikeConnectionKey.fromConfig(config, None)
+    val client = new DisconnectedClient
+    AerospikeClientHolder.getOrCreate(key)(client)
+    try action(config, key, client)
+    finally
+      try AerospikeClientHolder.release(config, None)
+      finally if (client.closeCount.get() == 0) client.close()
+  }
+
+  private def assertStartupFailure(
+    failure: Throwable
+  )(createThread: AerospikeClient => Thread): Unit =
+    withStartupClient { (config, key, client) =>
+      // A second owner makes a duplicate startup release observable as premature replacement.
+      assert(AerospikeClientHolder.acquire(key, config, None) eq client)
+      val thrown =
+        try {
+          AerospikeRDD.startScanThread(key, config, None) { acquired =>
+            assert(acquired eq client)
+            createThread(acquired)
+          }
+          null
+        } catch { case error: Throwable => error }
+      assert(thrown eq failure, "Startup must preserve the original Throwable")
+      assert(AerospikeClientHolder.getOrCreate(key) {
+        throw new AssertionError("Startup released another owner's reference")
+      } eq client)
+      AerospikeClientHolder.releaseOne(key)
+      assertStartupClientReleased(key, client)
+    }
+
+  private def assertStartupClientReleased(
+    key: AerospikeConnectionKey,
+    client: DisconnectedClient
+  ): Unit = {
+    var replacement: DisconnectedClient = null
+    val cached = AerospikeClientHolder.getOrCreate(key) {
+      replacement = new DisconnectedClient
+      replacement
+    }
+    assert(replacement != null, "Startup/producer cleanup must leave no held reference")
+    assert(cached eq replacement)
+    assertEquals(client.closeCount.get(), 1)
+  }
+
+  test("scan thread factory failure releases exactly its acquired client reference") {
+    val failure = new LinkageError("controlled thread construction failure")
+    assertStartupFailure(failure)(_ => throw failure)
+  }
+
+  test("scan thread start failure releases exactly its acquired client reference") {
+    val failure = new OutOfMemoryError("controlled thread start failure")
+    assertStartupFailure(failure) { _ =>
+      new Thread() {
+        override def start(): Unit = throw failure
+      }
+    }
+  }
+
+  test("a started scan thread retains ownership until its producer releases the reference") {
+    withStartupClient { (config, key, client) =>
+      assert(AerospikeClientHolder.acquire(key, config, None) eq client)
+      val finish = new CountDownLatch(1)
+      val failure = new AtomicReference[Throwable]()
+      val thread = AerospikeRDD.startScanThread(key, config, None) { acquired =>
+        assert(acquired eq client)
+        val producer = new Thread(() =>
+          try
+            if (!finish.await(5, TimeUnit.SECONDS))
+              throw new AssertionError("Producer was not released")
+          catch { case error: Throwable => failure.set(error) }
+          finally AerospikeClientHolder.releaseOne(key)
+        )
+        producer.setDaemon(true)
+        producer
+      }
+      try {
+        finish.countDown()
+        thread.join(5000)
+        assert(!thread.isAlive, "Producer must exit before checking its released reference")
+        assertEquals(failure.get(), null)
+        assert(AerospikeClientHolder.getOrCreate(key) {
+          throw new AssertionError("Successful startup released the producer's reference twice")
+        } eq client)
+        AerospikeClientHolder.releaseOne(key)
+        assertStartupClientReleased(key, client)
+      } finally {
+        finish.countDown()
+        thread.interrupt()
+        thread.join(5000)
+      }
+    }
+  }
+
   private def withControlledScan(retry: Boolean)(action: ControlledAerospikeRDD => Unit): Unit =
     SparkUtils.withSparkSession() { spark =>
       val config =
