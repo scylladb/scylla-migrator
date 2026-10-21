@@ -34,6 +34,16 @@ class AerospikeSchemaValidationTest extends munit.FunSuite {
     columns.map { case (name, t) => ColumnDef(name, RegularColumn, t) }
   )
 
+  private def withResolverSession(baseSpark: SparkSession, caseSensitive: Boolean)(
+    action: SparkSession => Unit
+  ): Unit = {
+    val session = baseSpark.newSession()
+    session.conf.set("spark.sql.caseSensitive", caseSensitive.toString)
+    // Only SQL state belongs to this fixture. Stopping this session would also stop the
+    // process-wide SparkContext borrowed by getOrCreate and used by other fixtures.
+    action(session)
+  }
+
   test("type mismatch guidance distinguishes scalars from ordered lists") {
     val scalar = intercept[IllegalArgumentException] {
       validation.validateTypes(BooleanType, cql.IntType, "flag")
@@ -471,10 +481,13 @@ class AerospikeSchemaValidationTest extends munit.FunSuite {
       .appName("aerospike-schema-rename-test")
       .config("spark.driver.host", "localhost")
       .getOrCreate()
-    try
-      for (caseSensitive <- Seq(false, true)) {
-        val spark = baseSpark.newSession()
-        spark.conf.set("spark.sql.caseSensitive", caseSensitive.toString)
+    // Establish another caller's usable context before entering the resolver fixture.
+    assertEquals(baseSpark.range(1L).count(), 1L)
+    val sharedContext = baseSpark.sparkContext
+    val originalCaseSensitive = baseSpark.conf.get("spark.sql.caseSensitive")
+    for (caseSensitive <- Seq(false, true))
+      withResolverSession(baseSpark, caseSensitive) { spark =>
+        assert(spark.sparkContext eq sharedContext)
         val df = spark.createDataFrame(java.util.Collections.emptyList[Row](), source)
         val resolver = df.sparkSession.sessionState.conf.resolver
         val renamed = Scylla.renameSchemaFields(source, renames, resolver)
@@ -505,7 +518,9 @@ class AerospikeSchemaValidationTest extends munit.FunSuite {
         assertEquals(exact, Scylla.renameSchemaFields(source, exactRenames))
         assertEquals(exact.fieldNames.toSeq, Seq("record_id", "FinalValue", "neighbor"))
       }
-    finally baseSpark.stop()
+    assert(!sharedContext.isStopped)
+    assertEquals(baseSpark.conf.get("spark.sql.caseSensitive"), originalCaseSensitive)
+    assertEquals(baseSpark.range(1L).count(), 1L)
   }
 
   test("a source solr_query bin is accepted after renaming and rejected under the internal name") {
