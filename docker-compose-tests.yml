@@ -30,7 +30,7 @@ services:
     volumes:
       - ./tests/docker/aerospike/aerospike.conf:/etc/aerospike/aerospike.conf:ro
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     expose:
       - 3000
     healthcheck:
@@ -50,7 +50,7 @@ services:
     volumes:
       - ./tests/docker/aerospike/aerospike6.conf:/etc/aerospike/aerospike.conf:ro
     ports:
-      - "3001:3000"
+      - "127.0.0.1:3001:3000"
     expose:
       - 3000
     networks:
