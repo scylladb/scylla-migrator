@@ -297,6 +297,7 @@ class MySQLToScyllaValidatorTest extends munit.FunSuite {
       )
     }
     assert(error.getMessage.contains("does not match the MySQL table's actual PK"))
+    assert(error.getMessage.contains("skipSourcePrimaryKeyValidation"))
   }
 
   test("validateSourcePrimaryKey rejects source PK with the same columns in a different order") {

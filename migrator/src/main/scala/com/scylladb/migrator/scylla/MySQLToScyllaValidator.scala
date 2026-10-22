@@ -266,7 +266,9 @@ object MySQLToScyllaValidator {
         s"Configured primaryKey does not match the MySQL table's actual PK. " +
           s"Configured: ${configuredPrimaryKey.mkString(", ")}. " +
           s"Actual source PK: ${actualSourcePrimaryKey.mkString(", ")}. " +
-          "Validation cannot safely proceed with a mismatched join key."
+          "Validation cannot safely proceed with a mismatched join key. " +
+          "To allow a custom join key that differs from MySQL's declared PK, set " +
+          "'skipSourcePrimaryKeyValidation: true' in the MySQL source config."
       )
   }
 
@@ -623,13 +625,21 @@ object MySQLToScyllaValidator {
       )
     )
 
-    val actualSourcePK = sourcePrimaryKeyFromMetadata(sourceSettings)
-    if (actualSourcePK.isEmpty)
-      sys.error(
-        s"MySQL table ${sourceSettings.database}.${sourceSettings.table} does not expose a primary key via JDBC metadata. " +
-          "Validation requires the real source primary key."
+    if (sourceSettings.skipSourcePrimaryKeyValidation) {
+      log.warn(
+        "skipSourcePrimaryKeyValidation is set: skipping check that configured primaryKey " +
+          s"matches MySQL's declared PRIMARY KEY. Configured: ${primaryKey.mkString(", ")}."
       )
-    validateSourcePrimaryKey(primaryKey, actualSourcePK)
+    } else {
+      val actualSourcePK = sourcePrimaryKeyFromMetadata(sourceSettings)
+      if (actualSourcePK.isEmpty)
+        sys.error(
+          s"MySQL table ${sourceSettings.database}.${sourceSettings.table} does not expose " +
+            "a primary key via JDBC metadata. Validation requires the real source primary key, " +
+            "or set 'skipSourcePrimaryKeyValidation: true' to use a custom join key."
+        )
+      validateSourcePrimaryKey(primaryKey, actualSourcePK)
+    }
 
     // Always read all columns from MySQL; hash is computed in Spark (not MySQL)
     val rawSourceDF = {
