@@ -128,10 +128,14 @@ object Scylla {
     } else df
   }
 
-  private[writers] def renameSchemaFields(schema: StructType, renames: List[Rename]): StructType =
+  private[writers] def renameSchemaFields(
+    schema: StructType,
+    renames: List[Rename],
+    resolver: (String, String) => Boolean = _ == _
+  ): StructType =
     renames.foldLeft(schema) { case (st, Rename(from, to)) =>
       StructType(st.fields.map { f =>
-        if (f.name == from) f.copy(name = to) else f
+        if (resolver(f.name, from)) f.copy(name = to) else f
       })
     }
 
@@ -223,6 +227,50 @@ object Scylla {
     log.info("Schema after renames:")
     log.info(renamedSchema.treeString)
 
+    var aerospikeMetrics = Option.empty[(LongAccumulator, LongAccumulator)]
+    val checkedRdd = source match {
+      case aerospike: SourceSettings.Aerospike =>
+        val invalidAerospikeFields =
+          spark.sparkContext.longAccumulator("Invalid Aerospike destination fields")
+        val skippedAerospikeRows =
+          spark.sparkContext.longAccumulator("Aerospike rows skipped at destination validation")
+        aerospikeMetrics = Some((invalidAerospikeFields, skippedAerospikeRows))
+        val table =
+          connector.withSessionDo(Schema.tableFromCassandra(_, target.keyspace, target.table))
+        val columns = AerospikeSchemaValidation.prepare(
+          schema0,
+          renamedSchema,
+          aerospike.keyColumnName,
+          table
+        )
+        // Capture only the policies; source settings can contain credentials.
+        val invalidRecordHandling = aerospike.invalidRecordHandling
+        val listOverflowHandling = aerospike.listOverflowHandling
+        rdd0.mapPartitionsWithIndex { (partition, rows) =>
+          // Match source diagnostics, with bounded warnings local to each partition attempt.
+          var invalidCount = 0L
+          rows.flatMap { row =>
+            val validated = AerospikeSchemaValidation.validateRow(
+              row,
+              columns,
+              invalidRecordHandling,
+              reason => {
+                invalidAerospikeFields.add(1L)
+                invalidCount += 1L
+                if (invalidCount == 1L || invalidCount % 10000L == 0L)
+                  log.warn(
+                    s"Partition $partition: $invalidCount invalid destination values; $reason"
+                  )
+              },
+              listOverflowHandling
+            )
+            if (validated.isEmpty) skippedAerospikeRows.add(1L)
+            validated
+          }
+        }
+      case _ => rdd0
+    }
+
     val columnSelector = SomeColumns(
       ArraySeq.unsafeWrapArray(renamedSchema.fields.map(_.name: ColumnRef)): _*
     )
@@ -233,9 +281,9 @@ object Scylla {
     // CassandraOption.Value case only occurs on the exploded RDD path; it is inert for
     // plain DataFrame rows.
     val rddStripped =
-      if (!target.stripTrailingZerosForDecimals) rdd0
+      if (!target.stripTrailingZerosForDecimals) checkedRdd
       else
-        rdd0.map { row =>
+        checkedRdd.map { row =>
           Row.fromSeq(row.toSeq.map {
             case x: java.math.BigDecimal =>
               x.stripTrailingZeros()
@@ -248,7 +296,13 @@ object Scylla {
     // Optionally filter out rows where any primary key column is null to prevent
     // infinite retries against the target database (see issue #262).
     // Auto-detected from the source type, or overridden via target `dropNullPrimaryKeys`.
-    val dropNullPks = shouldDropNullPrimaryKeys(target, source)
+    // Aerospike validates all target primary keys against the final positional schema above.
+    // Invalid keys are skipped there; reverse-mapping chained renames here would resolve the
+    // wrong input column.
+    val dropNullPks = source match {
+      case _: SourceSettings.Aerospike => false
+      case _                           => shouldDropNullPrimaryKeys(target, source)
+    }
     log.info(s"Drop null primary key rows: ${dropNullPks}")
     val (finalRdd, nullPkRowsDropped) =
       if (dropNullPks) {
@@ -285,6 +339,14 @@ object Scylla {
         tokenRangeAccumulator = tokenRangeAccumulator
       )(connector, SqlRowWriter.Factory)
 
+    aerospikeMetrics.foreach { case (invalidFields, skippedRows) =>
+      if (invalidFields.value > 0)
+        log.warn(
+          s"Aerospike destination validation: ${invalidFields.value} invalid fields, " +
+            s"${skippedRows.value} skipped records"
+        )
+    }
+
     nullPkRowsDropped.foreach { acc =>
       if (acc.value > 0) {
         log.warn(
@@ -307,7 +369,10 @@ object Scylla {
     tokenRangeAccumulator: Option[TokenRangeAccumulator],
     source: SourceSettings
   )(implicit spark: SparkSession): Unit = {
-    val (rdd0, schema0) = dropInternalColumnsFromRDD(rdd, rowSchema)
+    val (rdd0, schema0) = source match {
+      case _: SourceSettings.Aerospike => (rdd, rowSchema)
+      case _                           => dropInternalColumnsFromRDD(rdd, rowSchema)
+    }
     val renamedSchema = renameSchemaFields(schema0, renames)
     writeCleanedRdd(
       target,
@@ -329,17 +394,29 @@ object Scylla {
     tokenRangeAccumulator: Option[TokenRangeAccumulator],
     source: SourceSettings
   )(implicit spark: SparkSession): Unit = {
-    val cleanDf = dropInternalColumns(df)
+    val cleanDf = source match {
+      case _: SourceSettings.Aerospike => df
+      case _                           => dropInternalColumns(df)
+    }
 
     // Similarly to createDataFrame, when using withColumnRenamed, Spark tries
     // to re-encode the dataset. Instead we just use the modified schema from this
     // DataFrame; the access to the rows is positional anyway and the field names
     // are only used to construct the columns part of the INSERT statement.
-    val renamedSchema = renames
-      .foldLeft(cleanDf) { case (acc, Rename(from, to)) =>
-        acc.withColumnRenamed(from, to)
-      }
-      .schema
+    val renamedSchema = source match {
+      case _: SourceSettings.Aerospike =>
+        renameSchemaFields(
+          cleanDf.schema,
+          renames,
+          cleanDf.sparkSession.sessionState.conf.resolver
+        )
+      case _ =>
+        renames
+          .foldLeft(cleanDf) { case (acc, Rename(from, to)) =>
+            acc.withColumnRenamed(from, to)
+          }
+          .schema
+    }
     writeCleanedRdd(
       target,
       renames,

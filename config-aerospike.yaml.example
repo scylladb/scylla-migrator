@@ -1,0 +1,149 @@
+# Example configuration for migrating from Aerospike to Scylla
+# Requires JDK 17+ (the Aerospike reader uses java.util.HexFormat, a JDK 17 API).
+# See also: config.yaml.example for Cassandra/DynamoDB/Parquet source examples
+source:
+  type: aerospike
+  hosts:
+    - aerospike-server
+  # Optional - default port for hosts that don't specify one inline (default: 3000)
+  # port: 3000
+  namespace: test
+  set: users
+  # Required - bin names and types. Only these bins are migrated; other bins are omitted.
+  # Missing declared bins remain null. An explicit schema: {} selects only key/metadata.
+  schema:
+    name: string
+    age: long
+    score: double
+    active: boolean
+    tags: list<string>
+    attrs: map<string,long>
+    data: binary
+  # Optional - invalid record handling: skip (default) or "null".
+  # skip: omit the whole record if a declared value fails source or target validation.
+  # "null": keep valid fields and replace each invalid top-level field with null where
+  # the destination permits it. A bad collection member invalidates its whole bin.
+  # Quote "null" in YAML; unquoted null is not a valid policy value.
+  # Invalid/missing stored keys or invalid/null target primary-key values always skip
+  # the whole record. Configuration, connection, scan and write errors remain fatal.
+  invalidRecordHandling: skip
+  # Null output follows existing sink settings: when the writer ignores nulls, an older
+  # destination cell may remain rather than being cleared.
+  # Optional - independent handling of the shared non-frozen list write budget:
+  # skip (default), nullify, or empty.
+  # After ordinary validation, at most 131072 outer elements may be written across all
+  # retained top-level non-frozen list columns in one row. Frozen lists and nested frozen
+  # contents do not add to this total; other size/resource constraints still apply.
+  # skip omits the whole record. nullify replaces EVERY contributing list with null;
+  # existing null-write settings apply, so ignored nulls can leave older cells intact.
+  # empty explicitly binds EVERY contributing list as empty, clearing those target cells
+  # under normal write semantics, even when nulls are ignored. Non-frozen CQL collections
+  # do not retain a distinct empty value. Other surviving fields remain unchanged.
+  # Original nulls and fields nulled by ordinary validation remain null. Source empty
+  # lists still follow invalidRecordHandling; this budget is reset for every row.
+  listOverflowHandling: skip
+  # Optional - number of splits for parallel reads (default: Spark parallelism * 4, max 4096).
+  # For small datasets, use a lower splitCount to avoid empty partitions.
+  # splitCount: 256
+  # Optional - capacity of the blocking queue between scan thread and iterator (default: 1024)
+  # queueSize: 1024
+  # The Aerospike record key is exposed as the 'aero_key' column.
+  # Required - record identity representation, independent of the declared bin schema.
+  # string: preserve stored String keys (Spark string / CQL text).
+  # integer: preserve stored integer keys (Spark long / CQL bigint).
+  # binary: preserve stored byte[] keys (Spark binary / CQL blob).
+  # These modes require keys already stored on every source record by writes using sendKey=true;
+  # sendKey is a writer setting, not a migration read option. Missing or mismatched keys skip
+  # the whole record in both invalid-record modes.
+  # There is no key coercion or digest fallback.
+  # digest: use lowercase 40-character hex digests for ALL keys (Spark string / CQL text),
+  # including mixed key types and records without stored keys. Original keys are not emitted.
+  keyMode: string
+  # Optional - generated column names. Change these when source bins use the defaults.
+  # The key column (after any top-level 'renames') must be part of the target primary key
+  # and have the exact CQL type selected by keyMode; target key coercion is rejected.
+  # If migrating static columns, include the record key in the target partition key.
+  # keyColumn: aero_key
+  # ttlColumn: aero_ttl
+  # generationColumn: aero_generation
+  # Optional - Aerospike authentication credentials
+  # credentials:
+  #   username: <user>
+  #   password: <pass>
+  # Optional - connection and socket timeouts in milliseconds
+  # connectTimeoutMs: 10000
+  # socketTimeoutMs: 10000  # default: 10000
+  # Optional - one TLS verification name for all seeds. Setting this enables TLS.
+  # It overrides TLS names in seed strings; inline names alone do not enable TLS.
+  # Per-host TLS activation and distinct seed verification names are not supported.
+  # The JVM default trust store is used; configure via -Djavax.net.ssl.trustStore JVM arguments.
+  # tlsName: <tls-name>
+  # Optional - total timeout in milliseconds for Aerospike operations. If not set,
+  # defaults to min(3 * socketTimeoutMs, 2147483647) if socketTimeoutMs is set,
+  # otherwise 30000ms. Set this to override the derived default.
+  # totalTimeoutMs: 90000
+  # Optional - maximum number of retries for transient scan errors (TIMEOUT,
+  # SERVER_NOT_AVAILABLE, PARTITION_UNAVAILABLE, DEVICE_OVERLOAD) before failing the
+  # Spark partition (default: 3).
+  # maxScanRetries: 3
+  # Optional - poll timeout in seconds for the blocking queue between scan thread and
+  # iterator. For "scan timed out: no records after" errors, increase this value (default: 120).
+  # pollTimeoutSeconds: 120
+  # Optional - maximum consecutive poll timeouts before failing a Spark partition (default: 5).
+  # With pollTimeoutSeconds=120 and maxPollRetries=5, five consecutive idle polls take 10 minutes.
+  # Scan retries reset this budget; polls overlapping retry backoff do not count.
+  # maxPollRetries: 5
+  # Optional - maximum number of connections per Aerospike node (default: Aerospike client default).
+  # Increase for high-throughput migrations with many concurrent scans.
+  # maxConnsPerNode: 300
+  # Optional - number of connection pools per Aerospike node (default: Aerospike client default).
+  # connPoolsPerNode: 1
+  # Supported schema types: string/text, long/bigint/int/integer, double,
+  # boolean/bool, binary/blob, and nested list<T> or map<K,V>.
+  # Integer aliases all use Spark long values. Only enabled generated columns reserve
+  # their names. A collision is a configuration error: change the generated column name
+  # to preserve a source bin with that name. The generated key's type comes from keyMode.
+  #
+  # Optional - preserve Aerospike record metadata as additional columns.
+  # preserveTTL: when true, adds an 'aero_ttl' column (INT) with the record's remaining
+  # TTL in seconds. Records with no expiration will have TTL = -1. (default: false)
+  # preserveTTL: false
+  # preserveGeneration: when true, adds an 'aero_generation' column (INT) with the record's
+  # generation (version) counter. (default: false)
+  # preserveGeneration: false
+  # These are ordinary metadata columns. preserveTTL does not apply Scylla write TTL,
+  # and preserveGeneration does not preserve Scylla write timestamps or conflict resolution.
+  #
+  # Note: Credentials from config are sent to executors in a Spark broadcast variable.
+  # To use environment credentials, set AEROSPIKE_USERNAME and AEROSPIKE_PASSWORD on
+  # the driver AND all executors. The driver decides
+  # whether to broadcast config credentials based on its own environment. When both variables
+  # are present on the driver, no config credentials are broadcast; executors read their own
+  # environment at runtime.
+  #
+  # Conversion preserves exact values. Overflow, rounding, truncation and incompatible
+  # values follow invalidRecordHandling, including at the target CQL boundary.
+  # String schemas explicitly select text: collections use Java-style punctuation,
+  # binary values use hex, and GeoJSON uses JSON text.
+  # Native collections preserve list order, duplicates and distinct map keys.
+  # Null collection members and converted map-key collisions invalidate the whole field.
+  # Use frozen CQL collections to preserve empty collections; an empty non-frozen target
+  # collection follows invalidRecordHandling. Nested CQL collections must be frozen.
+  # List-to-set and incompatible source/target schema mappings are configuration errors.
+  # Spark task retries are separate from maxScanRetries. spark.task.maxFailures defaults
+  # to 1024; an explicit spark-submit --conf value is honored. A lower budget bounds
+  # retries after scan/write failures but also reduces tolerance of transient failures.
+
+target:
+  type: scylla
+  host: scylla
+  port: 9042
+  keyspace: test
+  table: users
+  consistencyLevel: LOCAL_QUORUM
+  connections: 16
+  stripTrailingZerosForDecimals: false
+
+# No 'savepoints' block: the Aerospike source does not support durable resume, so any
+# savepoints settings are ignored. An interrupted Aerospike migration must be restarted
+# from scratch — make sure the target table tolerates idempotent re-writes.

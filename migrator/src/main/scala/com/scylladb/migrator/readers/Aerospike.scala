@@ -30,6 +30,25 @@ object Aerospike {
     invalidRecords: LongAccumulator,
     skippedRecords: LongAccumulator
   ) {
+    def withMigrationReport(migrate: => Unit): Unit = {
+      try migrate
+      catch {
+        case failure: Throwable =>
+          try
+            log.warn(
+              s"Aerospike source INCOMPLETE evaluated records after migration failure: read=${recordsRead.value}, " +
+                s"invalid=${invalidRecords.value}, skipped=${skippedRecords.value}. " +
+                "Best-effort partial counts can include replay and omit accumulator updates from failed tasks."
+            )
+          catch {
+            // Diagnostics must never replace the original migration failure, even if logging fails.
+            case _: Throwable => ()
+          }
+          throw failure
+      }
+      report()
+    }
+
     def report(): Unit = {
       val message = s"Aerospike source evaluated records: read=${recordsRead.value}, " +
         s"invalid=${invalidRecords.value}, skipped=${skippedRecords.value}. Counts can include replay."

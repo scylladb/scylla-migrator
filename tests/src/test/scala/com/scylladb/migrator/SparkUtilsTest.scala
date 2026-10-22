@@ -10,6 +10,25 @@ import com.scylladb.migrator.config.{
 
 class SparkUtilsTest extends munit.FunSuite {
 
+  test("shared Spark sessions reuse a live context and reacquire after another suite stops it") {
+    val originalContext = SparkUtils.withSparkSession() { spark =>
+      assertEquals(spark.range(1L).count(), 1L)
+      spark.sparkContext
+    }
+    SparkUtils.withSparkSession() { spark =>
+      assert(spark.sparkContext eq originalContext)
+      assertEquals(spark.range(2L).count(), 2L)
+      // Simulate teardown of a suite that borrowed this process-wide context.
+      spark.stop()
+    }
+    assert(originalContext.isStopped)
+    SparkUtils.withSparkSession() { spark =>
+      assert(spark.sparkContext ne originalContext)
+      assert(!spark.sparkContext.isStopped)
+      assertEquals(spark.range(3L).count(), 3L)
+    }
+  }
+
   test("local execution remaps nested filesystem savepoint target path") {
     val config = baseConfig.copy(
       savepoints = Savepoints(

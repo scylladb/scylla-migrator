@@ -4,6 +4,22 @@ import java.util.concurrent.{ CountDownLatch, TimeUnit }
 import java.util.concurrent.atomic.{ AtomicBoolean, AtomicReference }
 
 class AerospikeScanQueueTest extends munit.FunSuite {
+  private def awaitBlockedOffer(worker: Thread): Unit = {
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+    def blocked: Boolean =
+      worker.getState == Thread.State.TIMED_WAITING &&
+        worker.getStackTrace.exists(frame =>
+          frame.getClassName == "java.util.concurrent.LinkedBlockingQueue" &&
+            frame.getMethodName == "offer"
+        )
+    var observedWait = blocked
+    while (!observedWait && worker.isAlive && System.nanoTime() < deadline) {
+      Thread.`yield`()
+      observedWait = blocked
+    }
+    assert(observedWait, "Producer must block in LinkedBlockingQueue.offer before it is released")
+  }
+
   test("producer shutdown waits for active callbacks even if coordinator is interrupted") {
     val enteredOffer = new CountDownLatch(1)
     val allowExit = new CountDownLatch(1)
@@ -61,12 +77,10 @@ class AerospikeScanQueueTest extends munit.FunSuite {
     val cancelled = new AtomicBoolean(false)
     val queue = new CancellableScanQueue(1, cancelled)
     queue.enqueue(ScanRetry(0))
-    val started = new CountDownLatch(3)
     val stopped = new CountDownLatch(3)
     val error = new AtomicReference[Throwable]()
     val workers = (1 to 3).map { generation =>
-      val worker = new Thread(() => {
-        started.countDown()
+      val worker = new Thread(() =>
         try {
           queue.enqueue(ScanRetry(generation))
           error.compareAndSet(null, new AssertionError("Full queue accepted a record"))
@@ -74,14 +88,14 @@ class AerospikeScanQueueTest extends munit.FunSuite {
           case _: ScanCancelledException =>
           case e: Throwable              => error.compareAndSet(null, e)
         } finally stopped.countDown()
-      })
+      )
       worker.setDaemon(true)
       worker.start()
       worker
     }
     try {
-      assert(started.await(5, TimeUnit.SECONDS))
-      assert(!stopped.await(200, TimeUnit.MILLISECONDS))
+      workers.foreach(awaitBlockedOffer)
+      assertEquals(stopped.getCount, 3L)
       cancelled.set(true)
       assert(stopped.await(5, TimeUnit.SECONDS))
       queue.stopProducers()
@@ -105,7 +119,8 @@ class AerospikeScanQueueTest extends munit.FunSuite {
     worker.setDaemon(true)
     worker.start()
     try {
-      assert(!stopped.await(200, TimeUnit.MILLISECONDS))
+      awaitBlockedOffer(worker)
+      assertEquals(stopped.getCount, 1L)
       assertEquals(queue.poll(5, TimeUnit.SECONDS), ScanRetry(0))
       assert(stopped.await(5, TimeUnit.SECONDS))
       assertEquals(queue.poll(5, TimeUnit.SECONDS), ScanComplete)

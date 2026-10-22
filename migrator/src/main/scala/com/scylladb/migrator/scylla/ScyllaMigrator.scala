@@ -105,8 +105,11 @@ trait ScyllaMigratorBase {
       }
     } catch {
       case NonFatal(e) => // Catching everything on purpose to try and dump the accumulator state
+        val savepointMessage =
+          if (maybeSavepointsManager.isDefined) "Will attempt to create a savepoint before exiting"
+          else "No savepoint manager is available; exiting without a savepoint"
         log.error(
-          "Caught error while writing the DataFrame. Will create a savepoint before exiting",
+          s"Caught error while writing the DataFrame. $savepointMessage",
           e
         )
         caughtError = Some(e)

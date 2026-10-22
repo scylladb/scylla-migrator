@@ -13,7 +13,11 @@ import com.aerospike.client.policy.{ ClientPolicy, ScanPolicy }
 import com.aerospike.client.query.PartitionFilter
 import com.scylladb.migrator.SparkUtils
 import com.scylladb.migrator.config.{ AerospikeInvalidRecordHandling, AerospikeKeyMode }
-import org.apache.spark.{ Partition, SparkContext, TaskContext }
+import org.apache.logging.log4j.Level
+import org.apache.logging.log4j.core.{ LogEvent, Logger }
+import org.apache.logging.log4j.core.appender.{ AbstractAppender, AppenderLoggingException }
+import org.apache.logging.log4j.core.config.Property
+import org.apache.spark.{ Partition, SparkContext, SparkException, TaskContext }
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.types.{ StringType, StructField, StructType }
 import com.aerospike.client.query.PartitionTracker
@@ -23,11 +27,13 @@ import java.util.concurrent.atomic.{ AtomicBoolean, AtomicInteger, AtomicReferen
 
 /** State stays in the local executor JVM, rather than serializing live threads or SDK clients. */
 private object ControlledAerospikeScan {
-  final class State(val retry: Boolean) {
+  final class State(val retry: Boolean, val scanFailure: Option[Throwable]) {
     val attempts = new AtomicInteger(0)
     val taskThread = new AtomicReference[Thread]()
     val scanThread = new AtomicReference[Thread]()
     val callbackExited = new CountDownLatch(1)
+    val recordConsumed = new CountDownLatch(1)
+    val uncaughtFailure = new AtomicReference[Throwable]()
 
     def awaitQueueWait(thread: AtomicReference[Thread], operation: String): Unit = {
       val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
@@ -86,6 +92,10 @@ private class ControlledAerospikeRDD(sc: SparkContext, config: AerospikeConnecti
   ): Unit = {
     val state = ControlledAerospikeScan.state
     state.scanThread.set(Thread.currentThread())
+    if (state.scanFailure.nonEmpty)
+      Thread
+        .currentThread()
+        .setUncaughtExceptionHandler((_, error) => state.uncaughtFailure.set(error))
     val attempt = state.attempts.incrementAndGet()
     if (state.retry && attempt == 1) {
       // The iterator has captured generation zero before this error advances it.
@@ -93,7 +103,12 @@ private class ControlledAerospikeRDD(sc: SparkContext, config: AerospikeConnecti
       throw new AerospikeException(ResultCode.TIMEOUT)
     }
     try
-      if (state.retry)
+      if (state.scanFailure.nonEmpty) {
+        callback.scanCallback(new Key("ns", "set", "before-failure"), new Record(null, 0, 0))
+        if (!state.recordConsumed.await(5, TimeUnit.SECONDS))
+          throw new AssertionError("The task did not consume the record before scan failure")
+        throw state.scanFailure.get
+      } else if (state.retry)
         Seq("retried-one", "retried-two")
           .foreach(id => callback.scanCallback(new Key("ns", "set", id), new Record(null, 0, 0)))
       else {
@@ -127,14 +142,116 @@ class AerospikeRetryTest extends munit.FunSuite {
     override def close(): Unit = { closeCount.incrementAndGet(); super.close() }
   }
 
-  private def withControlledScan(retry: Boolean)(action: ControlledAerospikeRDD => Unit): Unit =
+  private def withStartupClient(
+    action: (AerospikeConnectionConfig, AerospikeConnectionKey, DisconnectedClient) => Unit
+  ): Unit = {
+    val config =
+      connectionConfig.copy(hosts = List(s"startup-fixture-${java.util.UUID.randomUUID()}.invalid"))
+    val key = AerospikeConnectionKey.fromConfig(config, None)
+    val client = new DisconnectedClient
+    AerospikeClientHolder.getOrCreate(key)(client)
+    try action(config, key, client)
+    finally
+      try AerospikeClientHolder.release(config, None)
+      finally if (client.closeCount.get() == 0) client.close()
+  }
+
+  private def assertStartupFailure(
+    failure: Throwable
+  )(createThread: AerospikeClient => Thread): Unit =
+    withStartupClient { (config, key, client) =>
+      // A second owner makes a duplicate startup release observable as premature replacement.
+      assert(AerospikeClientHolder.acquire(key, config, None) eq client)
+      val thrown =
+        try {
+          AerospikeRDD.startScanThread(key, config, None) { acquired =>
+            assert(acquired eq client)
+            createThread(acquired)
+          }
+          null
+        } catch { case error: Throwable => error }
+      assert(thrown eq failure, "Startup must preserve the original Throwable")
+      assert(AerospikeClientHolder.getOrCreate(key) {
+        throw new AssertionError("Startup released another owner's reference")
+      } eq client)
+      AerospikeClientHolder.releaseOne(key)
+      assertStartupClientReleased(key, client)
+    }
+
+  private def assertStartupClientReleased(
+    key: AerospikeConnectionKey,
+    client: DisconnectedClient
+  ): Unit = {
+    var replacement: DisconnectedClient = null
+    val cached = AerospikeClientHolder.getOrCreate(key) {
+      replacement = new DisconnectedClient
+      replacement
+    }
+    assert(replacement != null, "Startup/producer cleanup must leave no held reference")
+    assert(cached eq replacement)
+    assertEquals(client.closeCount.get(), 1)
+  }
+
+  test("scan thread factory failure releases exactly its acquired client reference") {
+    val failure = new LinkageError("controlled thread construction failure")
+    assertStartupFailure(failure)(_ => throw failure)
+  }
+
+  test("scan thread start failure releases exactly its acquired client reference") {
+    val failure = new OutOfMemoryError("controlled thread start failure")
+    assertStartupFailure(failure) { _ =>
+      new Thread() {
+        override def start(): Unit = throw failure
+      }
+    }
+  }
+
+  test("a started scan thread retains ownership until its producer releases the reference") {
+    withStartupClient { (config, key, client) =>
+      assert(AerospikeClientHolder.acquire(key, config, None) eq client)
+      val finish = new CountDownLatch(1)
+      val failure = new AtomicReference[Throwable]()
+      val thread = AerospikeRDD.startScanThread(key, config, None) { acquired =>
+        assert(acquired eq client)
+        val producer = new Thread(() =>
+          try
+            if (!finish.await(5, TimeUnit.SECONDS))
+              throw new AssertionError("Producer was not released")
+          catch { case error: Throwable => failure.set(error) }
+          finally AerospikeClientHolder.releaseOne(key)
+        )
+        producer.setDaemon(true)
+        producer
+      }
+      try {
+        finish.countDown()
+        thread.join(5000)
+        assert(!thread.isAlive, "Producer must exit before checking its released reference")
+        assertEquals(failure.get(), null)
+        assert(AerospikeClientHolder.getOrCreate(key) {
+          throw new AssertionError("Successful startup released the producer's reference twice")
+        } eq client)
+        AerospikeClientHolder.releaseOne(key)
+        assertStartupClientReleased(key, client)
+      } finally {
+        finish.countDown()
+        thread.interrupt()
+        thread.join(5000)
+      }
+    }
+  }
+
+  private def withControlledScan(
+    retry: Boolean,
+    scanFailure: Option[Throwable] = None
+  )(action: ControlledAerospikeRDD => Unit): Unit =
     SparkUtils.withSparkSession() { spark =>
       val config =
         connectionConfig.copy(hosts = List(s"scan-fixture-${java.util.UUID.randomUUID()}.invalid"))
       val credentials = Aerospike.resolveCredentialsFromEnvOr(None)
       val key = AerospikeConnectionKey.fromConfig(config, credentials)
       val client = new DisconnectedClient
-      val state = new ControlledAerospikeScan.State(retry)
+      val state = new ControlledAerospikeScan.State(retry, scanFailure)
       ControlledAerospikeScan.state = state
       AerospikeClientHolder.getOrCreate(key)(client)
       try {
@@ -187,6 +304,62 @@ class AerospikeRetryTest extends munit.FunSuite {
         .take(1)
       assertEquals(first.map(_.getString(0)).toSeq, Seq("record-0"))
       assertEquals(ControlledAerospikeScan.state.attempts.get(), 1)
+    }
+  }
+
+  test("a throwing error appender cannot hide or replace a fatal scan failure") {
+    val scanFailure = new LinkageError("controlled fatal scan failure")
+    val loggedFailure = new AtomicReference[Throwable]()
+    val logAttempts = new AtomicInteger(0)
+    withControlledScan(retry = false, scanFailure = Some(scanFailure)) { rdd =>
+      val state = ControlledAerospikeScan.state
+      val logger = Aerospike.log.asInstanceOf[Logger]
+      val appender =
+        new AbstractAppender(
+          "aerospike-scan-error-test",
+          null,
+          null,
+          false,
+          Array.empty[Property]
+        ) {
+          override def append(event: LogEvent): Unit =
+            if (event.getLevel == Level.ERROR) {
+              loggedFailure.set(event.getThrown)
+              logAttempts.incrementAndGet()
+              throw new AppenderLoggingException("controlled scan diagnostic failure")
+            }
+        }
+      val previousLevel = logger.getLevel
+      appender.start()
+      logger.addAppender(appender)
+      logger.setLevel(Level.INFO)
+      try {
+        val thrown = intercept[SparkException] {
+          rdd
+            .map { row =>
+              ControlledAerospikeScan.state.recordConsumed.countDown()
+              row
+            }
+            .collect()
+        }
+        val causes = Iterator.iterate(thrown: Throwable)(_.getCause).takeWhile(_ != null).toList
+        assert(
+          causes.exists(error =>
+            error.isInstanceOf[LinkageError] && error.getMessage == scanFailure.getMessage
+          ),
+          "collect must fail with the original scan cause"
+        )
+        state.scanThread.get().join(5000)
+        assert(!state.scanThread.get().isAlive, "Fatal producer must finish its cleanup")
+        assert(state.uncaughtFailure.get() eq scanFailure)
+        assert(loggedFailure.get() eq scanFailure)
+        assertEquals(logAttempts.get(), 1)
+        assertEquals(state.attempts.get(), 1)
+      } finally {
+        logger.removeAppender(appender)
+        logger.setLevel(previousLevel)
+        appender.stop()
+      }
     }
   }
 
