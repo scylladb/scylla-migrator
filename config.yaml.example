@@ -1,7 +1,11 @@
 # Example configuration for migrating from Cassandra:
 source:
   type: cassandra
-  host: cassandra-server-01
+  # Contact points: one host, or several (YAML list or comma-separated string) so the
+  # migration still starts if one of them is down or restarting. DNS names or IPs; ideally
+  # one per rack. The driver discovers the rest of the cluster. A DNS name counts as a
+  # single contact point even if it resolves to several addresses.
+  host: [cassandra-server-01, cassandra-server-02, cassandra-server-03]
   port: 9042
   #optional, if not specified None will be used
   #localDC: <localdc>
@@ -282,7 +286,9 @@ source:
 # Configuration for the database you're copying into
 target:
   type: scylla
-  host: scylla 
+  # One host or several (see source.host) - listing several keeps a rolling restart of the
+  # target cluster from stopping the migration
+  host: [scylla-server-01, scylla-server-02, scylla-server-03]
   port: 9042
   #optional, if not specified None will be used
   #localDC: <localdc>

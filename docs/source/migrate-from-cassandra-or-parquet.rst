@@ -25,7 +25,11 @@ In both cases, when reading from Apache Cassandra or ScyllaDB, the type of sourc
 
   source:
     type: cassandra
-    # Host name of one of the nodes of your database cluster
+    # Host name of one or more nodes of your database cluster. Use a YAML list
+    # (e.g. [node-1, node-2, node-3]) or a comma-separated string to give several
+    # contact points (DNS names or IPs), so the migrator can still connect if one
+    # of them is down. A DNS name counts as a single contact point even if it
+    # resolves to several addresses, so list distinct per-node names.
     host: <cassandra-server-01>
     # TCP port to use for CQL
     port: 9042
@@ -137,7 +141,11 @@ The migration ``target`` can be Apache Cassandra or ScyllaDB. In both cases, we 
   target:
     # can be 'cassandra' or 'scylla', it does not matter
     type: cassandra
-    # Host name of one of the nodes of your target database cluster
+    # Host name of one or more nodes of your target database cluster. Use a YAML list
+    # (e.g. [node-1, node-2, node-3]) or a comma-separated string to give several
+    # contact points (DNS names or IPs), so the migrator can still connect if one
+    # of them is down. A DNS name counts as a single contact point even if it
+    # resolves to several addresses, so list distinct per-node names.
     host: <scylla-server-01>
     # TCP port for CQL
     port: 9042
