@@ -113,4 +113,32 @@ class SourceSettingsCapabilityTest extends munit.FunSuite {
     )
     assert(!source.supportsSavepoints)
   }
+
+  test(
+    "Aerospike does not support savepoints (custom partition-range RDD lacks durable progress)"
+  ) {
+    val source = SourceSettings.Aerospike(
+      keyMode            = com.scylladb.migrator.config.AerospikeKeyMode.StringKey,
+      hosts              = Seq("aerospike.example.com"),
+      port               = None,
+      namespace          = "test",
+      set                = "users",
+      splitCount         = None,
+      queueSize          = None,
+      credentials        = None,
+      connectTimeoutMs   = None,
+      socketTimeoutMs    = None,
+      tlsName            = None,
+      schema             = scala.collection.immutable.ListMap.empty,
+      pollTimeoutSeconds = None,
+      preserveTTL        = None,
+      preserveGeneration = None,
+      totalTimeoutMs     = None,
+      maxScanRetries     = None,
+      maxPollRetries     = None,
+      maxConnsPerNode    = None,
+      connPoolsPerNode   = None
+    )
+    assert(!source.supportsSavepoints)
+  }
 }

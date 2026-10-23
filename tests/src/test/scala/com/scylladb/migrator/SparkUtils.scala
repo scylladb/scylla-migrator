@@ -212,6 +212,11 @@ object SparkUtils {
           host = "localhost",
           port = mysqlHostPortMap.getOrElse(m.host, m.port)
         )
+      case a: SourceSettings.Aerospike =>
+        // Apply Aerospike host/port overrides when remapping a source for local tests.
+        val host = sys.env.getOrElse("AEROSPIKE_HOST", "localhost")
+        val port = sys.env.get("AEROSPIKE_PORT").map(_.toInt).orElse(a.port).getOrElse(3000)
+        a.copy(hosts = Seq(host), port = Some(port))
     }
     val newTarget = config.target match {
       case s: TargetSettings.Scylla if s.cloud.isEmpty =>
