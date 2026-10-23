@@ -7,7 +7,6 @@ import io.circe.generic.extras.Configuration
 import io.circe.generic.extras.semiauto.deriveConfiguredDecoder
 import io.circe.syntax._
 import io.circe.yaml.parser
-import io.circe.yaml.syntax._
 import io.circe.{ Decoder, DecodingFailure, Encoder, Error, Json, JsonObject }
 import org.apache.hadoop.conf.{ Configuration => HadoopConfiguration }
 
@@ -21,8 +20,9 @@ case class MigratorConfig(
   skipParquetFiles: Option[Set[String]],
   validation: Option[Validation]
 ) {
-  def render: String = this.asJson.asYaml.spaces2
-  def renderRedacted: String = MigratorConfig.redactSecrets(this.asJson).asYaml.spaces2
+  def render: String = MigratorConfig.yamlPrinter.pretty(this.asJson)
+  def renderRedacted: String =
+    MigratorConfig.yamlPrinter.pretty(MigratorConfig.redactSecrets(this.asJson))
   override def toString: String = renderRedacted
 
   def getRenamesOrNil: List[Rename] = renames.getOrElse(Nil)
@@ -37,6 +37,8 @@ case class MigratorConfig(
 
 }
 object MigratorConfig {
+  // Aerospike's declared bin order determines its DataFrame column order on reload.
+  private val yamlPrinter = io.circe.yaml.Printer.spaces2.copy(preserveOrder = true)
   private[migrator] val RedactedValue = "<redacted>"
   implicit val config: Configuration = Configuration.default.withDefaults
 

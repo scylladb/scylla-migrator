@@ -43,6 +43,43 @@ class MigratorConfigTest extends munit.FunSuite {
   private def parquetConfig(target: String, savepoints: String): String =
     s"""${parquetSource}${target}${savepoints}"""
 
+  test("Aerospike schema column order survives ordinary and redacted YAML rendering") {
+    val config = parseConfig(
+      """source:
+        |  type: aerospike
+        |  keyMode: string
+        |  hosts: [unreachable.invalid]
+        |  namespace: ns
+        |  set: users
+        |  credentials:
+        |    username: user
+        |    password: private-password
+        |  preserveTTL: true
+        |  preserveGeneration: true
+        |  schema:
+        |    z: string
+        |    a: long
+        |    y: double
+        |    b: binary
+        |    x: list<string>
+        |""".stripMargin + parquetTarget
+    )
+    val expectedBins = Seq("z", "a", "y", "b", "x")
+    val expectedColumns = Seq("aero_key") ++ expectedBins ++ Seq("aero_ttl", "aero_generation")
+    for (rendered <- Seq(config.render, config.renderRedacted)) {
+      val reloaded = parseConfig(rendered)
+      val source = reloaded.source.asInstanceOf[SourceSettings.Aerospike]
+      assertEquals(source.schema.keys.toSeq, expectedBins)
+      assertEquals(
+        com.scylladb.migrator.readers.Aerospike.buildSchema(source).fieldNames.toSeq,
+        expectedColumns
+      )
+      assert(!rendered.contains("savepoints:"))
+    }
+    assertEquals(parseConfig(config.render), config)
+    assert(!config.renderRedacted.contains("private-password"))
+  }
+
   test("existing file savepoints config decodes as filesystem target") {
     val config =
       """source:
