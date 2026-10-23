@@ -74,6 +74,30 @@ class ContactPointsTest extends munit.FunSuite {
     )
   }
 
+  test("config.yaml.example: source and target host lists parse") {
+    val example = Seq(
+      java.nio.file.Paths.get("config.yaml.example"),
+      java.nio.file.Paths.get("..", "config.yaml.example")
+    ).find(java.nio.file.Files.exists(_)).getOrElse(fail("config.yaml.example not found"))
+    val config = MigratorConfig.loadFrom(example.toString)
+    config.source match {
+      case c: SourceSettings.Cassandra =>
+        assertEquals(
+          ContactPoints.split(c.host),
+          List("cassandra-server-01", "cassandra-server-02", "cassandra-server-03")
+        )
+      case other => fail(s"Expected Cassandra source, got $other")
+    }
+    config.target match {
+      case s: TargetSettings.Scylla =>
+        assertEquals(
+          ContactPoints.split(s.host),
+          List("scylla-server-01", "scylla-server-02", "scylla-server-03")
+        )
+      case other => fail(s"Expected Scylla target, got $other")
+    }
+  }
+
   test("split: trims whitespace and drops empty entries") {
     assertEquals(ContactPoints.split(" a , b,,c "), List("a", "b", "c"))
   }
