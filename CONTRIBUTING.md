@@ -164,7 +164,7 @@ Publishing a new release includes building and uploading the release artifacts, 
 
 ### Building and Uploading the Release Artifacts
 
-Create a new [GitHub release](https://github.com/scylladb/scylla-migrator/releases) off the branch `master`, give it a tag name (please see below), a title, and a description, and then click Publish. A workflow will be automatically triggered and will build the application fat-jar and upload it as a release asset.
+Push a version tag (for example, `v2.1.7`) on the release commit from `master`. The release workflow builds the fat-jar, creates a GitHub release with generated notes, uploads the JAR, and invokes the existing Docker publication workflow. Reruns reuse an existing published release and replace its JAR without overwriting its description. Initial tag-push attempts invoke Docker only when they create the release; an already published release uses its existing release-event Docker path. Explicit tag-workflow reruns still invoke Docker for recovery, and the Docker workflow also retains manual dispatch. An existing draft or unpublished release stops publication until a maintainer publishes or removes it. Manually publishing a GitHub release remains supported and still triggers artifact and Docker publication.
 
 Rules for the release tag name:
 - Make sure to use tag names like `v1.2.3`, starting with `v` and followed by a [semantic version number](https://semver.org/).
