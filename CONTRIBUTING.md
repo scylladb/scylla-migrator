@@ -195,6 +195,8 @@ gh pr view 123 --repo scylladb/scylla-migrator --json labels
 
 Confirm the actual omission label agrees with the verified result, including visible runtime/mixed PRs. A green run alone does not prove an older classification is current. New merges, revision changes, or manual label changes require another check. Publication remains asynchronous and does not wait for classification. There is no automated classification/release synchronization barrier, and no follow-up automation is scheduled. Missed checks can leave omissions or unwanted support entries in published notes; publisher reruns preserve those descriptions. A manual omission label may be removed by the next classification if the files do not qualify.
 
+The label controls GitHub release notes only. Repository-local Jira callers ignore whole-name `omit-from-release-notes` add/remove events, including manual changes, while preserving other events. Conditions use Actions' case-insensitive string comparison; suffixed names retain normal routing. Default-`GITHUB_TOKEN` label events do not start those workflows. Existing Jira copies are not cleaned, and other sync paths may restore copied metadata; shared automation is unchanged.
+
 Run focused automation checks without starting migration services:
 
 ```sh
