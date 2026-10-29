@@ -7,6 +7,7 @@ import com.datastax.spark.connector.types.CassandraOption
 import com.scylladb.migrator.Connectors
 import com.scylladb.migrator.config.{ Rename, SourceSettings, TargetSettings }
 import com.scylladb.migrator.readers.TimestampColumns
+import com.scylladb.migrator.scylla.CollectionAppendWrite
 import com.scylladb.migrator.schema.SchemaResolver
 import org.apache.logging.log4j.{ LogManager, Logger }
 import org.apache.spark.rdd.RDD
@@ -156,26 +157,29 @@ object Scylla {
   /** Strip trailing zeros from decimal cells when the target requests it.
     *
     * Spark's conversion from its internal Decimal type to `java.math.BigDecimal` pads the value
-    * with trailing zeros matching the Decimal scale; some users don't want that. Handles both plain
-    * `java.math.BigDecimal` (DataFrame rows) and `CassandraOption.Value(BigDecimal)` (exploded RDD
-    * / collection-append rows). No-op when disabled. Shared by the base and collection-append write
-    * paths so they strip decimals symmetrically.
+    * with trailing zeros matching the Decimal scale; some users don't want that. Handles plain
+    * `java.math.BigDecimal` (DataFrame rows), `CassandraOption.Value(BigDecimal)` (exploded RDD /
+    * collection-append rows), and decimals nested in collections (e.g. `set<decimal>`,
+    * `map<_, decimal>`). No-op when disabled. Shared by the base and collection-append write paths
+    * so they strip decimals symmetrically.
     */
   private def stripTrailingZerosIfEnabled(
     target: TargetSettings.Scylla,
     rdd: RDD[Row]
   ): RDD[Row] =
     if (!target.stripTrailingZerosForDecimals) rdd
-    else
-      rdd.map { row =>
-        Row.fromSeq(row.toSeq.map {
-          case x: java.math.BigDecimal =>
-            x.stripTrailingZeros()
-          case CassandraOption.Value(x: java.math.BigDecimal) =>
-            CassandraOption.Value(x.stripTrailingZeros())
-          case x => x
-        })
-      }
+    else rdd.map(row => Row.fromSeq(row.toSeq.map(stripDecimalTrailingZeros)))
+
+  /** [[stripTrailingZerosIfEnabled]] for one cell value, recursing into collections. */
+  private[migrator] def stripDecimalTrailingZeros(value: Any): Any = value match {
+    case x: java.math.BigDecimal  => x.stripTrailingZeros()
+    case CassandraOption.Value(x) => CassandraOption.Value(stripDecimalTrailingZeros(x))
+    case m: scala.collection.Map[_, _] =>
+      m.map { case (k, v) => stripDecimalTrailingZeros(k) -> stripDecimalTrailingZeros(v) }
+    case s: scala.collection.Seq[_] => s.map(stripDecimalTrailingZeros)
+    case s: scala.collection.Set[_] => s.map(stripDecimalTrailingZeros)
+    case x                          => x
+  }
 
   /** Shared write path used by both [[writeRowRDD]] and [[writeDataframe]], invoked once internal
     * columns have been dropped and renames applied. `schema0` is the pre-rename schema, required by
@@ -331,11 +335,12 @@ object Scylla {
 
   /** Write per-element collection-timestamp rows for a single non-frozen collection column.
     *
-    * Each row is `[primary key columns..., singleton/grouped collection value, ttl, writetime]`
-    * (positionally aligned with `rowSchema`, whose last two fields are `ttl`/`writetime`). The
-    * collection column is written with `col = col + ?` (CQL append) so only the elements carried by
-    * that row are added, while the per-row `USING TTL ? AND TIMESTAMP ?` restores each element's
-    * original TTL/WRITETIME.
+    * Each row is `[primary key columns..., singleton/grouped collection value, ttl, writetime,
+    * overwrite]` (positionally aligned with `rowSchema`; see [[CollectionAppendWrite]]). Rows
+    * flagged [[CollectionAppendWrite.OverwriteColumn]] are written first with `col = ?`, whose
+    * collection tombstone at `writetime - 1` clears target elements older than every source
+    * element; the others with `col = col + ?` (CQL append). The per-row
+    * `USING TTL ? AND TIMESTAMP ?` restores each element's original TTL/WRITETIME.
     *
     * `tokenRangeAccumulator` must be supplied ONLY for the final write pass of a migration (the
     * last collection-append column). Because passes run sequentially, a token range is only truly
@@ -352,7 +357,9 @@ object Scylla {
     tokenRangeAccumulator: Option[TokenRangeAccumulator],
     source: SourceSettings
   )(implicit spark: SparkSession): Unit = {
-    val renamedSchema = renameSchemaFields(rowSchema, renames)
+    val overwriteIndex = rowSchema.fieldIndex(CollectionAppendWrite.OverwriteColumn)
+    val writeSchema = StructType(rowSchema.fields.patch(overwriteIndex, Nil, 1))
+    val renamedSchema = renameSchemaFields(writeSchema, renames)
     // Resolve the target column name with the SAME transitive fold as `renameSchemaFields`
     // (renames apply sequentially: a->b then b->c yields "c"). A `collectFirst` on the first hop
     // would stop at "b", mismatch the renamed field "c" in the selector below, and silently fall
@@ -377,11 +384,11 @@ object Scylla {
         timestamp        = TimestampOption.perRow("writetime")
       )
 
-    val columnSelector = SomeColumns(
+    def columnSelector(behavior: CollectionBehavior) = SomeColumns(
       ArraySeq.unsafeWrapArray(renamedSchema.fields.map { field =>
         field.name match {
           case "ttl" | "writetime"             => field.name: ColumnRef
-          case n if n == renamedCollectionName => CollectionColumnName(n, None, CollectionAppend)
+          case n if n == renamedCollectionName => CollectionColumnName(n, None, behavior)
           case n                               => n: ColumnRef
         }
       }): _*
@@ -395,8 +402,8 @@ object Scylla {
     // Mirror the safety steps `writeCleanedRdd` applies to the base write so the append pass does
     // not behave asymmetrically. Without this, a Parquet source (where `dropNullPrimaryKeys`
     // auto-defaults to true) drops null-PK rows in the base write but retries them forever here
-    // (issue #262), and set<decimal>/map<_,decimal> elements are appended without the trailing-zero
-    // stripping applied to scalar decimals, producing spurious validation diffs.
+    // (issue #262), and set<decimal>/map<_,decimal> elements would be appended without the
+    // trailing-zero stripping applied to the base write, producing spurious validation diffs.
     val rddStripped = stripTrailingZerosIfEnabled(target, rdd)
 
     val (finalRdd, nullPkRowsDropped) =
@@ -423,10 +430,23 @@ object Scylla {
         )
       }
 
-    finalRdd.saveToCassandra(
+    def rowsWithOverwrite(overwrite: Boolean): RDD[Row] =
+      finalRdd
+        .filter(_.getBoolean(overwriteIndex) == overwrite)
+        .map(row => Row.fromSeq(row.toSeq.patch(overwriteIndex, Nil, 1)))
+
+    // Overwrites first; only the append write records token ranges, so a recorded range means both
+    // writes committed it. Both are narrow transformations of `rdd` and keep its input partitions.
+    rowsWithOverwrite(overwrite = true).saveToCassandra(
       target.keyspace,
       target.table,
-      columnSelector,
+      columnSelector(CollectionOverwrite),
+      writeConf
+    )(connector, SqlRowWriter.Factory)
+    rowsWithOverwrite(overwrite = false).saveToCassandra(
+      target.keyspace,
+      target.table,
+      columnSelector(CollectionAppend),
       writeConf,
       tokenRangeAccumulator = tokenRangeAccumulator
     )(connector, SqlRowWriter.Factory)

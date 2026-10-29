@@ -3,11 +3,15 @@ package com.scylladb.migrator.scylla
 import com.datastax.oss.driver.api.core.CqlSession
 import com.datastax.oss.driver.api.core.cql.Row
 import com.scylladb.migrator.{ CassandraCompat, Integration, TestFileUtils }
-import com.scylladb.migrator.SparkUtils.successfullyPerformMigration
+import com.scylladb.migrator.SparkUtils.{
+  successfullyPerformMigration,
+  successfullyPerformMigrationWithAutoResume
+}
+import com.scylladb.migrator.config.MigratorConfig
 import org.junit.experimental.categories.Category
 
 import java.net.InetSocketAddress
-import java.nio.file.{ Files, Paths }
+import java.nio.file.{ Files, Path, Paths }
 import scala.jdk.CollectionConverters._
 
 /** End-to-end coverage for per-element TTL/WRITETIME preservation of non-frozen collections across
@@ -27,6 +31,9 @@ class Cassandra5CollectionTimestampParquetRoundTripTest extends munit.FunSuite {
   private val exportConfig = "cassandra5-to-parquet-collection-timestamps.yaml"
   private val restoreConfig = "parquet-to-cassandra5-collection-timestamps.yaml"
   private val parquetDir = Paths.get("docker/parquet/collection-timestamps")
+  private val resumeConfig = "parquet-to-cassandra5-collection-timestamps-resume.yaml"
+  private val resumeTargetTbl = "collts_pq_resume_dst"
+  private val resumeSavepointsDir = Paths.get("docker/spark-master/collection-timestamps-resume")
 
   private val cassandra5: Fixture[CqlSession] = new Fixture[CqlSession]("cassandra5") {
     private var session: CqlSession = null
@@ -52,7 +59,8 @@ class Cassandra5CollectionTimestampParquetRoundTripTest extends munit.FunSuite {
     session.execute(s"DROP TABLE IF EXISTS ${keyspace}.${table}")
     session.execute(
       s"CREATE TABLE ${keyspace}.${table} " +
-        "(id text PRIMARY KEY, name text, tags set<int>, attrs map<text,int>)"
+        "(id text PRIMARY KEY, name text, tags set<int>, attrs map<text,int>, " +
+        "ftags frozen<set<text>>, fattrs frozen<map<text,int>>)"
     )
   }
 
@@ -91,6 +99,42 @@ class Cassandra5CollectionTimestampParquetRoundTripTest extends munit.FunSuite {
     )
   }
 
+  // (value, WRITETIME, TTL) of a frozen collection column: a single cell, so scalar metadata.
+  private def readFrozen(
+    session: CqlSession,
+    table: String,
+    id: String,
+    column: String
+  ): (AnyRef, Long, Integer) = {
+    val row = session
+      .execute(
+        s"SELECT ${column}, WRITETIME(${column}) AS wt, TTL(${column}) AS t " +
+          s"FROM ${keyspace}.${table} WHERE id = '${id}'"
+      )
+      .one()
+    assert(row != null, s"expected a row for id=${id} in ${table}")
+    (
+      row.getObject(column),
+      row.getLong("wt"),
+      if (row.isNull("t")) null else Integer.valueOf(row.getInt("t"))
+    )
+  }
+
+  private def assertFrozenPreserved(session: CqlSession, id: String, column: String): Unit = {
+    val (srcValue, srcWt, srcTtl) = readFrozen(session, sourceTbl, id, column)
+    val (dstValue, dstWt, dstTtl) = readFrozen(session, targetTbl, id, column)
+    assertEquals(dstValue, srcValue, s"$column value must match")
+    assertEquals(dstWt, srcWt, s"$column WRITETIME must be preserved")
+    if (srcTtl == null) assertEquals(dstTtl, null, s"$column TTL expected null")
+    else {
+      assert(dstTtl != null, s"$column TTL expected non-null")
+      assert(
+        math.abs(srcTtl.intValue() - dstTtl.intValue()) <= 600,
+        s"$column TTL not preserved within tolerance: src=${srcTtl} dst=${dstTtl}"
+      )
+    }
+  }
+
   test("preserves per-element TTL/WRITETIME of non-frozen collections through Parquet") {
     val session = cassandra5()
     createTable(session, sourceTbl)
@@ -101,6 +145,15 @@ class Cassandra5CollectionTimestampParquetRoundTripTest extends munit.FunSuite {
     session.execute(
       s"INSERT INTO ${keyspace}.${sourceTbl} (id, name) VALUES ('${id}', 'alice') " +
         s"USING TIMESTAMP 1000000000000"
+    )
+    // Frozen collections are single cells: their TTL/WRITETIME go through the base write.
+    session.execute(
+      s"UPDATE ${keyspace}.${sourceTbl} USING TIMESTAMP 7000000000000 AND TTL 4000000 " +
+        s"SET ftags = {'x', 'y'} WHERE id='${id}'"
+    )
+    session.execute(
+      s"UPDATE ${keyspace}.${sourceTbl} USING TIMESTAMP 8000000000000 " +
+        s"SET fattrs = {'k': 1, 'j': 2} WHERE id='${id}'"
     )
 
     val tagWrites = Seq(
@@ -147,6 +200,9 @@ class Cassandra5CollectionTimestampParquetRoundTripTest extends munit.FunSuite {
     val src = readMeta(session, sourceTbl, id)
     val dst = readMeta(session, targetTbl, id)
 
+    assertFrozenPreserved(session, id, "ftags")
+    assertFrozenPreserved(session, id, "fattrs")
+
     assertEquals(dst.name, src.name)
     assertEquals(dst.nameWt, src.nameWt, "scalar WRITETIME must survive the Parquet round-trip")
 
@@ -168,5 +224,82 @@ class Cassandra5CollectionTimestampParquetRoundTripTest extends munit.FunSuite {
         )
       }
     }
+  }
+
+  /** Files listed as processed by the newest savepoint in `dir` (empty when there is none). */
+  private def skippedFilesInLatestSavepoint(dir: Path): Set[String] =
+    if (!Files.exists(dir)) Set.empty
+    else
+      Files
+        .list(dir)
+        .iterator()
+        .asScala
+        .filter(p => Files.isRegularFile(p) && p.getFileName.toString.endsWith(".yaml"))
+        .maxByOption(p => (Files.getLastModifiedTime(p).toMillis, p.getFileName.toString))
+        .flatMap(p => MigratorConfig.loadFrom(p.toString).skipParquetFiles)
+        .getOrElse(Set.empty)
+
+  test("an interrupted multi-pass restore records no file and resumes to the full result") {
+    val session = cassandra5()
+    createTable(session, sourceTbl)
+    TestFileUtils.deleteRecursive(parquetDir.toFile)
+    TestFileUtils.deleteRecursive(resumeSavepointsDir.toFile)
+
+    val id = "r1"
+    session.execute(
+      s"INSERT INTO ${keyspace}.${sourceTbl} (id, name) VALUES ('${id}', 'alice') " +
+        "USING TIMESTAMP 1000000000000"
+    )
+    Seq(20 -> 2000000000000L, 10 -> 1000000000000L).foreach { case (v, wt) =>
+      session.execute(
+        s"UPDATE ${keyspace}.${sourceTbl} USING TIMESTAMP ${wt} AND TTL 2000000 " +
+          s"SET tags = tags + {${v}} WHERE id='${id}'"
+      )
+    }
+    Seq(("b", 2, 2000000000000L), ("a", 1, 1000000000000L)).foreach { case (k, v, wt) =>
+      session.execute(
+        s"UPDATE ${keyspace}.${sourceTbl} USING TIMESTAMP ${wt} " +
+          s"SET attrs = attrs + {'${k}': ${v}} WHERE id='${id}'"
+      )
+    }
+    successfullyPerformMigration(exportConfig)
+
+    // The target lacks `tags`, the LAST collection-append pass (passes run in column-name order),
+    // so the base write and the `attrs` pass succeed and the `tags` pass fails.
+    session.execute(s"DROP TABLE IF EXISTS ${keyspace}.${resumeTargetTbl}")
+    session.execute(
+      s"CREATE TABLE ${keyspace}.${resumeTargetTbl} " +
+        "(id text PRIMARY KEY, name text, attrs map<text,int>, " +
+        "ftags frozen<set<text>>, fattrs frozen<map<text,int>>)"
+    )
+    intercept[Throwable](successfullyPerformMigration(resumeConfig))
+
+    val partial = session
+      .execute(s"SELECT name, attrs FROM ${keyspace}.${resumeTargetTbl} WHERE id = '${id}'")
+      .one()
+    assert(partial != null, "the base write should have run before the failing pass")
+    assertEquals(partial.getString("name"), "alice")
+    assertEquals(
+      skippedFilesInLatestSavepoint(resumeSavepointsDir),
+      Set.empty[String],
+      "no Parquet file may be recorded as processed before every write pass has succeeded"
+    )
+
+    // Fix the target and resume from the savepoint: every file is replayed.
+    session.execute(s"ALTER TABLE ${keyspace}.${resumeTargetTbl} ADD tags set<int>")
+    successfullyPerformMigrationWithAutoResume(resumeConfig)
+
+    val src = readMeta(session, sourceTbl, id)
+    val dst = readMeta(session, resumeTargetTbl, id)
+    assertEquals(dst.name, src.name)
+    assertEquals(dst.nameWt, src.nameWt)
+    assertEquals(dst.tags.sorted, src.tags.sorted, "the interrupted pass must be completed")
+    assertEquals(dst.tagsWt, src.tagsWt)
+    assertEquals(dst.attrs, src.attrs)
+    assertEquals(dst.attrsWt, src.attrsWt)
+    assert(
+      skippedFilesInLatestSavepoint(resumeSavepointsDir).nonEmpty,
+      "the successful resume should record the processed files"
+    )
   }
 }

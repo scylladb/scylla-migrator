@@ -363,4 +363,39 @@ class CassandraRowComparisonTest extends munit.FunSuite {
     )
   }
 
+  test("Scalar TTL present on one side only is a DifferingTtls, not a cardinality mismatch") {
+    val left = CassandraRow.fromMap(Map("id" -> "r1", "v" -> 1, "v_ttl" -> 100))
+    val right = CassandraRow.fromMap(Map("id" -> "r1", "v" -> 1, "v_ttl" -> null))
+    val result = compareItems(left, Some(right))
+    // CQL TTL is in seconds; the reported diff is in millis.
+    assertEquals(
+      result.toList.flatMap(_.items),
+      List(Item.DifferingTtls(List("v_ttl" -> 100000L)))
+    )
+  }
+
+  test("Scalar WRITETIME present on one side only is a DifferingWritetimes") {
+    val left = CassandraRow.fromMap(Map("id" -> "r1", "v" -> 1, "v_writetime" -> null))
+    val right = CassandraRow.fromMap(Map("id" -> "r1", "v" -> 1, "v_writetime" -> 5000L))
+    val result = compareItems(left, Some(right))
+    assertEquals(
+      result.toList.flatMap(_.items),
+      List(Item.DifferingWritetimes(List("v_writetime" -> 5000L)))
+    )
+  }
+
+  test("Per-element metadata present on one side only stays a cardinality mismatch") {
+    val left = CassandraRow.fromMap(
+      Map("id" -> "r1", "tags" -> Set(1), "tags_writetime" -> List(1000L))
+    )
+    val right = CassandraRow.fromMap(
+      Map("id" -> "r1", "tags" -> Set(1), "tags_writetime" -> null)
+    )
+    val result = compareItems(left, Some(right))
+    assert(
+      result.exists(_.items.exists(_.isInstanceOf[Item.MetadataCardinalityMismatch])),
+      s"expected a MetadataCardinalityMismatch failure, got ${result}"
+    )
+  }
+
 }

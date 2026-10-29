@@ -49,7 +49,8 @@ class Cassandra5CollectionTimestampPreservationTest extends munit.FunSuite {
     session.execute(s"DROP TABLE IF EXISTS ${keyspace}.${table}")
     session.execute(
       s"CREATE TABLE ${keyspace}.${table} " +
-        "(id text PRIMARY KEY, name text, tags set<int>, attrs map<text,int>)"
+        "(id text PRIMARY KEY, name text, tags set<int>, attrs map<text,int>, " +
+        "ftags frozen<set<text>>, fattrs frozen<map<text,int>>)"
     )
   }
 
@@ -88,6 +89,42 @@ class Cassandra5CollectionTimestampPreservationTest extends munit.FunSuite {
     )
   }
 
+  // (value, WRITETIME, TTL) of a frozen collection column: a single cell, so scalar metadata.
+  private def readFrozen(
+    session: CqlSession,
+    table: String,
+    id: String,
+    column: String
+  ): (AnyRef, Long, Integer) = {
+    val row = session
+      .execute(
+        s"SELECT ${column}, WRITETIME(${column}) AS wt, TTL(${column}) AS t " +
+          s"FROM ${keyspace}.${table} WHERE id = '${id}'"
+      )
+      .one()
+    assert(row != null, s"expected a row for id=${id} in ${table}")
+    (
+      row.getObject(column),
+      row.getLong("wt"),
+      if (row.isNull("t")) null else Integer.valueOf(row.getInt("t"))
+    )
+  }
+
+  private def assertFrozenPreserved(session: CqlSession, id: String, column: String): Unit = {
+    val (srcValue, srcWt, srcTtl) = readFrozen(session, sourceTbl, id, column)
+    val (dstValue, dstWt, dstTtl) = readFrozen(session, targetTbl, id, column)
+    assertEquals(dstValue, srcValue, s"$column value must match")
+    assertEquals(dstWt, srcWt, s"$column WRITETIME must be preserved")
+    if (srcTtl == null) assertEquals(dstTtl, null, s"$column TTL expected null")
+    else {
+      assert(dstTtl != null, s"$column TTL expected non-null")
+      assert(
+        math.abs(srcTtl.intValue() - dstTtl.intValue()) <= 600,
+        s"$column TTL not preserved within tolerance: src=${srcTtl} dst=${dstTtl}"
+      )
+    }
+  }
+
   test("preserves per-element TTL/WRITETIME of non-frozen set and map columns") {
     val session = cassandra5()
     createTable(session, sourceTbl)
@@ -98,6 +135,15 @@ class Cassandra5CollectionTimestampPreservationTest extends munit.FunSuite {
     session.execute(
       s"INSERT INTO ${keyspace}.${sourceTbl} (id, name) VALUES ('${id}', 'alice') " +
         s"USING TIMESTAMP 1000000000000"
+    )
+    // Frozen collections are single cells: their TTL/WRITETIME go through the base write.
+    session.execute(
+      s"UPDATE ${keyspace}.${sourceTbl} USING TIMESTAMP 7000000000000 AND TTL 4000000 " +
+        s"SET ftags = {'x', 'y'} WHERE id='${id}'"
+    )
+    session.execute(
+      s"UPDATE ${keyspace}.${sourceTbl} USING TIMESTAMP 8000000000000 " +
+        s"SET fattrs = {'k': 1, 'j': 2} WHERE id='${id}'"
     )
 
     // Set elements, each with its own WRITETIME, no TTL. 5+ elements to exceed small-collection
@@ -140,6 +186,9 @@ class Cassandra5CollectionTimestampPreservationTest extends munit.FunSuite {
     val src = readMeta(session, sourceTbl, id)
     val dst = readMeta(session, targetTbl, id)
 
+    assertFrozenPreserved(session, id, "ftags")
+    assertFrozenPreserved(session, id, "fattrs")
+
     // Scalar preserved.
     assertEquals(dst.name, src.name)
     assertEquals(dst.nameWt, src.nameWt, "scalar WRITETIME must be preserved")
@@ -167,5 +216,42 @@ class Cassandra5CollectionTimestampPreservationTest extends munit.FunSuite {
         )
       }
     }
+  }
+
+  test("removes target collection elements older than every source element") {
+    val session = cassandra5()
+    createTable(session, sourceTbl)
+    createTable(session, targetTbl)
+
+    val id = "r2"
+    session.execute(
+      s"UPDATE ${keyspace}.${sourceTbl} USING TIMESTAMP 2000000000000 " +
+        s"SET tags = tags + {1}, attrs = attrs + {'a': 1} WHERE id='${id}'"
+    )
+    session.execute(
+      s"UPDATE ${keyspace}.${sourceTbl} USING TIMESTAMP 3000000000000 " +
+        s"SET tags = tags + {2} WHERE id='${id}'"
+    )
+
+    // A populated target: stale target-only elements and a stale value for a shared key, all
+    // older than the source, plus one target-only element NEWER than every source element.
+    session.execute(
+      s"UPDATE ${keyspace}.${targetTbl} USING TIMESTAMP 1000000000000 " +
+        s"SET tags = tags + {1, 99}, attrs = attrs + {'a': 42, 'zz': 7} WHERE id='${id}'"
+    )
+    session.execute(
+      s"UPDATE ${keyspace}.${targetTbl} USING TIMESTAMP 9000000000000 " +
+        s"SET tags = tags + {777} WHERE id='${id}'"
+    )
+
+    successfullyPerformMigration(configFile)
+
+    val dst = readMeta(session, targetTbl, id)
+    // Older target-only entries are gone and the shared key carries the source value; the newer
+    // target-only element wins by last-write-wins, exactly as it would against any source write.
+    assertEquals(dst.tags.sorted, List(1, 2, 777))
+    assertEquals(dst.tagsWt, List(2000000000000L, 3000000000000L, 9000000000000L))
+    assertEquals(dst.attrs, Map("a" -> 1))
+    assertEquals(dst.attrsWt, List(2000000000000L))
   }
 }

@@ -3,6 +3,7 @@ package com.scylladb.migrator.readers
 import com.datastax.spark.connector._
 import com.datastax.spark.connector.cql.{ CassandraConnector, ColumnDef, Schema, TableDef }
 import com.datastax.spark.connector.rdd.ReadConf
+import com.datastax.oss.driver.api.core.servererrors.{ InvalidQueryException, SyntaxError }
 import com.datastax.oss.driver.api.core.cql.{ PreparedStatement, Row => DriverRow }
 import com.datastax.spark.connector.rdd.partitioner.dht.Token
 import com.datastax.spark.connector.types.{
@@ -27,6 +28,7 @@ import org.apache.spark.storage.StorageLevel
 import org.apache.spark.sql.cassandra.{ CassandraSQLRow, DataTypeConverter }
 import org.apache.spark.sql.types.{
   ArrayType,
+  BooleanType,
   ByteType,
   DataType,
   IntegerType,
@@ -47,7 +49,6 @@ import com.scylladb.migrator.scylla.{ CollectionAppendWrite, SourceDataFrame }
 import scala.collection.immutable.ArraySeq
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
-import scala.util.Try
 import java.nio.charset.StandardCharsets
 
 object Cassandra {
@@ -71,18 +72,18 @@ object Cassandra {
       .getOrElse(1000000)
 
   /** Max number of collection keys read per subscript point-read statement (ScyllaDB 2026.2+ path).
-    * Each key contributes two bind markers (`WRITETIME(col[?]), TTL(col[?])`), so a single
-    * statement would otherwise mint `2*N` markers for an `N`-element cell and blow past the
-    * native-protocol limit (65535) around 32k elements — long before [[LargeCollectionHardLimit]].
-    * Reading in fixed-width chunks bounds both the marker count (`2*chunk`) and the number of
-    * distinct prepared statements (one per chunk length). Override with
-    * `-Dscylla.migrator.subscriptKeyChunkSize=<n>`.
+    * Each key contributes up to three bind markers (`col[?], WRITETIME(col[?]), TTL(col[?])` for a
+    * map), so a single statement would otherwise mint `3*N` markers for an `N`-element cell and
+    * blow past the native-protocol limit (65535) around 21k elements — long before
+    * [[LargeCollectionHardLimit]]. Reading in fixed-width chunks bounds both the marker count
+    * (`3*chunk`) and the number of distinct prepared statements (one per chunk length). Override
+    * with `-Dscylla.migrator.subscriptKeyChunkSize=<n>`.
     */
   private val SubscriptKeyChunkSize: Int = {
-    // Each key contributes 2 markers, and the native protocol caps a statement at 65535, so anything
-    // at/above ~32K would reintroduce the very overflow this chunking prevents. Reject an
+    // Each key contributes up to 3 markers, and the native protocol caps a statement at 65535, so
+    // anything at/above ~21K would reintroduce the very overflow this chunking prevents. Reject an
     // out-of-range override loudly instead of silently falling back to the default.
-    val MaxChunk = 30000
+    val MaxChunk = 20000
     sys.props.get("scylla.migrator.subscriptKeyChunkSize") match {
       case None => 100
       case Some(raw) =>
@@ -90,7 +91,7 @@ object Cassandra {
         parsed.filter(n => n > 0 && n <= MaxChunk).getOrElse {
           throw new IllegalArgumentException(
             s"-Dscylla.migrator.subscriptKeyChunkSize=$raw is invalid: expected an integer in " +
-              s"[1, $MaxChunk]. Each collection key uses 2 bind markers, so a larger chunk can " +
+              s"[1, $MaxChunk]. Each collection key uses up to 3 bind markers, so a larger chunk can " +
               "exceed the native-protocol limit of 65535 markers per statement."
           )
         }
@@ -158,45 +159,76 @@ object Cassandra {
     case _                             => 0
   }
 
-  /** Decide how to read per-element collection metadata from the source by PREPARing (no execution,
-    * no data read) probe statements, so the choice is made before the distributed read:
+  /** Decide how to read per-element collection metadata from an endpoint by PREPARing (no
+    * execution, no data read) probe statements, so the choice is made before the distributed read:
     *
     *   1. `WRITETIME(col), TTL(col)` (whole-collection list form) — Cassandra 5.0+ ⇒
     *      [[ArrayMetadataRead]].
     *   2. else `WRITETIME(col[?]), TTL(col[?])` (per-element subscript form) — ScyllaDB 2026.2+ ⇒
     *      [[SubscriptMetadataRead]].
-    *   3. else neither is accepted ⇒ fail fast with the same actionable error as the array probe.
+    *   3. else neither is accepted ⇒ `Left` carrying both probe rejections.
+    *
+    * Only a server-side rejection of the statement (invalid query / syntax error) counts as "form
+    * not supported". Any other failure (authentication, connection, timeout, missing table, ...) is
+    * rethrown, so an endpoint that could not be contacted never silently selects a weaker strategy.
     *
     * `col` is the first non-frozen collection column; all such columns share the same server, so a
     * single probe determines the strategy for the table.
+    */
+  private[migrator] def probeMetadataReadStrategy(
+    connector: CassandraConnector,
+    keyspace: String,
+    table: String,
+    nonFrozen: Seq[ColumnDef]
+  ): Either[Seq[Throwable], MetadataReadStrategy] =
+    nonFrozen.headOption match {
+      case None => Right(ArrayMetadataRead)
+      case Some(col) =>
+        val c = quoteCqlIdentifier(col.columnName)
+        val from =
+          s"FROM ${quoteCqlIdentifier(keyspace)}.${quoteCqlIdentifier(table)} LIMIT 1"
+        def rejection(cql: String): Option[Throwable] =
+          try {
+            connector.withSessionDo(_.prepare(cql))
+            None
+          } catch {
+            case e @ (_: InvalidQueryException | _: SyntaxError) => Some(e)
+          }
+
+        rejection(s"SELECT WRITETIME($c), TTL($c) $from") match {
+          case None => Right(ArrayMetadataRead)
+          case Some(arrayRejection) =>
+            rejection(s"SELECT WRITETIME($c[?]), TTL($c[?]) $from") match {
+              case None                     => Right(SubscriptMetadataRead)
+              case Some(subscriptRejection) => Left(Seq(arrayRejection, subscriptRejection))
+            }
+        }
+    }
+
+  /** [[probeMetadataReadStrategy]] for the migration read path: fails fast when `endpoint` supports
+    * neither metadata form, naming the endpoint and keeping both probe rejections as suppressed
+    * causes.
     */
   private[migrator] def detectMetadataReadStrategy(
     connector: CassandraConnector,
     keyspace: String,
     table: String,
-    nonFrozen: Seq[ColumnDef]
+    nonFrozen: Seq[ColumnDef],
+    endpoint: String = "source"
   ): MetadataReadStrategy =
-    nonFrozen.headOption match {
-      case None => ArrayMetadataRead
-      case Some(col) =>
-        val c = quoteCqlIdentifier(col.columnName)
-        val from =
-          s"FROM ${quoteCqlIdentifier(keyspace)}.${quoteCqlIdentifier(table)} LIMIT 1"
-        def canPrepare(cql: String): Boolean =
-          Try(connector.withSessionDo(_.prepare(cql))).isSuccess
-
-        if (canPrepare(s"SELECT WRITETIME($c), TTL($c) $from"))
-          ArrayMetadataRead
-        else if (canPrepare(s"SELECT WRITETIME($c[?]), TTL($c[?]) $from"))
-          SubscriptMetadataRead
-        else
-          throw new IllegalStateException(
-            s"preserveCollectionTimestamps is enabled, but the source cannot read per-element " +
-              s"WRITETIME()/TTL() on non-frozen collection column '${col.columnName}' via either " +
-              s"the collection-wide form (Cassandra 5.0+) or the element-subscript form " +
-              s"(ScyllaDB 2026.2+). This feature requires one of those source versions."
-          )
-    }
+    probeMetadataReadStrategy(connector, keyspace, table, nonFrozen).fold(
+      rejections => {
+        val error = new IllegalStateException(
+          s"preserveCollectionTimestamps is enabled, but the $endpoint cannot read per-element " +
+            s"WRITETIME()/TTL() on non-frozen collection column '${nonFrozen.head.columnName}' via " +
+            "either the collection-wide form (Cassandra 5.0+) or the element-subscript form " +
+            s"(ScyllaDB 2026.2+). This feature requires one of those $endpoint versions."
+        )
+        rejections.foreach(error.addSuppressed)
+        throw error
+      },
+      identity
+    )
 
   /** Bind a runtime value into a driver statement by its Java runtime class. Collection keys are
     * limited to the text/int family (see [[mapKeyOrdering]]), which already map to default driver
@@ -316,10 +348,17 @@ object Cassandra {
     * every downstream stage (explode, multi-pass write, validation) is reused unchanged:
     *   1. Base scan (connector): PK + all regular column VALUES + scalar `WRITETIME`/`TTL` sidecars
     *      (Scylla supports scalar). Non-frozen collection metadata columns are omitted here.
-    *   2. Per-row point read (driver): for each non-frozen collection, sort its decoded
+    *   2. Per-row point reads (driver): for each non-frozen collection, sort its decoded
     *      elements/entries with the column's ordering (so the arrays align with the order the
-    *      downstream explode re-sorts into), then one `SELECT WRITETIME(col[?]), TTL(col[?]), ...`
-    *      point read fetches all element metadata, assembled into element-aligned arrays.
+    *      downstream explode re-sorts into), then read the element metadata with
+    *      `SELECT WRITETIME(col[?]), TTL(col[?]), ...` point reads of up to
+    *      [[SubscriptKeyChunkSize]] keys each, i.e. `ceil(n / SubscriptKeyChunkSize)` synchronous
+    *      queries per collection per row. Map VALUES are re-read in the same statement (`col[?],
+    *      WRITETIME(col[?]), TTL(col[?])`), so each value is paired with the metadata of the same
+    *      cell even if it changed after the base scan.
+    *
+    * A row for which a point read returns no row at all no longer exists on the source (e.g. its
+    * last cell expired after the base scan) and is dropped rather than written as an empty row.
     */
   private def readRawRddSubscript(
     spark: SparkSession,
@@ -417,8 +456,9 @@ object Cassandra {
       // would materialize every output row of the partition in executor memory). The session is
       // borrowed from the connector's pool and returned when the Spark task completes.
       val session = connector.openSession()
-      val stmtCache = mutable.Map.empty[(String, Int), PreparedStatement]
+      val stmtCache = mutable.Map.empty[(String, Int), (PreparedStatement, CassandraRowMetadata)]
       val dropped = new java.util.concurrent.atomic.AtomicLong(0L)
+      val droppedRows = new java.util.concurrent.atomic.AtomicLong(0L)
       // The session must outlive this method (rows are consumed lazily downstream), so it can only
       // be released by a task-completion hook. Without a TaskContext nothing would ever close it —
       // refuse rather than leak a pooled session, and rather than close it early and break the
@@ -441,6 +481,12 @@ object Cassandra {
                   s"invisible to this read and are not counted here. The migrator requires a " +
                   s"quiescent source; re-run once writes have stopped if this is unexpected."
               )
+            if (droppedRows.get() > 0L)
+              log.info(
+                s"Subscript metadata read skipped ${droppedRows.get()} row(s) that no longer " +
+                  "exist on the source at point-read time (e.g. their last cell expired after the " +
+                  "base scan)."
+              )
             session.close()
           }
       }
@@ -450,7 +496,8 @@ object Cassandra {
 
       // Per-column: the (possibly filtered) collection VALUE plus element-aligned TTL/WRITETIME
       // arrays. Value and metadata are re-derived from the SAME sorted key set, so they always
-      // align; any element whose WRITETIME reads back null is dropped from both.
+      // align; any element whose WRITETIME reads back null is dropped from both. `None` when a
+      // point read found no row at all: the source row no longer exists.
       def readColumn(
         row: Row,
         name: String,
@@ -458,8 +505,8 @@ object Cassandra {
         isMap: Boolean,
         sorter: ElementSorter[_],
         pkBinds: Seq[AnyRef]
-      ): (Any, Seq[Integer], Seq[java.lang.Long]) = {
-        if (row.isNullAt(ord)) return (null, null, null)
+      ): Option[(Any, Seq[Integer], Seq[java.lang.Long])] = {
+        if (row.isNullAt(ord)) return Some((null, null, null))
 
         // Apply the element-count fail-safe on the RAW decoded size FIRST. Everything below this
         // line is proportional to the element count — the decorate-sort, two boxed metadata arrays,
@@ -476,49 +523,69 @@ object Cassandra {
             )
           else
             sorter
-              .sortElements(row.get(ord).asInstanceOf[scala.collection.Seq[Any]].toIndexedSeq)
+              .sortElements(row.get(ord).asInstanceOf[scala.collection.Iterable[Any]].toIndexedSeq)
               .map(e => (e, e))
 
         val n = entries.length
         if (n == 0)
-          return (row.get(ord), IndexedSeq.empty[Integer], IndexedSeq.empty[java.lang.Long])
+          return Some((row.get(ord), IndexedSeq.empty[Integer], IndexedSeq.empty[java.lang.Long]))
 
         val colQ = quoteCqlIdentifier(name)
         val ttls = new Array[Integer](n)
         val wts = new Array[java.lang.Long](n)
+        // Map values as of the point read (see below); unused for sets, whose key is the value.
+        val values = new Array[Any](if (isMap) n else 0)
+        // Selected cells per key: (value,) WRITETIME, TTL.
+        val width = if (isMap) 3 else 2
 
         // Read metadata in fixed-width chunks so a huge cell never exceeds the native-protocol bind
         // marker limit and only mints a bounded set of prepared statements (one per chunk length).
         var base = 0
         while (base < n) {
           val chunkLen = math.min(SubscriptKeyChunkSize, n - base)
-          val ps = stmtCache.getOrElseUpdate(
+          val (ps, rowMetadata) = stmtCache.getOrElseUpdate(
             (name, chunkLen), {
-              val projection =
-                (0 until chunkLen).map(_ => s"WRITETIME($colQ[?]), TTL($colQ[?])").mkString(", ")
-              session.prepare(s"SELECT $projection FROM $keyspaceQ.$tableQ WHERE $whereClause")
+              val cell =
+                if (isMap) s"$colQ[?], WRITETIME($colQ[?]), TTL($colQ[?])"
+                else s"WRITETIME($colQ[?]), TTL($colQ[?])"
+              val projection = (0 until chunkLen).map(_ => cell).mkString(", ")
+              val prepared =
+                session.prepare(s"SELECT $projection FROM $keyspaceQ.$tableQ WHERE $whereClause")
+              val columnNames =
+                (0 until prepared.getResultSetDefinitions.size).map(i => s"c$i")
+              prepared -> CassandraRowMetadata.fromPreparedStatement(
+                columnNames,
+                prepared,
+                session.getContext.getCodecRegistry
+              )
             }
           )
-          // Bind order follows statement text: each key twice (WRITETIME, TTL), then the PK values.
+          // Bind order follows statement text: each key once per selected cell, then the PK values.
           val keyBinds =
             (0 until chunkLen).flatMap { j =>
-              val k = entries(base + j)._1
-              Seq(driverBindValue(k), driverBindValue(k))
+              Seq.fill(width)(driverBindValue(entries(base + j)._1))
             }
           val bound = ps
             .bind((keyBinds ++ pkBinds).toArray: _*)
             .setConsistencyLevel(pointReadConsistencyLevel)
 
           val dr: DriverRow = session.execute(bound).one()
+          if (dr == null) return None
+          // Decode map values exactly as the base scan does (connector conversion, then
+          // `convertValue`/`widenTimestampValue`), so unchanged values are identical.
+          val decoded =
+            if (isMap) CassandraSQLRow.fromJavaDriverRow(dr, rowMetadata) else null
           var j = 0
           while (j < chunkLen) {
-            val wtIdx = 2 * j
-            val ttlIdx = 2 * j + 1
+            val wtIdx = width * j + width - 2
+            val ttlIdx = wtIdx + 1
+            if (isMap)
+              values(base + j) = widenTimestampValue(convertValue(decoded.get(width * j)))
             wts(base + j) =
-              if (dr == null || dr.isNull(wtIdx)) null
+              if (dr.isNull(wtIdx)) null
               else java.lang.Long.valueOf(dr.getLong(wtIdx))
             ttls(base + j) =
-              if (dr == null || dr.isNull(ttlIdx)) null
+              if (dr.isNull(ttlIdx)) null
               else Integer.valueOf(dr.getInt(ttlIdx))
             j += 1
           }
@@ -531,24 +598,29 @@ object Cassandra {
         // requirement) `keep.length == n`, so the value/metadata are byte-for-byte the base scan.
         // NOTE: a null TTL is retained — it legitimately means "no TTL / permanent element".
         val keptIdx = (0 until n).filter(i => wts(i) != null)
-        if (keptIdx.length == n) {
-          (row.get(ord), ArraySeq.unsafeWrapArray(ttls), ArraySeq.unsafeWrapArray(wts))
+        if (keptIdx.length < n) dropped.addAndGet((n - keptIdx.length).toLong)
+        // Map values come from the point read, so each is paired with its own cell's metadata.
+        val valueChanged =
+          isMap && keptIdx.exists(i => values(i) != entries(i)._2)
+        if (keptIdx.length == n && !valueChanged) {
+          Some((row.get(ord), ArraySeq.unsafeWrapArray(ttls), ArraySeq.unsafeWrapArray(wts)))
         } else {
-          dropped.addAndGet((n - keptIdx.length).toLong)
           val value: Any =
             if (isMap)
-              keptIdx.map(i => entries(i)._1 -> entries(i)._2).to(scala.collection.immutable.Map)
+              keptIdx.map(i => entries(i)._1 -> values(i)).to(scala.collection.immutable.Map)
             else
               keptIdx.map(i => entries(i)._2).toVector
-          (
-            value,
-            ArraySeq.unsafeWrapArray(keptIdx.map(ttls).toArray),
-            ArraySeq.unsafeWrapArray(keptIdx.map(wts).toArray)
+          Some(
+            (
+              value,
+              ArraySeq.unsafeWrapArray(keptIdx.map(ttls).toArray),
+              ArraySeq.unsafeWrapArray(keptIdx.map(wts).toArray)
+            )
           )
         }
       }
 
-      rows.map { row =>
+      rows.flatMap { row =>
         // PK binds are identical for every collection column in a row, so compute them once.
         val pkBinds: Seq[AnyRef] =
           pkOrdinalsArr.indices.map { i =>
@@ -556,22 +628,35 @@ object Cassandra {
             driverPkBindValue(pkBindKindsArr(i), if (row.isNullAt(o)) null else row.get(o))
           }
 
-        val meta: Map[String, (Any, Seq[Integer], Seq[java.lang.Long])] =
-          nfInfo.map { case (name, ord, isMap, sorter) =>
-            name -> readColumn(row, name, ord, isMap, sorter, pkBinds)
-          }.toMap
-
-        val values = targetFields.map { f =>
-          collectionOfSidecar(f.name) match {
-            case Some((col, isTtl)) =>
-              val (_, ttlArr, wtArr) = meta(col)
-              if (isTtl) ttlArr else wtArr
-            case None =>
-              if (nfNames.contains(f.name)) meta(f.name)._1
-              else row.get(baseFieldIndex(f.name))
-          }
+        // Stop at the first column whose point read finds the row gone.
+        val readColumns = nfInfo.iterator.map { case (name, ord, isMap, sorter) =>
+          name -> readColumn(row, name, ord, isMap, sorter, pkBinds)
         }
-        Row.fromSeq(ArraySeq.unsafeWrapArray(values.asInstanceOf[Array[Any]]))
+        val meta = mutable.Map.empty[String, (Any, Seq[Integer], Seq[java.lang.Long])]
+        var rowExists = true
+        while (rowExists && readColumns.hasNext)
+          readColumns.next() match {
+            case (name, Some(column)) => meta(name) = column
+            case (_, None)            => rowExists  = false
+          }
+        if (!rowExists) {
+          droppedRows.incrementAndGet()
+          None
+        } else
+          Some {
+
+            val values = targetFields.map { f =>
+              collectionOfSidecar(f.name) match {
+                case Some((col, isTtl)) =>
+                  val (_, ttlArr, wtArr) = meta(col)
+                  if (isTtl) ttlArr else wtArr
+                case None =>
+                  if (nfNames.contains(f.name)) meta(f.name)._1
+                  else row.get(baseFieldIndex(f.name))
+              }
+            }
+            Row.fromSeq(ArraySeq.unsafeWrapArray(values.asInstanceOf[Array[Any]]))
+          }
       }
     }
   }
@@ -966,13 +1051,6 @@ object Cassandra {
         }
     }
 
-  /** Explode a wide row into base rows for the timestamp-preservation write, EXCLUDING non-frozen
-    * collection columns (whose per-element timestamps are handled by separate collection-append
-    * passes). `baseSchema` must already omit those columns. When there are no base regular columns
-    * (a table whose only regular columns are per-element collections), a single primary-key-only
-    * row is emitted so the base write establishes the partition; the collection appends carry the
-    * data.
-    */
   /** Largest per-element WRITETIME across the given per-element collection sidecar ordinals of a
     * wide row, or `None` when no such collection is populated. Used to keep base marker rows
     * consistent with the collection-append passes (F11 / A2).
@@ -1004,6 +1082,13 @@ object Cassandra {
     else Integer.valueOf(ttls.max)
   }
 
+  /** Explode a wide row into base rows for the timestamp-preservation write, EXCLUDING non-frozen
+    * collection columns (whose per-element timestamps are handled by separate collection-append
+    * passes). `baseSchema` must already omit those columns. When there are no base regular columns
+    * (a table whose only regular columns are per-element collections), a single primary-key-only
+    * row is emitted so the base write establishes the partition; the collection appends carry the
+    * data.
+    */
   def explodeBaseRow(
     row: Row,
     baseSchema: StructType,
@@ -1069,10 +1154,15 @@ object Cassandra {
 
   /** Build the per-element collection-append rows for one non-frozen collection column of a single
     * wide source row. Each emitted row is `[primary key values..., grouped collection value, ttl,
-    * writetime]`. The decoded collection is re-sorted with `elementSorter` (set elements by value,
-    * map entries by key) to reproduce Cassandra's on-disk element order, so element[i] pairs with
-    * its own element-order `TTL()`/`WRITETIME()[i]`. Elements are then grouped by
-    * `(ttl, writetime)` so co-timestamped elements share one append.
+    * writetime, overwrite flag]`. The decoded collection is re-sorted with `elementSorter` (set
+    * elements by value, map entries by key) to reproduce Cassandra's on-disk element order, so
+    * element[i] pairs with its own element-order `TTL()`/`WRITETIME()[i]`. Elements are then
+    * grouped by `(ttl, writetime)` so co-timestamped elements share one append.
+    *
+    * Exactly one row per cell, a group with the OLDEST writetime, has the overwrite flag set: it is
+    * written with `col = ?` instead of `col = col + ?`. A collection overwrite at timestamp `T`
+    * also writes a collection tombstone at `T - 1`, which removes target elements older than every
+    * source element (stale or target-only entries) while never shadowing a source element.
     */
   def collectionAppendRows(
     row: Row,
@@ -1134,19 +1224,19 @@ object Cassandra {
           s"${elements.length} elements but ${wtSeq.length} writetimes / ${ttlSeq.length} ttls. " +
           "Element<->timestamp alignment cannot be guaranteed; aborting to avoid silent data loss."
       )
-      elements.indices
-        .groupBy(i => (ttlAt(i), wtAt(i)))
-        .toSeq
-        .map { case ((ttl, wt), indices) =>
-          val collectionValue = rebuild(indices.map(elements))
-          Row.fromSeq(
-            pkValues ++ Seq(
-              collectionValue,
-              Integer.valueOf(ttl),
-              java.lang.Long.valueOf(wt)
-            )
+      val groups = elements.indices.groupBy(i => (ttlAt(i), wtAt(i))).toSeq
+      val overwriteGroup = groups.minBy { case ((_, wt), _) => wt }._1
+      groups.map { case (group @ (ttl, wt), indices) =>
+        val collectionValue = rebuild(indices.map(elements))
+        Row.fromSeq(
+          pkValues ++ Seq(
+            collectionValue,
+            Integer.valueOf(ttl),
+            java.lang.Long.valueOf(wt),
+            java.lang.Boolean.valueOf(group == overwriteGroup)
           )
-        }
+        )
+      }
     }
 
     // Both the connector's decoded set and map lose their server (sorted) order, while the
@@ -1209,7 +1299,8 @@ object Cassandra {
           pkFields ++ Seq(
             collectionField,
             StructField("ttl", IntegerType, true),
-            StructField("writetime", LongType, true)
+            StructField("writetime", LongType, true),
+            StructField(CollectionAppendWrite.OverwriteColumn, BooleanType, false)
           )
         )
         val isMap = column.columnType.isInstanceOf[CqlMapType[_, _]]
@@ -1423,7 +1514,8 @@ object Cassandra {
         pkFields ++ Seq(
           collectionField,
           StructField("ttl", IntegerType, true),
-          StructField("writetime", LongType, true)
+          StructField("writetime", LongType, true),
+          StructField(CollectionAppendWrite.OverwriteColumn, BooleanType, false)
         )
       )
       val (isMap, elementSorter): (Boolean, Option[ElementSorter[_]]) =
@@ -1593,9 +1685,9 @@ object Cassandra {
       // are SEPARATE Spark jobs derived from this one frame, so without caching the Parquet dataset
       // is re-read 1 + K times (K = per-element collection columns). This path has no incremental
       // savepointing to compensate — file-level tracking is deliberately disabled for multi-pass
-      // writes — so the re-read is pure waste. `ScyllaMigratorBase.migrate` unpersists
-      // `sourceDF.dataFrame` (this same frame) in its `finally`, and the validator repair path
-      // unpersists its own upstream, so this is self-cleaning.
+      // writes — so the re-read is pure waste. Callers release it: `ScyllaMigratorBase.migrate`
+      // unpersists `sourceDF.dataFrame` (this same frame) in its `finally`, and the validator repair
+      // path unpersists the frame it passes in.
       df.persist(StorageLevel.MEMORY_AND_DISK)
     }
     log.info("Base schema after explosion from per-column metadata:")

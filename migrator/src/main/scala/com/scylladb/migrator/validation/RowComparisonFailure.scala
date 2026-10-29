@@ -181,7 +181,7 @@ object RowComparisonFailure {
                           ttlToleranceMillis,
                           leftMap.get(baseName),
                           rightMap.get(baseName),
-                          valueScaleToMillis = 1000L
+                          valueScale = 1000L
                         )
             } yield result
 
@@ -206,7 +206,7 @@ object RowComparisonFailure {
                         )
             } yield result
 
-        // Split real time/TTL deltas (reported in millis) from structural problems (malformed or
+        // Split real time/TTL deltas (TTL in millis, WRITETIME in micros) from structural problems (malformed or
         // cardinality mismatches), so the latter get their own, non-misleading failure items.
         val differingTtls = ttlResults.collect { case MetadataDiff.TimeDiff(f, d) => f -> d }
         val differingWritetimes =
@@ -323,6 +323,10 @@ object RowComparisonFailure {
       case _         => None
     }
 
+  /** True when a metadata value is a scalar `Number` rather than a per-element array. */
+  private def isScalarMetadata(row: CassandraRow, name: String): Boolean =
+    row.getRaw(name).isInstanceOf[Number]
+
   /** Element count of a collection value (map/set/list), or `None` for scalar values. Used to
     * validate that per-element (array-typed) metadata has one entry per collection element.
     */
@@ -361,12 +365,13 @@ object RowComparisonFailure {
   }
 
   /** Outcome of comparing one `_ttl`/`_writetime` metadata column. Distinguishes a genuine time/TTL
-    * difference (reported in millis) from structural problems (malformed metadata, cardinality
-    * mismatch) so the latter are not mislabelled as a "(N millis)" delta.
+    * difference from structural problems (malformed metadata, cardinality mismatch) so the latter
+    * are not mislabelled as a "(N millis)" delta. A [[MetadataDiff.TimeDiff]]'s `diff` is in the
+    * tolerance's unit: millis for TTL, micros for WRITETIME.
     */
   private[migrator] sealed trait MetadataDiff { def field: String }
   private[migrator] object MetadataDiff {
-    case class TimeDiff(field: String, diffMillis: Long) extends MetadataDiff
+    case class TimeDiff(field: String, diff: Long) extends MetadataDiff
     case class Malformed(field: String) extends MetadataDiff
     case class CardinalityMismatch(field: String, detail: String) extends MetadataDiff
   }
@@ -388,7 +393,7 @@ object RowComparisonFailure {
     tolerance: Long,
     leftBase: Option[Any] = None,
     rightBase: Option[Any] = None,
-    valueScaleToMillis: Long = 1L
+    valueScale: Long = 1L
   ): Option[MetadataDiff] =
     if (hasMalformedMetadata(left, name) || hasMalformedMetadata(right, name))
       Some(MetadataDiff.Malformed(name))
@@ -402,6 +407,12 @@ object RowComparisonFailure {
         .orElse {
           (metadataAsLongs(left, name), metadataAsLongs(right, name)) match {
             case (None, None) => None
+            // Scalar metadata (scalar columns, frozen collections) present on only one side is a
+            // plain TTL/WRITETIME difference, reported as the present side's value.
+            case (Some(Seq(l)), None) if isScalarMetadata(left, name) =>
+              Some(MetadataDiff.TimeDiff(name, saturatingScaledAbsDiff(l, 0L, valueScale)))
+            case (None, Some(Seq(r))) if isScalarMetadata(right, name) =>
+              Some(MetadataDiff.TimeDiff(name, saturatingScaledAbsDiff(r, 0L, valueScale)))
             case (Some(ls), None) =>
               Some(
                 MetadataDiff
@@ -427,11 +438,11 @@ object RowComparisonFailure {
                   )
                 )
               else {
-                // Diffs are scaled to the tolerance's unit (millis) so the report and the tolerance
-                // agree; `valueScaleToMillis` is 1 for values already in the tolerance unit.
+                // Diffs are scaled to the tolerance's unit so the report and the tolerance
+                // agree; `valueScale` is 1 for values already in the tolerance unit.
                 val exceeding =
                   ls.zip(rs)
-                    .map { case (l, r) => saturatingScaledAbsDiff(l, r, valueScaleToMillis) }
+                    .map { case (l, r) => saturatingScaledAbsDiff(l, r, valueScale) }
                     .filter(_ > tolerance)
                 if (exceeding.isEmpty) None
                 else Some(MetadataDiff.TimeDiff(name, exceeding.max))

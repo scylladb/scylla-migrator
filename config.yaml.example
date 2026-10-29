@@ -45,30 +45,39 @@ source:
   # Cassandra 5.0+ (via WRITETIME(col)/TTL(col)) or ScyllaDB 2026.2+ (via the per-element subscript
   # form WRITETIME(col[key])/TTL(col[key]), auto-detected). Supported for non-frozen sets and maps whose element/key
   # type has a well-defined order (text/ascii/varchar and integer types); non-frozen lists and
-  # other key/element types remain unsupported (freeze them, or leave this disabled).
-  # Because elements are restored with collection appends (col = col + ?), this only converges
-  # correctly when the target collection starts empty (a fresh migration into an empty/nonexistent
-  # target) and the source is not concurrently modified: appends never delete, so elements deleted
-  # on the source or pre-existing on the target are not reconciled. Very large non-frozen
+  # other key/element types remain unsupported (freeze them, or leave this disabled). Static
+  # non-frozen collections are also unsupported: such tables are rejected before the migration
+  # starts. On a ScyllaDB 2026.2+ source, tables whose primary key includes a frozen tuple, UDT or
+  # collection are rejected too (the Cassandra 5.0+ path has no such limit).
+  # Elements are restored by update: the group with the oldest WRITETIME is written with
+  # col = ? (whose collection tombstone, one microsecond older, removes target elements older than
+  # every source element, e.g. stale or target-only entries from an earlier run), the rest with
+  # col = col + ?. Target elements NEWER than every source element are kept (last write wins), and
+  # a null/empty source collection leaves the target collection untouched. Very large non-frozen
   # collections are expanded into up to one update per distinct element TTL/WRITETIME, which can be
-  # memory- and throughput-intensive. Has no effect unless preserveTimestamps is also true.
+  # memory- and throughput-intensive. The source is cached for the whole run (executor memory,
+  # spilling to spark.local.dir) so every write pass reads the same snapshot: provision executor
+  # local disk for roughly the source table size plus its per-element metadata. Has no effect
+  # unless preserveTimestamps is also true.
   #
-  # Source-quiescence is REQUIRED. On the ScyllaDB 2026.2+ subscript path values and metadata are read
-  # in two phases (base scan + per-row point reads), so a concurrent write in between can: delete an
-  # element (dropped + logged), add an element (never queried, silently absent, not counted in the
-  # dropped-element warning), or update a MAP value in place (a stale value can be paired with the
-  # newer writetime and then permanently shadow the correct value on the target). Sets are immune to
-  # the last case since an element's value is its identity. The Cassandra 5.0+ array path reads values
+  # Source-quiescence is REQUIRED. On the ScyllaDB 2026.2+ subscript path the collection elements are
+  # listed by a base scan and their metadata read by per-row point reads (map values are re-read in
+  # the same point read, so a value always carries its own cell's metadata). A concurrent write in
+  # between can still delete an element (dropped + logged) or add one (never queried, silently
+  # absent, not counted in the dropped-element warning). The Cassandra 5.0+ array path reads values
   # and metadata in one scan and is unaffected. Stop source writes before migrating.
   #
   # TTLs are read as remaining seconds and re-applied on write, so the clock advances between read and
   # write/compare on long runs; use validation's ttlToleranceMillis to absorb this drift. A short-lived
   # element can expire on the source between read and append and still be written to the target, where
   # it briefly reappears; prefer collection TTLs comfortably longer than the job duration.
+  # CQL exposes no TTL for a row marker, so a row inserted USING TTL whose non-key columns are all
+  # null or empty (e.g. an empty collection) is written to the target without a TTL.
   #
-  # Validation compares per-element collection TTL/WRITETIME only on the collection-wide form
-  # (Cassandra 5.0+). Against ScyllaDB 2026.2+ (subscript only) it compares non-frozen collection
-  # columns by VALUE only, and copyMissingRows for such tables is rejected (re-run the migration).
+  # Validation compares per-element collection TTL/WRITETIME only when BOTH endpoints accept the
+  # collection-wide form (Cassandra 5.0+). Otherwise (ScyllaDB 2026.2+, or an older server) it
+  # compares non-frozen collection columns by VALUE only. copyMissingRows still restores element
+  # TTL/WRITETIME when the SOURCE is Cassandra 5.0+, and is rejected otherwise (re-run the migration).
   # Defaults to false.
   preserveCollectionTimestamps: false
   # Number of splits to use - this should be at minimum the amount of cores

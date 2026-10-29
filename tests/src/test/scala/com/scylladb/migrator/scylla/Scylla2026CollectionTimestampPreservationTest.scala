@@ -245,4 +245,32 @@ class Scylla2026CollectionTimestampPreservationTest extends munit.FunSuite {
     assertEquals(dst.attrs, src.attrs, "map entries must match")
     assertEquals(dst.attrsWt, src.attrsWt, "map element WRITETIMEs must be preserved")
   }
+
+  test("removes target collection elements older than every source element") {
+    val session = scylla2026()
+    createTable(session, sourceTbl)
+    createTable(session, targetTbl)
+
+    val id = "r3"
+    session.execute(
+      s"UPDATE ${keyspace}.${sourceTbl} USING TIMESTAMP 2000000000000 " +
+        s"SET tags = tags + {1}, attrs = attrs + {'a': 1} WHERE id='${id}'"
+    )
+    session.execute(
+      s"UPDATE ${keyspace}.${sourceTbl} USING TIMESTAMP 3000000000000 " +
+        s"SET tags = tags + {2} WHERE id='${id}'"
+    )
+    session.execute(
+      s"UPDATE ${keyspace}.${targetTbl} USING TIMESTAMP 1000000000000 " +
+        s"SET tags = tags + {1, 99}, attrs = attrs + {'a': 42, 'zz': 7} WHERE id='${id}'"
+    )
+
+    successfullyPerformMigration(configFile)
+
+    val dst = readMeta(session, targetTbl, id)
+    assertEquals(dst.tags, List(1, 2))
+    assertEquals(dst.tagsWt, List(2000000000000L, 3000000000000L))
+    assertEquals(dst.attrs, Map("a" -> 1))
+    assertEquals(dst.attrsWt, List(2000000000000L))
+  }
 }

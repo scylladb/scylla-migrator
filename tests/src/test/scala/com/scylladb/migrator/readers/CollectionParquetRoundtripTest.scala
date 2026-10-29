@@ -1,6 +1,7 @@
 package com.scylladb.migrator.readers
 
 import com.datastax.spark.connector.types.CassandraOption
+import com.scylladb.migrator.scylla.CollectionAppendWrite
 import org.apache.spark.sql.{ Row, SparkSession }
 import org.apache.spark.sql.types.{
   ArrayType,
@@ -104,8 +105,11 @@ class CollectionParquetRoundtripTest extends munit.FunSuite {
       Cassandra.explodeRowsFromPerColumnMetaCollectionAware(spark, sampleDf)
 
     val tags = appends.find(_.columnName == "tags").get
-    // schema: [id, tags, ttl, writetime]
-    assertEquals(tags.schema.fieldNames.toSeq, Seq("id", "tags", "ttl", "writetime"))
+    // schema: [id, tags, ttl, writetime, overwrite]
+    assertEquals(
+      tags.schema.fieldNames.toSeq,
+      Seq("id", "tags", "ttl", "writetime", CollectionAppendWrite.OverwriteColumn)
+    )
 
     val byWritetime = tags.rdd
       .collect()
@@ -125,7 +129,10 @@ class CollectionParquetRoundtripTest extends munit.FunSuite {
       Cassandra.explodeRowsFromPerColumnMetaCollectionAware(spark, sampleDf)
 
     val attrs = appends.find(_.columnName == "attrs").get
-    assertEquals(attrs.schema.fieldNames.toSeq, Seq("id", "attrs", "ttl", "writetime"))
+    assertEquals(
+      attrs.schema.fieldNames.toSeq,
+      Seq("id", "attrs", "ttl", "writetime", CollectionAppendWrite.OverwriteColumn)
+    )
 
     val byWritetime = attrs.rdd
       .collect()

@@ -1,0 +1,27 @@
+source:
+  type: parquet
+  path: /app/parquet/collection-timestamps
+
+# Target points at the Cassandra 5.0 container (remapped to the cassandra5 host port by the test
+# harness) because ScyllaDB cannot read back WRITETIME()/TTL() of non-frozen collections for
+# verification, whereas Cassandra 5.0 can. The write path is plain CQL, identical for either target.
+target:
+  type: scylla
+  host: cassandra5
+  port: 9042
+  localDC: datacenter1
+  credentials:
+    username: dummy
+    password: dummy
+  keyspace: test
+  table: collts_pq_resume_dst
+  consistencyLevel: LOCAL_QUORUM
+  connections: 16
+  stripTrailingZerosForDecimals: false
+
+# File tracking is ON: the resume test checks that no file is recorded as processed until every
+# write pass (base + collection appends) has succeeded.
+savepoints:
+  path: /app/savepoints/collection-timestamps-resume
+  intervalSeconds: 300
+  enableParquetFileTracking: true

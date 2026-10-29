@@ -18,13 +18,6 @@ import org.apache.spark.sql.types.StructType
 import scala.util.Using
 import scala.util.control.NonFatal
 
-/** @param cassandraExplodedWrite
-  *   When set, [[migrate]] writes this `RDD[Row]` with [[writers.Scylla.writeRowRDD]] instead of
-  *   [[writers.Scylla.writeDataframe]], so exploded rows can carry
-  *   [[com.datastax.spark.connector.types.CassandraOption]] on regular columns (explicit CQL null
-  *   vs unset). [[dataFrame]] stays the pre-explosion frame (e.g. wide Cassandra read) for
-  *   partition metadata and logging.
-  */
 /** A per-element collection-timestamp write pass. Each carries the singleton/grouped
   * collection-append rows for one non-frozen collection column, written after the base row write
   * with `col = col + ?` and per-row TTL/WRITETIME so element-level timestamps are preserved.
@@ -32,9 +25,11 @@ import scala.util.control.NonFatal
   * @param columnName
   *   the (source) collection column name; renames are applied by the writer.
   * @param rdd
-  *   rows of `[primary key columns..., singleton/grouped collection value, ttl, writetime]`.
+  *   rows of `[primary key columns..., singleton/grouped collection value, ttl, writetime,
+  *   overwrite]`.
   * @param schema
-  *   positional schema for `rdd`, ending in `ttl` (IntegerType) and `writetime` (LongType).
+  *   positional schema for `rdd`, ending in `ttl` (IntegerType), `writetime` (LongType) and
+  *   [[CollectionAppendWrite.OverwriteColumn]] (BooleanType).
   */
 case class CollectionAppendWrite(
   columnName: String,
@@ -42,6 +37,21 @@ case class CollectionAppendWrite(
   schema: StructType
 )
 
+object CollectionAppendWrite {
+
+  /** Marks the one row per collection cell that is written with `col = ?` (overwrite) rather than
+    * `col = col + ?`, so its collection tombstone clears target elements older than the source's.
+    */
+  val OverwriteColumn = "__migrator_overwrite"
+}
+
+/** @param cassandraExplodedWrite
+  *   When set, [[migrate]] writes this `RDD[Row]` with [[writers.Scylla.writeRowRDD]] instead of
+  *   [[writers.Scylla.writeDataframe]], so exploded rows can carry
+  *   [[com.datastax.spark.connector.types.CassandraOption]] on regular columns (explicit CQL null
+  *   vs unset). [[dataFrame]] stays the pre-explosion frame (e.g. wide Cassandra read) for
+  *   partition metadata and logging.
+  */
 case class SourceDataFrame(
   dataFrame: DataFrame,
   timestampColumns: Option[TimestampColumns],
@@ -108,15 +118,12 @@ trait ScyllaMigratorBase {
       // reprocessed on resume are idempotent (INSERT/append with USING TIMESTAMP), so partial
       // ranges converge. With no append passes, the base write keeps the accumulator as before.
       //
-      // M4 (accepted trade-off, not a correctness bug): the final append pass's RDD only contains
-      // rows whose last collection column is non-null, so token ranges in which every row has a
-      // null/empty last collection are NOT recorded even though they were fully written. On resume
-      // those ranges are reprocessed. This only ever OVER-processes (idempotent), never skips, so
-      // there is no data loss. The tempting alternative — recording ranges from the base write,
-      // which visits every range — would mark ranges done BEFORE the append passes run and thus
-      // reintroduce the C1/F1 data-loss-on-resume bug this design exists to prevent. Recording all
-      // ranges accurately AND only after every pass commits would need a dedicated final sweep pass
-      // over all partition keys; deferred as an efficiency-only improvement.
+      // The connector records a task's input token ranges once that task's write has closed, even
+      // when it wrote no rows, and each append pass is a narrow transformation of the source frame
+      // that keeps its input partitions. So the final pass records every input range, including
+      // ranges whose rows all have a null/empty last collection. Recording from the base write
+      // instead would mark ranges done BEFORE the append passes run and reintroduce the
+      // data-loss-on-resume bug this design exists to prevent.
       val hasCollectionAppends = sourceDF.collectionAppendWrites.nonEmpty
       val baseAccumulator = if (hasCollectionAppends) None else tokenRangeAccumulator
 
@@ -164,32 +171,6 @@ trait ScyllaMigratorBase {
             migratorConfig.source
           )
         }
-
-        // C8/M4 visibility: the accumulator rides only the final append pass, which emits no rows
-        // for ranges whose last collection column is null/empty. If it recorded nothing, resume
-        // will reprocess the whole input (safe & idempotent, but with no savepoint speedup) — say
-        // so rather than let operators be surprised by a full re-run.
-        tokenRangeAccumulator.foreach { acc =>
-          val recorded = acc.value.get.size
-          val lastColumn = sourceDF.collectionAppendWrites.last.columnName
-          if (recorded == 0)
-            log.warn(
-              "Collection-append savepoint pass recorded no token ranges (e.g. the last collection " +
-                s"column '$lastColumn' was null/empty for every row). A resume will reprocess the " +
-                "whole input: safe and idempotent, but without savepoint speedup."
-            )
-          else
-            // Report the count, not just the all-empty case: ranges are recorded only where the
-            // final append pass emitted rows, so a SPARSELY populated last collection column yields
-            // proportionally few savepoints and a resume re-does most of the table. Operators need
-            // the number to judge that, since it is safe-but-slow rather than incorrect.
-            log.info(
-              s"Collection-append savepoint pass recorded $recorded token range(s). Ranges are " +
-                s"recorded only where the final collection column ('$lastColumn') was non-empty, so " +
-                "a sparsely populated collection yields few savepoints and a resume will reprocess " +
-                "most of the input (safe and idempotent, but slow)."
-            )
-        }
       }
     } catch {
       case NonFatal(e) => // Catching everything on purpose to try and dump the accumulator state
@@ -203,7 +184,10 @@ trait ScyllaMigratorBase {
       // passes are eager actions that have run by now, so nothing still reads it. No-op when the
       // frame was never persisted (e.g. single-pass or non-Cassandra sources).
       try sourceDF.dataFrame.unpersist()
-      catch { case NonFatal(_) => () }
+      catch {
+        case NonFatal(e) =>
+          log.warn("Failed to release the cached source DataFrame; continuing", e)
+      }
       for (savePointsManger <- maybeSavepointsManager) {
         try
           savePointsManger.dumpMigrationState("final")

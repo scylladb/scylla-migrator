@@ -2,6 +2,8 @@ package com.scylladb.migrator.scylla
 
 import com.datastax.spark.connector.{
   toSparkContextFunctions,
+  CassandraRow,
+  CassandraRowMetadata,
   ColumnName,
   SomeColumns,
   TTL,
@@ -95,6 +97,18 @@ object ScyllaValidator {
       case _                                          => value
     }
 
+  /** `row` without the named columns (a no-op when `names` is empty). */
+  private[scylla] def dropColumns(row: CassandraRow, names: Set[String]): CassandraRow =
+    if (names.isEmpty) row
+    else {
+      val kept =
+        row.metaData.columnNames.indices.filterNot(i => names.contains(row.metaData.columnNames(i)))
+      new CassandraRow(
+        CassandraRowMetadata.fromColumnNames(kept.map(row.metaData.columnNames)),
+        kept.map(row.columnValues)
+      )
+    }
+
   /** Validates that the target Scylla database contains the same data as the source Cassandra
     * database.
     *
@@ -176,69 +190,113 @@ object ScyllaValidator {
     val repairWithScalarMetadata = includePerColumnMetadata && !perElementCollectionMetadata
 
     // The source SELECT and target JOIN below project the collection-wide `WRITETIME(col)`/`TTL(col)`
-    // form for per-element metadata. ScyllaDB 2026.2+ only accepts the element-subscript form on
-    // non-frozen collections and REJECTS the collection-wide form, so emitting it against such an
-    // endpoint fails mid distributed-read. Detect it up front (same probe the migrate path uses):
-    // if EITHER endpoint is subscript-only, drop per-element metadata for non-frozen collection
-    // columns on BOTH projections and compare those columns by VALUE only (all scalar/frozen
-    // metadata is still validated). Comparison must stay symmetric, hence "both".
-    val collectionsValueOnly: Boolean =
-      if (!perElementCollectionMetadata) false
+    // form for per-element metadata. Only Cassandra 5.0+ accepts it: ScyllaDB 2026.2+ only accepts
+    // the element-subscript form, and older servers (Cassandra 4.x, ScyllaDB < 2026.2) neither.
+    // Probe each endpoint up front (same probe the migrate path uses):
+    //   - per-element metadata is COMPARED only when both endpoints accept the collection-wide form;
+    //     otherwise non-frozen collection columns are compared by VALUE only (all scalar/frozen
+    //     metadata is still validated). Comparison must stay symmetric.
+    //   - the SOURCE still projects it whenever it can and copyMissingRows needs it, because repair
+    //     only needs the source's element metadata (missing rows have none on the target).
+    val (sourceCollectionMetadata, targetCollectionMetadata) =
+      if (!perElementCollectionMetadata) (false, false)
       else {
-        val nonFrozenSource = readers.Cassandra.nonFrozenCollectionColumns(sourceTableDef)
-        val sourceStrategy =
-          readers.Cassandra.detectMetadataReadStrategy(
-            sourceConnector,
-            sourceSettings.keyspace,
-            sourceSettings.table,
-            nonFrozenSource
-          )
+        def readsCollectionWide(
+          endpoint: String,
+          connector: CassandraConnector,
+          keyspace: String,
+          table: String,
+          tableDef: TableDef
+        ): Boolean =
+          readers.Cassandra.probeMetadataReadStrategy(
+            connector,
+            keyspace,
+            table,
+            readers.Cassandra.nonFrozenCollectionColumns(tableDef)
+          ) match {
+            case Right(readers.Cassandra.ArrayMetadataRead) => true
+            case Right(readers.Cassandra.SubscriptMetadataRead) =>
+              log.warn(
+                s"Validation $endpoint exposes per-element collection WRITETIME()/TTL() only via " +
+                  "the subscript form (ScyllaDB 2026.2+)."
+              )
+              false
+            case Left(_) =>
+              log.warn(
+                s"Validation $endpoint cannot read per-element collection WRITETIME()/TTL() " +
+                  "(requires Cassandra 5.0+ or ScyllaDB 2026.2+)."
+              )
+              false
+          }
         val targetTableDef =
           targetConnector.withSessionDo(
             Schema.tableFromCassandra(_, targetSettings.keyspace, targetSettings.table)
           )
-        val targetStrategy =
-          readers.Cassandra.detectMetadataReadStrategy(
+        (
+          readsCollectionWide(
+            "source",
+            sourceConnector,
+            sourceSettings.keyspace,
+            sourceSettings.table,
+            sourceTableDef
+          ),
+          readsCollectionWide(
+            "target",
             targetConnector,
             targetSettings.keyspace,
             targetSettings.table,
-            readers.Cassandra.nonFrozenCollectionColumns(targetTableDef)
+            targetTableDef
           )
-        sourceStrategy == readers.Cassandra.SubscriptMetadataRead ||
-        targetStrategy == readers.Cassandra.SubscriptMetadataRead
+        )
       }
+    val collectionsValueOnly =
+      perElementCollectionMetadata && !(sourceCollectionMetadata && targetCollectionMetadata)
 
     if (collectionsValueOnly) {
       log.warn(
-        "Validation source/target exposes per-element collection WRITETIME()/TTL() only via the " +
-          "subscript form (ScyllaDB 2026.2+). The validator compares non-frozen collection columns " +
-          s"by VALUE only (${nonFrozenCollectionNames.mkString(", ")}); their per-element " +
-          "TTL/WRITETIME are NOT validated. Scalar and frozen-collection metadata are still compared."
+        "The validator compares non-frozen collection columns by VALUE only " +
+          s"(${nonFrozenCollectionNames.mkString(", ")}); their per-element TTL/WRITETIME are NOT " +
+          "validated. Scalar and frozen-collection metadata are still compared."
       )
-      // copyMissingRows repair for these tables reconstructs per-element collection TTL/WRITETIME
-      // from the source metadata read — which is unavailable in value-only mode — so it cannot run.
-      if (validationConfig.copyMissingRows)
+      // copyMissingRows repair reconstructs per-element collection TTL/WRITETIME from the source
+      // metadata read, so it needs a source that exposes the collection-wide form.
+      if (validationConfig.copyMissingRows && !sourceCollectionMetadata)
         sys.error(
-          "copyMissingRows is not supported for non-frozen collections when the source or target " +
-            "only exposes the subscript form of WRITETIME()/TTL() (ScyllaDB 2026.2+): per-element " +
-            "collection metadata cannot be read for repair. Re-run the migration itself (idempotent " +
-            "under USING TIMESTAMP) to converge missing rows, or disable copyMissingRows to validate " +
-            "values only."
+          "copyMissingRows is not supported for non-frozen collections when the source cannot read " +
+            "per-element WRITETIME()/TTL() with the collection-wide form (Cassandra 5.0+): " +
+            "per-element collection metadata cannot be read for repair. Re-run the migration itself " +
+            "(idempotent under USING TIMESTAMP) to converge missing rows, or disable " +
+            "copyMissingRows to validate values only."
         )
     }
 
-    // Whether to project per-element metadata for a given regular column. Non-frozen collections are
-    // dropped to value-only when the endpoint only supports the subscript form.
-    def projectMetadataFor(columnName: String): Boolean =
+    // Whether to project per-element metadata for a given regular column, on each side. Non-frozen
+    // collections drop it on an endpoint that cannot read the collection-wide form, and on the
+    // target whenever it is not compared.
+    def projectMetadataFor(columnName: String, endpointCanRead: Boolean): Boolean =
       includePerColumnMetadata &&
-        !(collectionsValueOnly && nonFrozenCollectionNames.contains(columnName))
+        (!nonFrozenCollectionNames.contains(columnName) ||
+          !perElementCollectionMetadata || endpointCanRead)
+    val projectSourceCollectionMetadata =
+      sourceCollectionMetadata && (!collectionsValueOnly || validationConfig.copyMissingRows)
+    val projectTargetCollectionMetadata = !collectionsValueOnly
+
+    // Collection metadata the source projects only for repair; stripped before comparison so both
+    // rows carry the same columns.
+    val sourceOnlyColumns: Set[String] =
+      if (projectSourceCollectionMetadata && !projectTargetCollectionMetadata)
+        nonFrozenCollectionNames.flatMap { name =>
+          val alias = config.renamesMap(name)
+          Set(alias + "_ttl", alias + "_writetime")
+        }
+      else Set.empty
 
     val source = {
       val regularColumnsProjection =
         sourceTableDef.regularColumns.flatMap { colDef =>
           val alias = config.renamesMap(colDef.columnName)
 
-          if (projectMetadataFor(colDef.columnName))
+          if (projectMetadataFor(colDef.columnName, projectSourceCollectionMetadata))
             List(
               ColumnName(colDef.columnName, Some(alias)),
               TTL(colDef.columnName, Some(alias + "_ttl")),
@@ -277,7 +335,7 @@ object ScyllaValidator {
         sourceTableDef.regularColumns.flatMap { colDef =>
           val renamedColName = config.renamesMap(colDef.columnName)
 
-          if (projectMetadataFor(colDef.columnName))
+          if (projectMetadataFor(colDef.columnName, projectTargetCollectionMetadata))
             List(
               ColumnName(renamedColName),
               TTL(renamedColName, Some(renamedColName + "_ttl")),
@@ -320,7 +378,7 @@ object ScyllaValidator {
       val failures = cachedJoined
         .flatMap { case (l, r) =>
           RowComparisonFailure.compareCassandraRows(
-            l,
+            dropColumns(l, sourceOnlyColumns),
             r,
             validationConfig.floatingPointTolerance,
             validationConfig.timestampMsTolerance,
@@ -360,11 +418,10 @@ object ScyllaValidator {
             "copyMissingRows LIMITATION for non-frozen collections: only rows entirely absent from " +
               "the target are repaired. A row that already exists on the target but has a DIFFERENT " +
               "collection (missing, extra, or stale elements) is reported by validation but NOT " +
-              "converged here — collection-append repair is additive (it can only add elements, " +
-              "never remove target-side extras) and re-adding could resurrect elements deleted on " +
-              "the target. To converge present-but-incomplete rows, resume the migration itself " +
-              "(base insert + appends are idempotent under USING TIMESTAMP) rather than relying on " +
-              "validation repair."
+              "converged here, since re-writing them could resurrect elements deleted on the " +
+              "target. To converge present-but-incomplete rows, re-run the migration itself " +
+              "(idempotent under USING TIMESTAMP; it also removes target elements older than every " +
+              "source element) rather than relying on validation repair."
           )
         }
         log.info("Copying missing rows from source to target")
@@ -467,30 +524,34 @@ object ScyllaValidator {
             if (perElementCollectionMetadata) {
               // Scalar/frozen base write + per-element collection-append passes, mirroring the
               // direct migration multi-pass write so missing rows regain element-level metadata.
-              val (baseRdd, baseSchema, timestampColumns, appendWrites) =
-                readers.Cassandra.explodeRowsFromPerColumnMetaCollectionAware(spark, rawRepairDf)
+              // The explosion persists `rawRepairDf` so the base and append passes share one
+              // read; release it once every pass has been written (or one has failed).
+              try {
+                val (baseRdd, baseSchema, timestampColumns, appendWrites) =
+                  readers.Cassandra.explodeRowsFromPerColumnMetaCollectionAware(spark, rawRepairDf)
 
-              writers.Scylla.writeRowRDD(
-                targetSettings,
-                Nil,
-                applyRepairStrategy(baseRdd, baseSchema, timestampColumns),
-                baseSchema,
-                Some(timestampColumns),
-                None,
-                sourceSettings
-              )
-
-              appendWrites.foreach { caw =>
-                writers.Scylla.writeCollectionAppendRDD(
+                writers.Scylla.writeRowRDD(
                   targetSettings,
                   Nil,
-                  caw.columnName,
-                  overrideWritetimeColumn(caw.rdd, caw.schema, "writetime"),
-                  caw.schema,
+                  applyRepairStrategy(baseRdd, baseSchema, timestampColumns),
+                  baseSchema,
+                  Some(timestampColumns),
                   None,
                   sourceSettings
                 )
-              }
+
+                appendWrites.foreach { caw =>
+                  writers.Scylla.writeCollectionAppendRDD(
+                    targetSettings,
+                    Nil,
+                    caw.columnName,
+                    overrideWritetimeColumn(caw.rdd, caw.schema, "writetime"),
+                    caw.schema,
+                    None,
+                    sourceSettings
+                  )
+                }
+              } finally rawRepairDf.unpersist()
             } else if (repairWithScalarMetadata) {
               val (repairRdd, writeRepairSchema, timestampColumns) =
                 readers.Cassandra.explodeRowsFromPerColumnMeta(spark, rawRepairDf)

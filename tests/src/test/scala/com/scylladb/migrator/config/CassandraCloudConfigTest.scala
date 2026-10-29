@@ -596,6 +596,46 @@ class CassandraCloudConfigTest extends munit.FunSuite {
   }
 
   // ---------------------------------------------------------------------------
+  // Source: cassandra, preserveCollectionTimestamps
+  // ---------------------------------------------------------------------------
+
+  private val collectionTimestampsBase =
+    """type: cassandra
+      |host: 127.0.0.1
+      |port: 9042
+      |keyspace: ks
+      |table: tbl
+      |consistencyLevel: LOCAL_QUORUM
+      |preserveTimestamps: true
+      |fetchSize: 1000
+      |""".stripMargin
+
+  test("source cassandra: preserveCollectionTimestamps defaults to false") {
+    assertEquals(
+      parseSourceCassandra(collectionTimestampsBase).preserveCollectionTimestamps,
+      false
+    )
+  }
+
+  test("source cassandra: preserveCollectionTimestamps: true is decoded") {
+    val parsed =
+      parseSourceCassandra(collectionTimestampsBase + "preserveCollectionTimestamps: true\n")
+    assertEquals(parsed.preserveCollectionTimestamps, true)
+  }
+
+  test("source cassandra: round-trip preserves preserveCollectionTimestamps") {
+    val original =
+      parseSourceCassandra(collectionTimestampsBase + "preserveCollectionTimestamps: true\n")
+    val roundTrip = io.circe.parser
+      .parse((original: SourceSettings).asJson.noSpaces)
+      .flatMap(_.as[SourceSettings])
+      .toOption
+      .collect { case s: SourceSettings.Cassandra => s }
+    assertEquals(roundTrip.map(_.preserveCollectionTimestamps), Some(true))
+    assertEquals(roundTrip, Some(original))
+  }
+
+  // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
 

@@ -152,7 +152,7 @@ spark-image: ## Pull or build the Spark Docker image
 start-services: ## Start all Docker Compose test services
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_GCS_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
 	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_GCS_BIND_DIRS) $(DOCKER_SCYLLA_BIND_DIRS)
-	docker compose -f $(COMPOSE_FILE) up -d mysql dynamodb cassandra cassandra2 cassandra3 cassandra5 scylla-source scylla s3 gcs
+	docker compose -f $(COMPOSE_FILE) up -d mysql dynamodb cassandra cassandra2 cassandra3 cassandra5 scylla-source scylla scylla2026 s3 gcs
 
 start-services-scylla: ## Start services needed for Scylla integration tests without GCS savepoints
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla ./tests/docker/scylla-source
@@ -164,17 +164,19 @@ start-services-scylla-gcs: ## Start services needed for Scylla integration tests
 	$(Q)sudo chmod -R 777 $(DOCKER_SPARK_BIND_DIRS) $(DOCKER_GCS_BIND_DIRS) ./tests/docker/scylla ./tests/docker/scylla-source
 	docker compose $(COMPOSE_SCYLLA_FILES) up -d mysql cassandra scylla-source scylla gcs
 
-start-services-scylla2026: ## Start the pinned ScyllaDB 2026.2 service for collection-timestamp tests
-	docker compose -f $(COMPOSE_FILE) up -d scylla2026
+start-services-scylla2026: ## Start the pinned ScyllaDB 2026.2 service (and the Cassandra 5.0 source) for collection-timestamp tests
+	docker compose -f $(COMPOSE_FILE) up -d scylla2026 cassandra5
 
-wait-for-services-scylla2026: ## Wait for the ScyllaDB 2026.2 service to become ready
-	$(Q)$(call wait-for-cql,scylla2026)
+wait-for-services-scylla2026: ## Wait for the ScyllaDB 2026.2 and Cassandra 5.0 services to become ready
+	$(Q)($(call wait-for-cql,scylla2026)) & p1=$$!
+	($(call wait-for-cql,cassandra5)) & p2=$$!
+	wait $$p1; wait $$p2
 
-stop-services-scylla2026: ## Stop the ScyllaDB 2026.2 service
-	$(Q)docker compose -f $(COMPOSE_FILE) rm -sf scylla2026
+stop-services-scylla2026: ## Stop the ScyllaDB 2026.2 and Cassandra 5.0 services
+	$(Q)docker compose -f $(COMPOSE_FILE) rm -sf scylla2026 cassandra5
 
 dump-logs-scylla2026: ## Dump the ScyllaDB 2026.2 service logs
-	$(Q)docker compose -f $(COMPOSE_FILE) logs --tail=100 scylla2026 2>&1 || true
+	$(Q)docker compose -f $(COMPOSE_FILE) logs --tail=100 scylla2026 cassandra5 2>&1 || true
 
 start-services-dynamodb: ## Start services for DynamoDB integration tests (SCYLLA_VERSION=..., TABLETS_MODE=...)
 	$(Q)mkdir -p $(DOCKER_SPARK_BIND_DIRS) ./tests/docker/scylla
@@ -197,7 +199,8 @@ wait-for-services: ## Wait for all test services to become ready
 	($(call wait-for-cql,scylla-source)) & p6=$$!
 	($(call wait-for-mysql,mysql)) & p7=$$!
 	($(call wait-for-port,4443)) & p8=$$!
-	wait $$p1; wait $$p2; wait $$p3; wait $$p4; wait $$p5; wait $$p6; wait $$p7; wait $$p8
+	($(call wait-for-cql,scylla2026)) & p9=$$!
+	wait $$p1; wait $$p2; wait $$p3; wait $$p4; wait $$p5; wait $$p6; wait $$p7; wait $$p8; wait $$p9
 
 wait-for-services-scylla: ## Wait for Scylla test services to become ready
 	$(Q)($(call wait-for-cql-compose,$(COMPOSE_SCYLLA_FILES),cassandra)) & p1=$$!
