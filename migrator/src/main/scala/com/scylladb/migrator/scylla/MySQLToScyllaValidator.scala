@@ -959,27 +959,32 @@ object MySQLToScyllaValidator {
           renamedPK,
           "left_anti"
         )
-        .persist(StorageLevel.MEMORY_AND_DISK)
 
-      try {
-        val missingCount = missingSourceDf.count()
+      // writeDataframe is the only action over missingSourceDf, so no persist is needed. The
+      // count is derived from an accumulator updated inside that single write action rather than
+      // a separate .count(), avoiding a second pass over the (possibly expensive) anti-join.
+      val missingRowCountAcc =
+        spark.sparkContext.longAccumulator("MySQLToScyllaValidator missing source row count")
+      val countedMissingSourceDf = spark.createDataFrame(
+        missingSourceDf.rdd.map { row =>
+          missingRowCountAcc.add(1L)
+          row
+        },
+        missingSourceDf.schema
+      )
 
-        if (missingCount > 0) {
-          writers.Scylla.writeDataframe(
-            targetSettings,
-            Nil,
-            missingSourceDf,
-            None,
-            None,
-            sourceSettings
-          )
-        }
+      writers.Scylla.writeDataframe(
+        targetSettings,
+        Nil,
+        countedMissingSourceDf,
+        None,
+        None,
+        sourceSettings
+      )
 
-        log.info(
-          s"Finished copying missing rows to target: $missingCount missing row(s) copied"
-        )
-      } finally
-        missingSourceDf.unpersist()
+      log.info(
+        s"Finished copying missing rows to target: ${missingRowCountAcc.value} missing row(s) copied"
+      )
     }
 
     allFailures

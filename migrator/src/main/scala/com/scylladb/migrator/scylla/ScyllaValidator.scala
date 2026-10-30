@@ -17,13 +17,12 @@ import com.scylladb.migrator.config.{
   SourceSettings,
   TargetSettings
 }
-import com.scylladb.migrator.validation.RowComparisonFailure
+import com.scylladb.migrator.validation.{ BoundedListAccumulator, RowComparisonFailure }
 import org.apache.logging.log4j.LogManager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{ Row, SparkSession }
 import org.apache.spark.sql.cassandra.DataTypeConverter
 import org.apache.spark.sql.types.{ IntegerType, LongType, StructField, StructType }
-import org.apache.spark.storage.StorageLevel
 
 import scala.collection.immutable.ArraySeq
 
@@ -199,28 +198,24 @@ object ScyllaValidator {
         .withConnector(targetConnector)
     }
 
-    val cachedJoined =
-      if (validationConfig.copyMissingRows) joined.persist(StorageLevel.MEMORY_AND_DISK)
-      else joined
-
-    try {
-      val failures = cachedJoined
-        .flatMap { case (l, r) =>
-          RowComparisonFailure.compareCassandraRows(
-            l,
-            r,
-            validationConfig.floatingPointTolerance,
-            validationConfig.timestampMsTolerance,
-            validationConfig.ttlToleranceMillis,
-            validationConfig.writetimeToleranceMillis,
-            validationConfig.compareTimestamps,
-            validationConfig.numericTypePolicy
-          )
-        }
-        .take(validationConfig.failuresToFetch)
-        .toList
-
-      if (validationConfig.copyMissingRows) {
+    val failures: List[RowComparisonFailure] =
+      if (!validationConfig.copyMissingRows)
+        joined
+          .flatMap { case (l, r) =>
+            RowComparisonFailure.compareCassandraRows(
+              l,
+              r,
+              validationConfig.floatingPointTolerance,
+              validationConfig.timestampMsTolerance,
+              validationConfig.ttlToleranceMillis,
+              validationConfig.writetimeToleranceMillis,
+              validationConfig.compareTimestamps,
+              validationConfig.numericTypePolicy
+            )
+          }
+          .take(validationConfig.failuresToFetch)
+          .toList
+      else {
         if (
           !includePerColumnMetadata &&
           validationConfig.repairWritetimeStrategy != RepairWritetimeStrategy.Source
@@ -237,16 +232,35 @@ object ScyllaValidator {
           buildRepairSchema(sourceTableDef, config.renamesMap, includePerColumnMetadata)
         val repairFieldNames = repairSchema.fieldNames.toIndexedSeq
 
-        // cachedJoined is already persisted, so re-deriving missingRowsRdd from it for the
-        // count and the map below is a cheap in-memory filter, not a re-read from the source
-        // or target database. No separate persist is needed here.
-        val missingRowsRdd =
-          cachedJoined.filter { case (_, r) => r.isEmpty }
-        val missingSourceRowCount = missingRowsRdd.count()
+        val failureAccumulator =
+          new BoundedListAccumulator[RowComparisonFailure](validationConfig.failuresToFetch)
+        spark.sparkContext.register(failureAccumulator, "ScyllaValidator row comparison failures")
+        val missingSourceRowCountAcc =
+          spark.sparkContext.longAccumulator("ScyllaValidator missing source row count")
 
-        if (missingSourceRowCount > 0) {
-          val rawRepairDf = spark.createDataFrame(
-            missingRowsRdd.map { case (sourceRow, _) =>
+        // The comparison and the repair row are both derived from a single pass over `joined`,
+        // so there is no second action that would require persisting it. Note that
+        // failureAccumulator/missingSourceRowCountAcc are updated from inside this transformation
+        // (not an action), so a retried or speculatively re-executed task could apply an update
+        // more than once; this only affects the diagnostic failure sample and the logged count
+        // below, not the rows actually written, since repair writes are idempotent upserts.
+        val repairRowsRdd: RDD[Row] = joined.flatMap { case (sourceRow, targetRow) =>
+          RowComparisonFailure
+            .compareCassandraRows(
+              sourceRow,
+              targetRow,
+              validationConfig.floatingPointTolerance,
+              validationConfig.timestampMsTolerance,
+              validationConfig.ttlToleranceMillis,
+              validationConfig.writetimeToleranceMillis,
+              validationConfig.compareTimestamps,
+              validationConfig.numericTypePolicy
+            )
+            .foreach(failureAccumulator.add)
+
+          if (targetRow.isEmpty) {
+            missingSourceRowCountAcc.add(1L)
+            Some(
               Row.fromSeq(
                 repairFieldNames.map { fieldName =>
                   readers.Cassandra.widenTimestampValue(
@@ -254,85 +268,86 @@ object ScyllaValidator {
                   )
                 }
               )
-            },
-            repairSchema
-          )
+            )
+          } else None
+        }
 
-          if (includePerColumnMetadata) {
-            val (repairRdd, writeRepairSchema, timestampColumns) =
-              readers.Cassandra.explodeRowsFromPerColumnMeta(spark, rawRepairDf)
-            val writetimeIdx = writeRepairSchema.fieldIndex(timestampColumns.writeTime)
+        val rawRepairDf = spark.createDataFrame(repairRowsRdd, repairSchema)
 
-            def overrideWritetime(rdd: RDD[Row], micros: Long): RDD[Row] =
-              rdd.map { row =>
-                val values = row.toSeq.toArray
-                values(writetimeIdx) match {
-                  case com.datastax.spark.connector.types.CassandraOption.Unset =>
-                  case _ =>
-                    values(writetimeIdx) = java.lang.Long.valueOf(micros)
-                }
-                Row(ArraySeq.unsafeWrapArray(values): _*)
+        if (includePerColumnMetadata) {
+          val (repairRdd, writeRepairSchema, timestampColumns) =
+            readers.Cassandra.explodeRowsFromPerColumnMeta(spark, rawRepairDf)
+          val writetimeIdx = writeRepairSchema.fieldIndex(timestampColumns.writeTime)
+
+          def overrideWritetime(rdd: RDD[Row], micros: Long): RDD[Row] =
+            rdd.map { row =>
+              val values = row.toSeq.toArray
+              values(writetimeIdx) match {
+                case com.datastax.spark.connector.types.CassandraOption.Unset =>
+                case _ =>
+                  values(writetimeIdx) = java.lang.Long.valueOf(micros)
               }
-
-            val rddForWrite = validationConfig.repairWritetimeStrategy match {
-              case RepairWritetimeStrategy.Source =>
-                log.info(
-                  "repairWritetimeStrategy=source: using original source writetime. " +
-                    "Repair writes may be shadowed by newer delete tombstones on the target."
-                )
-                repairRdd
-
-              case RepairWritetimeStrategy.Coordinator =>
-                val repairTimeMicros = System.currentTimeMillis() * 1000L
-                log.info(
-                  s"repairWritetimeStrategy=coordinator: overriding writetime to $repairTimeMicros. " +
-                    "Repair writes will beat most tombstones but may resurrect deleted rows."
-                )
-                overrideWritetime(repairRdd, repairTimeMicros)
-
-              case RepairWritetimeStrategy.Config =>
-                val configTimeMicros = targetSettings.writeWritetimestampInuS.getOrElse(
-                  sys.error(
-                    "repairWritetimeStrategy=config requires target.writeWritetimestampInuS " +
-                      "to be set in the configuration."
-                  )
-                )
-                log.info(
-                  s"repairWritetimeStrategy=config: overriding writetime to $configTimeMicros " +
-                    "(from target.writeWritetimestampInuS)."
-                )
-                overrideWritetime(repairRdd, configTimeMicros)
+              Row(ArraySeq.unsafeWrapArray(values): _*)
             }
 
-            writers.Scylla.writeRowRDD(
-              targetSettings,
-              Nil,
-              rddForWrite,
-              writeRepairSchema,
-              Some(timestampColumns),
-              None,
-              sourceSettings
-            )
-          } else {
-            writers.Scylla.writeDataframe(
-              targetSettings,
-              Nil,
-              rawRepairDf,
-              None,
-              None,
-              sourceSettings
-            )
+          val rddForWrite = validationConfig.repairWritetimeStrategy match {
+            case RepairWritetimeStrategy.Source =>
+              log.info(
+                "repairWritetimeStrategy=source: using original source writetime. " +
+                  "Repair writes may be shadowed by newer delete tombstones on the target."
+              )
+              repairRdd
+
+            case RepairWritetimeStrategy.Coordinator =>
+              val repairTimeMicros = System.currentTimeMillis() * 1000L
+              log.info(
+                s"repairWritetimeStrategy=coordinator: overriding writetime to $repairTimeMicros. " +
+                  "Repair writes will beat most tombstones but may resurrect deleted rows."
+              )
+              overrideWritetime(repairRdd, repairTimeMicros)
+
+            case RepairWritetimeStrategy.Config =>
+              val configTimeMicros = targetSettings.writeWritetimestampInuS.getOrElse(
+                sys.error(
+                  "repairWritetimeStrategy=config requires target.writeWritetimestampInuS " +
+                    "to be set in the configuration."
+                )
+              )
+              log.info(
+                s"repairWritetimeStrategy=config: overriding writetime to $configTimeMicros " +
+                  "(from target.writeWritetimestampInuS)."
+              )
+              overrideWritetime(repairRdd, configTimeMicros)
           }
+
+          writers.Scylla.writeRowRDD(
+            targetSettings,
+            Nil,
+            rddForWrite,
+            writeRepairSchema,
+            Some(timestampColumns),
+            None,
+            sourceSettings
+          )
+        } else {
+          writers.Scylla.writeDataframe(
+            targetSettings,
+            Nil,
+            rawRepairDf,
+            None,
+            None,
+            sourceSettings
+          )
         }
 
         log.info(
-          s"Finished copying missing rows to target: $missingSourceRowCount missing row(s) copied"
+          s"Finished copying missing rows to target: ${missingSourceRowCountAcc.value} missing row(s) copied"
         )
+
+        failureAccumulator.value.take(validationConfig.failuresToFetch)
       }
 
-      failures
-    } finally
-      if (validationConfig.copyMissingRows) cachedJoined.unpersist()
+    failures
   }
 
 }

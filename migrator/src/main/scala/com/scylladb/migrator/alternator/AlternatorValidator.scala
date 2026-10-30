@@ -3,13 +3,12 @@ package com.scylladb.migrator.alternator
 import com.scylladb.migrator.{ writers, DynamoUtils }
 import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
 import com.scylladb.migrator.readers
-import com.scylladb.migrator.validation.RowComparisonFailure
+import com.scylladb.migrator.validation.{ BoundedListAccumulator, RowComparisonFailure }
 import org.apache.hadoop.dynamodb.DynamoDBItemWritable
 import org.apache.hadoop.io.Text
 import org.apache.logging.log4j.LogManager
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.storage.StorageLevel
 import software.amazon.awssdk.services.dynamodb.model.{ AttributeValue, DescribeTableRequest }
 
 import scala.jdk.CollectionConverters._
@@ -88,78 +87,93 @@ object AlternatorValidator {
 
     val joinedRdd = sourceByKey.leftOuterJoin(targetByKey)
 
-    val cachedJoined =
-      if (configValidation.copyMissingRows) joinedRdd.persist(StorageLevel.MEMORY_AND_DISK)
-      else joinedRdd
-
-    try {
-      val failures = cachedJoined
-        .flatMap { case (_, (l, r)) =>
-          RowComparisonFailure.compareDynamoDBRows(
-            l,
-            r,
-            renamedColumn,
-            configValidation.floatingPointTolerance,
-            configValidation.numericTypePolicy
-          )
-        }
-        .take(configValidation.failuresToFetch)
-        .toList
-
-      if (configValidation.copyMissingRows) {
+    val failures: List[RowComparisonFailure] =
+      if (!configValidation.copyMissingRows)
+        joinedRdd
+          .flatMap { case (_, (l, r)) =>
+            RowComparisonFailure.compareDynamoDBRows(
+              l,
+              r,
+              renamedColumn,
+              configValidation.floatingPointTolerance,
+              configValidation.numericTypePolicy
+            )
+          }
+          .take(configValidation.failuresToFetch)
+          .toList
+      else {
         log.info("Copying missing rows from source to target")
 
-        // cachedJoined is already persisted, so re-deriving missingRowsRdd from it for the
-        // count and the map below is a cheap in-memory filter, not a re-read from the source
-        // or target table. No separate persist is needed here.
-        val missingRowsRdd =
-          cachedJoined
-            .filter { case (_, (_, r)) => r.isEmpty }
-        val missingRowCount = missingRowsRdd.count()
+        val failureAccumulator =
+          new BoundedListAccumulator[RowComparisonFailure](configValidation.failuresToFetch)
+        spark.sparkContext
+          .register(failureAccumulator, "AlternatorValidator row comparison failures")
+        val missingRowCountAcc =
+          spark.sparkContext.longAccumulator("AlternatorValidator missing source row count")
 
-        if (missingRowCount > 0) {
-          val missingAsHadoop = missingRowsRdd.map { case (_, (sourceItem, _)) =>
-            val item = new java.util.HashMap[String, AttributeValue]()
-            sourceItem.foreach { case (k, v) =>
-              item.put(k, DdbValue.toAttributeValue(v))
-            }
-            (new Text(), new DynamoDBItemWritable(item))
-          }
-
-          val targetTableDesc = {
-            val client = DynamoUtils.buildDynamoClient(
-              targetSettings.endpoint,
-              targetSettings.finalCredentials.map(_.toProvider),
-              targetSettings.region,
-              Seq.empty,
-              targetSettings.alternatorSettings
-            )
-            try
-              client
-                .describeTable(
-                  DescribeTableRequest.builder().tableName(targetSettings.table).build()
-                )
-                .table()
-            finally
-              client.close()
-          }
-
-          writers.DynamoDB.writeRDD(
-            targetSettings,
-            renamedColumn,
-            missingAsHadoop,
-            targetTableDesc
+        // Cheap AWS API lookup, not a Spark action, so it's fine to always perform it rather
+        // than guard it behind a row count that would otherwise require a separate action.
+        val targetTableDesc = {
+          val client = DynamoUtils.buildDynamoClient(
+            targetSettings.endpoint,
+            targetSettings.finalCredentials.map(_.toProvider),
+            targetSettings.region,
+            Seq.empty,
+            targetSettings.alternatorSettings
           )
+          try
+            client
+              .describeTable(
+                DescribeTableRequest.builder().tableName(targetSettings.table).build()
+              )
+              .table()
+          finally
+            client.close()
         }
 
-        log.info(
-          s"Finished copying missing rows to target: $missingRowCount missing row(s) copied"
+        // The comparison and the repair item are both derived from a single pass over
+        // `joinedRdd`, so there is no second action that would require persisting it. Note that
+        // failureAccumulator/missingRowCountAcc are updated from inside this transformation (not
+        // an action), so a retried or speculatively re-executed task could apply an update more
+        // than once; this only affects the diagnostic failure sample and the logged count below,
+        // not the rows actually written, since repair writes are idempotent upserts.
+        val missingAsHadoop: RDD[(Text, DynamoDBItemWritable)] = joinedRdd.flatMap {
+          case (_, (sourceItem, targetItem)) =>
+            RowComparisonFailure
+              .compareDynamoDBRows(
+                sourceItem,
+                targetItem,
+                renamedColumn,
+                configValidation.floatingPointTolerance,
+                configValidation.numericTypePolicy
+              )
+              .foreach(failureAccumulator.add)
+
+            if (targetItem.isEmpty) {
+              missingRowCountAcc.add(1L)
+              val item = new java.util.HashMap[String, AttributeValue]()
+              sourceItem.foreach { case (k, v) =>
+                item.put(k, DdbValue.toAttributeValue(v))
+              }
+              Some((new Text(), new DynamoDBItemWritable(item)))
+            } else None
+        }
+
+        writers.DynamoDB.writeRDD(
+          targetSettings,
+          renamedColumn,
+          missingAsHadoop,
+          targetTableDesc
         )
+
+        log.info(
+          s"Finished copying missing rows to target: ${missingRowCountAcc.value} missing row(s) copied"
+        )
+
+        failureAccumulator.value.take(configValidation.failuresToFetch)
       }
 
-      failures
-    } finally
-      if (configValidation.copyMissingRows) cachedJoined.unpersist()
+    failures
   }
 
 }
