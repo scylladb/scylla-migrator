@@ -1,17 +1,37 @@
 name: Release
 
 on:
+  push:
+    tags: ['v[0-9]*.[0-9]*.[0-9]*']
   release:
     types: [published]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.release.tag_name || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
+
 jobs:
-  publish:
-    name: Publish
+  build:
+    name: Build release artifact
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    outputs:
+      commit: ${{ steps.validate.outputs.commit }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+          persist-credentials: false
+      - name: Validate release tag
+        id: validate
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
         with:
           java-version: 17
@@ -20,7 +40,45 @@ jobs:
       - uses: sbt/setup-sbt@af116cce31c00823d3903ce687f9cda3a4f19f1b # v1.2.1
       - name: Build
         run: make build
-      - name: Upload release artifact
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          files: migrator/target/scala-2.13/scylla-migrator-assembly.jar
+          name: release-jar
+          path: migrator/target/scala-2.13/scylla-migrator-assembly.jar
+          if-no-files-found: error
+
+  publish:
+    name: Create release and upload artifact
+    needs: build
+    outputs:
+      created: ${{ steps.release.outputs.created }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-jar
+          path: release-artifact
+      - name: Create release if absent
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILT_COMMIT: ${{ needs.build.outputs.commit }}
+        run: python3 .github/scripts/release_notes.py release
+      - name: Upload release artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$RELEASE_TAG" release-artifact/scylla-migrator-assembly.jar --clobber
+
+  docker:
+    # Avoid the manual release's Docker event on initial reuse; preserve explicit rerun recovery.
+    if: github.event_name == 'push' && (needs.publish.outputs.created == 'true' || fromJSON(github.run_attempt) > 1)
+    needs: publish
+    uses: ./.github/workflows/docker-publish.yml
+    with:
+      tag: ${{ github.ref_name }}
+    secrets: inherit

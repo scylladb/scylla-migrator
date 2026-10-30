@@ -164,13 +164,46 @@ Publishing a new release includes building and uploading the release artifacts, 
 
 ### Building and Uploading the Release Artifacts
 
-Create a new [GitHub release](https://github.com/scylladb/scylla-migrator/releases) off the branch `master`, give it a tag name (please see below), a title, and a description, and then click Publish. A workflow will be automatically triggered and will build the application fat-jar and upload it as a release asset.
+Push a version tag (for example, `v2.1.7`) on the release commit from `master`. The release workflow builds the fat-jar, creates a GitHub release with generated notes, uploads the JAR, and invokes the existing Docker publication workflow. Reruns reuse an existing published release and replace its JAR without overwriting its description. Initial tag-push attempts invoke Docker only when they create the release; an already published release uses its existing release-event Docker path. Explicit tag-workflow reruns still invoke Docker for recovery, and the Docker workflow also retains manual dispatch. An existing draft or unpublished release stops publication until a maintainer publishes or removes it. Manually publishing a GitHub release remains supported and still triggers artifact and Docker publication.
 
 Rules for the release tag name:
 - Make sure to use tag names like `v1.2.3`, starting with `v` and followed by a [semantic version number](https://semver.org/).
 - Bump the major version number if the new release breaks the backward compatibility (e.g., an existing configuration or setup will not work anymore with the new release). In such a case, make sure to also update the compatibility matrix in the documentation.
 - Bump the minor version number if the new release introduces new features in a backward compatible manner.
 - Bump the patch version number if the new release only introduces bugfixes in a backward compatible manner.
+
+### Release notes
+
+The `omit-from-release-notes` PR label excludes a PR from generated GitHub release notes. `actions/labeler` uses the canonical `.github/labeler.yml` support-path union. Documentation, test sources and fixtures, benchmarks, named ordinary test/documentation workflows, and selected development-only files qualify. Runtime sources, build and dependency manifests, release/packaging controls, deployment code, mixed changes with nonmatching paths, and unknown paths stay visible. Author, title, `chore`, and dependency labels do not hide changes.
+
+Labeling runs on PR creation, updates, reopening, edits, and closing. The guard checks paginated file metadata, expected count, head/base revisions, and both prior and current rename paths. After the stock action with `sync-labels: true`, it rechecks the snapshot and actual omission label. A matching trusted PR event or successful manual PR lookup confirms the target before checkout and dependency installation. Unconfirmed targets, including ordinary issues, receive no label writes. For a confirmed PR, failed or unexpectedly skipped setup/classification/verification attempts remove the unverified label without depending on installed helpers or a fresh identity lookup. API outages can prevent cleanup, and failures remain visible. These before/after reads are not atomic and do not rule out later changes or races.
+
+Run merged-PR backfills and rechecks from **Actions → Label release notes → Run workflow** on `master`, supplying the PR number, for example:
+
+```sh
+gh workflow run label-release-notes.yml --ref master -f pr_number=123
+```
+
+Manual dispatch from another ref fails before checkout. Helpers and canonical configuration are checked out from the repository default branch; no PR code or old PR base revision is executed. Trusted workflow code remains a prerequisite.
+
+Before **every** release tag, identify every PR merged since the previous release and included in the intended release commit. Run or rerun classification for each on the default branch. Compare the final `Verified head=... base=... count=... snapshot=... omit=...; actual label checked` log line with the PR's current revisions and file count:
+
+```sh
+gh api repos/scylladb/scylla-migrator/pulls/123 --jq '{head: .head.sha, base: .base.sha, count: .changed_files}'
+gh pr view 123 --repo scylladb/scylla-migrator --json labels
+```
+
+Confirm the actual omission label agrees with the verified result, including visible runtime/mixed PRs. A green run alone does not prove an older classification is current. New merges, revision changes, or manual label changes require another check. Publication remains asynchronous and does not wait for classification. There is no automated classification/release synchronization barrier, and no follow-up automation is scheduled. Missed checks can leave omissions or unwanted support entries in published notes; publisher reruns preserve those descriptions. A manual omission label may be removed by the next classification if the files do not qualify.
+
+The label controls GitHub release notes only. Repository-local Jira callers ignore whole-name `omit-from-release-notes` add/remove events, including manual changes, while preserving other events. Conditions use Actions' case-insensitive string comparison; suffixed names retain normal routing. Default-`GITHUB_TOKEN` label events do not start those workflows. Existing Jira copies are not cleaned, and other sync paths may restore copied metadata; shared automation is unchanged.
+
+Run focused automation checks without starting migration services:
+
+```sh
+npm ci --ignore-scripts --prefix .github
+node --test .github/scripts/*.test.cjs
+python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
+```
 
 ### Updating the Documentation
 
