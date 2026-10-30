@@ -175,7 +175,6 @@ TODO*.md
 .codex-config.json
 .codex-settings.json
 codex.log
-AGENTS.md
 
 # Claude - AI assistant metadata
 .anthropic/
