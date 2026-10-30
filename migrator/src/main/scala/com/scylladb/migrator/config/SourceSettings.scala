@@ -93,7 +93,9 @@ object SourceSettings {
     private val SentinelPort: Int = 0
 
     implicit val decoder: Decoder[Cassandra] = Decoder.instance { c =>
-      val hasHost = c.get[Option[String]]("host").exists(_.isDefined)
+      val hasHost =
+        c.get[Option[String]]("host")(Decoder.decodeOption(ContactPoints.decoder))
+          .exists(_.isDefined)
       val hasPort = c.get[Option[Int]]("port").exists(_.isDefined)
       for {
         cloud <- c.get[Option[CloudConfig]]("cloud")
@@ -124,7 +126,7 @@ object SourceSettings {
                  )
                case (true, false, false) => Right(())
              }
-        host               <- c.getOrElse[String]("host")(SentinelHost)
+        host               <- c.getOrElse[String]("host")(SentinelHost)(ContactPoints.decoder)
         port               <- c.getOrElse[Int]("port")(SentinelPort)
         localDC            <- c.get[Option[String]]("localDC")
         credentials        <- c.get[Option[Credentials]]("credentials")
@@ -627,7 +629,7 @@ object SourceSettings {
   }
 
   private def validateCassandraSource(s: Cassandra): List[String] =
-    HostValidation.validateHostOrIp("Cassandra source", s.host) ++
+    ContactPoints.validate("Cassandra source", s.host) ++
       HostValidation.validatePort("Cassandra source", s.port)
 
   implicit val decoder: Decoder[SourceSettings] = Decoder.instance { cursor =>

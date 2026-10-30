@@ -13,6 +13,7 @@ import com.datastax.spark.connector.cql.{
 }
 import com.scylladb.migrator.config.{
   CloudConfig,
+  ContactPoints,
   Credentials,
   SSLOptions,
   SourceSettings,
@@ -79,7 +80,7 @@ object Connectors {
 
   private[migrator] def sparkSessionOptions(options: SessionOptions): Map[String, String] = {
     val base = Map(
-      ConnectionHost  -> options.host,
+      ConnectionHost  -> ContactPoints.split(options.host).mkString(","),
       ConnectionPort  -> options.port.toString,
       QueryRetryCount -> options.queryRetryCount.toString
     )
@@ -236,11 +237,14 @@ object Connectors {
     auth: com.datastax.spark.connector.cql.AuthConf,
     sslOptions: Option[SSLOptions]
   ): ContactInfo = {
-    val resolvedHost =
-      if (host.startsWith("[") && host.endsWith("]")) host.slice(1, host.length - 1)
-      else host
+    val contactPoints = ContactPoints.split(host).map { h =>
+      val resolvedHost =
+        if (h.startsWith("[") && h.endsWith("]")) h.slice(1, h.length - 1)
+        else h
+      new InetSocketAddress(resolvedHost, port)
+    }
     IpBasedContactInfo(
-      hosts            = Set(new InetSocketAddress(resolvedHost, port)),
+      hosts            = contactPoints.toSet,
       authConf         = auth,
       cassandraSSLConf = cassandraSSLConf(sslOptions)
     )
