@@ -8,10 +8,11 @@ import com.scylladb.migrator.config.{ MigratorConfig, Rename, SourceSettings, Ta
 import com.scylladb.migrator.readers
 import com.scylladb.migrator.readers.MySQL
 import com.scylladb.migrator.schema.SchemaResolver
-import com.scylladb.migrator.validation.RowComparisonFailure
+import com.scylladb.migrator.validation.{ PartitionKeyedAccumulator, RowComparisonFailure }
 import com.scylladb.migrator.validation.core._
 import com.scylladb.migrator.validation.core.SchemaResolver.{ resolveFieldName, sparkColumn }
 import org.apache.logging.log4j.LogManager
+import org.apache.spark.TaskContext
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.cassandra.{ CassandraSQLRow, DataTypeConverter }
 import org.apache.spark.sql.{ Column, DataFrame, Row, SparkSession }
@@ -961,17 +962,35 @@ object MySQLToScyllaValidator {
         )
 
       // writeDataframe is the only action over missingSourceDf, so no persist is needed. The
-      // count is derived from an accumulator updated inside that single write action rather than
-      // a separate .count(), avoiding a second pass over the (possibly expensive) anti-join.
-      val missingRowCountAcc =
-        spark.sparkContext.longAccumulator("MySQLToScyllaValidator missing source row count")
-      val countedMissingSourceDf = spark.createDataFrame(
-        missingSourceDf.rdd.map { row =>
-          missingRowCountAcc.add(1L)
+      // count is reported once per task completion, keyed by (partitionId, stageAttemptNumber),
+      // so a resubmitted stage (e.g. after a shuffle fetch failure from the anti-join) cannot
+      // double-count a partition that already succeeded under an older stage attempt - see
+      // ScyllaValidator for the full rationale. This block only needs a count (failure sampling
+      // already happened above via collectFailureSample), so it uses
+      // PartitionKeyedAccumulator[Long] directly rather than PartitionRepairSummary.
+      val missingRowCountAcc = new PartitionKeyedAccumulator[Long]()
+      spark.sparkContext
+        .register(missingRowCountAcc, "MySQLToScyllaValidator missing source row count")
+
+      val countedMissingSourceRdd: RDD[Row] = missingSourceDf.rdd.mapPartitions { partitionIter =>
+        val tc = TaskContext.get()
+        val partitionId = tc.partitionId()
+        val stageAttemptNumber = tc.stageAttemptNumber()
+        var count = 0L
+
+        val result = partitionIter.map { row =>
+          count += 1
           row
-        },
-        missingSourceDf.schema
-      )
+        }
+
+        tc.addTaskCompletionListener[Unit] { _ =>
+          missingRowCountAcc.add((partitionId, stageAttemptNumber, count))
+        }
+
+        result
+      }
+      val countedMissingSourceDf =
+        spark.createDataFrame(countedMissingSourceRdd, missingSourceDf.schema)
 
       writers.Scylla.writeDataframe(
         targetSettings,
@@ -982,8 +1001,10 @@ object MySQLToScyllaValidator {
         sourceSettings
       )
 
+      val missingRowCount = missingRowCountAcc.values.sum
+
       log.info(
-        s"Finished copying missing rows to target: ${missingRowCountAcc.value} missing row(s) copied"
+        s"Finished copying missing rows to target: $missingRowCount missing row(s) copied"
       )
     }
 

@@ -17,14 +17,20 @@ import com.scylladb.migrator.config.{
   SourceSettings,
   TargetSettings
 }
-import com.scylladb.migrator.validation.{ BoundedListAccumulator, RowComparisonFailure }
+import com.scylladb.migrator.validation.{
+  PartitionKeyedAccumulator,
+  PartitionRepairSummary,
+  RowComparisonFailure
+}
 import org.apache.logging.log4j.LogManager
+import org.apache.spark.TaskContext
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{ Row, SparkSession }
 import org.apache.spark.sql.cassandra.DataTypeConverter
 import org.apache.spark.sql.types.{ IntegerType, LongType, StructField, StructType }
 
 import scala.collection.immutable.ArraySeq
+import scala.collection.mutable.ListBuffer
 
 /** The C* to Scylla migration validator */
 object ScyllaValidator {
@@ -232,44 +238,76 @@ object ScyllaValidator {
           buildRepairSchema(sourceTableDef, config.renamesMap, includePerColumnMetadata)
         val repairFieldNames = repairSchema.fieldNames.toIndexedSeq
 
-        val failureAccumulator =
-          new BoundedListAccumulator[RowComparisonFailure](validationConfig.failuresToFetch)
-        spark.sparkContext.register(failureAccumulator, "ScyllaValidator row comparison failures")
-        val missingSourceRowCountAcc =
-          spark.sparkContext.longAccumulator("ScyllaValidator missing source row count")
+        val repairAccumulator = new PartitionKeyedAccumulator[PartitionRepairSummary]()
+        spark.sparkContext.register(repairAccumulator, "ScyllaValidator repair summary")
 
         // The comparison and the repair row are both derived from a single pass over `joined`,
-        // so there is no second action that would require persisting it. Note that
-        // failureAccumulator/missingSourceRowCountAcc are updated from inside this transformation
-        // (not an action), so a retried or speculatively re-executed task could apply an update
-        // more than once; this only affects the diagnostic failure sample and the logged count
-        // below, not the rows actually written, since repair writes are idempotent upserts.
-        val repairRowsRdd: RDD[Row] = joined.flatMap { case (sourceRow, targetRow) =>
-          RowComparisonFailure
-            .compareCassandraRows(
-              sourceRow,
-              targetRow,
-              validationConfig.floatingPointTolerance,
-              validationConfig.timestampMsTolerance,
-              validationConfig.ttlToleranceMillis,
-              validationConfig.writetimeToleranceMillis,
-              validationConfig.compareTimestamps,
-              validationConfig.numericTypePolicy
-            )
-            .foreach(failureAccumulator.add)
+        // so there is no second action that would require persisting it. The per-partition
+        // failure sample and repaired-row count are accumulated locally while this partition's
+        // iterator is consumed, and reported to `repairAccumulator` exactly once, when the task
+        // ends, keyed by (partitionId, stageAttemptNumber).
+        //
+        // This defends against the known Spark behavior (SPARK-9809/SPARK-10042) where a
+        // resubmitted stage attempt can re-run tasks for partitions that already succeeded under
+        // an older stage attempt: keeping only the highest stageAttemptNumber per partition means
+        // such a partition's contribution is counted exactly once. Ordinary task-level retries
+        // (same stage attempt) need no special handling: Spark discards a failed task's
+        // accumulator updates rather than merging them, so only a successful attempt's single
+        // `add` call is ever observed here. This is still only about the accuracy of the
+        // diagnostic counter/sample, not the correctness of the repair writes themselves, which
+        // are idempotent upserts and were never at risk from retries.
+        val repairRowsRdd: RDD[Row] = joined.mapPartitions { partitionIter =>
+          val tc = TaskContext.get()
+          val partitionId = tc.partitionId()
+          val stageAttemptNumber = tc.stageAttemptNumber()
 
-          if (targetRow.isEmpty) {
-            missingSourceRowCountAcc.add(1L)
-            Some(
-              Row.fromSeq(
-                repairFieldNames.map { fieldName =>
-                  readers.Cassandra.widenTimestampValue(
-                    readers.Cassandra.convertValue(sourceRow.getRaw(fieldName))
-                  )
-                }
+          var missingCount = 0L
+          val localFailures = ListBuffer.empty[RowComparisonFailure]
+
+          val result = partitionIter.flatMap { case (sourceRow, targetRow) =>
+            RowComparisonFailure
+              .compareCassandraRows(
+                sourceRow,
+                targetRow,
+                validationConfig.floatingPointTolerance,
+                validationConfig.timestampMsTolerance,
+                validationConfig.ttlToleranceMillis,
+                validationConfig.writetimeToleranceMillis,
+                validationConfig.compareTimestamps,
+                validationConfig.numericTypePolicy
+              )
+              .foreach { failure =>
+                if (localFailures.size < validationConfig.failuresToFetch) localFailures += failure
+              }
+
+            if (targetRow.isEmpty) {
+              missingCount += 1
+              Some(
+                Row.fromSeq(
+                  repairFieldNames.map { fieldName =>
+                    readers.Cassandra.widenTimestampValue(
+                      readers.Cassandra.convertValue(sourceRow.getRaw(fieldName))
+                    )
+                  }
+                )
+              )
+            } else None
+          }
+
+          // Keep the listener body trivial and non-throwing: it fires on success, failure, or
+          // cancellation alike, but a failed/cancelled attempt's update is discarded by Spark's
+          // scheduler regardless (never merged into the driver-side accumulator).
+          tc.addTaskCompletionListener[Unit] { _ =>
+            repairAccumulator.add(
+              (
+                partitionId,
+                stageAttemptNumber,
+                PartitionRepairSummary(missingCount, localFailures.toList)
               )
             )
-          } else None
+          }
+
+          result
         }
 
         val rawRepairDf = spark.createDataFrame(repairRowsRdd, repairSchema)
@@ -340,11 +378,14 @@ object ScyllaValidator {
           )
         }
 
+        val repairSummary =
+          PartitionRepairSummary.combine(repairAccumulator.values, validationConfig.failuresToFetch)
+
         log.info(
-          s"Finished copying missing rows to target: ${missingSourceRowCountAcc.value} missing row(s) copied"
+          s"Finished copying missing rows to target: ${repairSummary.missingCount} missing row(s) copied"
         )
 
-        failureAccumulator.value.take(validationConfig.failuresToFetch)
+        repairSummary.failureSample
       }
 
     failures

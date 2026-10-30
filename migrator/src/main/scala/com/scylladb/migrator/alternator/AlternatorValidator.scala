@@ -3,14 +3,20 @@ package com.scylladb.migrator.alternator
 import com.scylladb.migrator.{ writers, DynamoUtils }
 import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
 import com.scylladb.migrator.readers
-import com.scylladb.migrator.validation.{ BoundedListAccumulator, RowComparisonFailure }
+import com.scylladb.migrator.validation.{
+  PartitionKeyedAccumulator,
+  PartitionRepairSummary,
+  RowComparisonFailure
+}
 import org.apache.hadoop.dynamodb.DynamoDBItemWritable
 import org.apache.hadoop.io.Text
 import org.apache.logging.log4j.LogManager
+import org.apache.spark.TaskContext
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import software.amazon.awssdk.services.dynamodb.model.{ AttributeValue, DescribeTableRequest }
 
+import scala.collection.mutable.ListBuffer
 import scala.jdk.CollectionConverters._
 
 object AlternatorValidator {
@@ -104,12 +110,8 @@ object AlternatorValidator {
       else {
         log.info("Copying missing rows from source to target")
 
-        val failureAccumulator =
-          new BoundedListAccumulator[RowComparisonFailure](configValidation.failuresToFetch)
-        spark.sparkContext
-          .register(failureAccumulator, "AlternatorValidator row comparison failures")
-        val missingRowCountAcc =
-          spark.sparkContext.longAccumulator("AlternatorValidator missing source row count")
+        val repairAccumulator = new PartitionKeyedAccumulator[PartitionRepairSummary]()
+        spark.sparkContext.register(repairAccumulator, "AlternatorValidator repair summary")
 
         // Cheap AWS API lookup, not a Spark action, so it's fine to always perform it rather
         // than guard it behind a row count that would otherwise require a separate action.
@@ -132,31 +134,61 @@ object AlternatorValidator {
         }
 
         // The comparison and the repair item are both derived from a single pass over
-        // `joinedRdd`, so there is no second action that would require persisting it. Note that
-        // failureAccumulator/missingRowCountAcc are updated from inside this transformation (not
-        // an action), so a retried or speculatively re-executed task could apply an update more
-        // than once; this only affects the diagnostic failure sample and the logged count below,
-        // not the rows actually written, since repair writes are idempotent upserts.
-        val missingAsHadoop: RDD[(Text, DynamoDBItemWritable)] = joinedRdd.flatMap {
-          case (_, (sourceItem, targetItem)) =>
-            RowComparisonFailure
-              .compareDynamoDBRows(
-                sourceItem,
-                targetItem,
-                renamedColumn,
-                configValidation.floatingPointTolerance,
-                configValidation.numericTypePolicy
-              )
-              .foreach(failureAccumulator.add)
+        // `joinedRdd`, so there is no second action that would require persisting it. See
+        // ScyllaValidator for the detailed rationale: the per-partition failure sample and
+        // repaired-row count are accumulated locally and reported exactly once per task
+        // completion, keyed by (partitionId, stageAttemptNumber), to be resilient to the
+        // SPARK-9809/SPARK-10042 stage-resubmission double-count mechanism. This matters more
+        // here than for ScyllaValidator because `joinedRdd` is produced by a shuffle-based
+        // `leftOuterJoin`, which is exactly the kind of upstream stage whose fetch failures
+        // trigger the result stage (this one) to be resubmitted.
+        val missingAsHadoop: RDD[(Text, DynamoDBItemWritable)] = joinedRdd.mapPartitions {
+          partitionIter =>
+            val tc = TaskContext.get()
+            val partitionId = tc.partitionId()
+            val stageAttemptNumber = tc.stageAttemptNumber()
 
-            if (targetItem.isEmpty) {
-              missingRowCountAcc.add(1L)
-              val item = new java.util.HashMap[String, AttributeValue]()
-              sourceItem.foreach { case (k, v) =>
-                item.put(k, DdbValue.toAttributeValue(v))
-              }
-              Some((new Text(), new DynamoDBItemWritable(item)))
-            } else None
+            var missingCount = 0L
+            val localFailures = ListBuffer.empty[RowComparisonFailure]
+
+            val result = partitionIter.flatMap { case (_, (sourceItem, targetItem)) =>
+              RowComparisonFailure
+                .compareDynamoDBRows(
+                  sourceItem,
+                  targetItem,
+                  renamedColumn,
+                  configValidation.floatingPointTolerance,
+                  configValidation.numericTypePolicy
+                )
+                .foreach { failure =>
+                  if (localFailures.size < configValidation.failuresToFetch)
+                    localFailures += failure
+                }
+
+              if (targetItem.isEmpty) {
+                missingCount += 1
+                val item = new java.util.HashMap[String, AttributeValue]()
+                sourceItem.foreach { case (k, v) =>
+                  item.put(k, DdbValue.toAttributeValue(v))
+                }
+                Some((new Text(), new DynamoDBItemWritable(item)))
+              } else None
+            }
+
+            // Keep the listener body trivial and non-throwing: it fires on success, failure, or
+            // cancellation alike, but a failed/cancelled attempt's update is discarded by
+            // Spark's scheduler regardless (never merged into the driver-side accumulator).
+            tc.addTaskCompletionListener[Unit] { _ =>
+              repairAccumulator.add(
+                (
+                  partitionId,
+                  stageAttemptNumber,
+                  PartitionRepairSummary(missingCount, localFailures.toList)
+                )
+              )
+            }
+
+            result
         }
 
         writers.DynamoDB.writeRDD(
@@ -166,11 +198,14 @@ object AlternatorValidator {
           targetTableDesc
         )
 
+        val repairSummary =
+          PartitionRepairSummary.combine(repairAccumulator.values, configValidation.failuresToFetch)
+
         log.info(
-          s"Finished copying missing rows to target: ${missingRowCountAcc.value} missing row(s) copied"
+          s"Finished copying missing rows to target: ${repairSummary.missingCount} missing row(s) copied"
         )
 
-        failureAccumulator.value.take(configValidation.failuresToFetch)
+        repairSummary.failureSample
       }
 
     failures
