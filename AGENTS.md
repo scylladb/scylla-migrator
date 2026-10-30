@@ -23,7 +23,10 @@ Read `README.md` for deployment instructions.
 - Follow the nearby Scala code and `.scalafmt.conf`.
   Use two spaces for indentation.
   Limit each line to 100 columns.
-- Run `make lint-fix` to format Scala changes. Run `make lint` to check formatting.
+- Before every push, run `make lint-fix` to apply scalafmt, then run `make lint`
+  to check formatting. Commit any resulting formatting changes before pushing.
+- Push branches to your personal fork and open pull requests from that fork
+  against the upstream repository. Do not push PR branches to the upstream repository.
 - Unless the task requires breaking changes, preserve the existing configuration behavior and compatibility when you resume from savepoints.
 - When configuration or user behavior changes, update `docs/source/` and the affected YAML examples.
 - When you change dependencies in `build.sbt`, keep the Spark, Hadoop, and AWS SDK versions compatible.
