@@ -295,7 +295,18 @@ object SourceSettings {
     zeroDateTimeBehavior: MySQL.ZeroDateTimeBehavior = MySQL.ZeroDateTimeBehavior.Exception,
     fetchSize: Int = MySQL.DefaultFetchSize,
     where: Option[String],
-    connectionProperties: Option[Map[String, String]]
+    connectionProperties: Option[Map[String, String]],
+    skipSourcePrimaryKeyValidation: Boolean = false,
+    // Verifying uniqueness requires a full scan (groupBy/count) of the source table, so it is
+    // opt-in rather than automatic whenever skipSourcePrimaryKeyValidation is set. Validation
+    // refuses to run with skipSourcePrimaryKeyValidation set unless this is true or
+    // acknowledgeUnverifiedJoinKey is -- it must never silently proceed with an unverified
+    // custom join key.
+    verifySourceJoinKeyUniqueness: Boolean = false,
+    // Explicit, named escape hatch to bypass the uniqueness check (and its full-scan cost)
+    // while still allowing skipSourcePrimaryKeyValidation, accepting the risk that a
+    // non-unique join key can silently hide missing or extra rows during validation.
+    acknowledgeUnverifiedJoinKey: Boolean = false
   ) extends SourceSettings {
 
     // MySQL reads use Spark JDBC jobs that do not expose durable per-range progress, and

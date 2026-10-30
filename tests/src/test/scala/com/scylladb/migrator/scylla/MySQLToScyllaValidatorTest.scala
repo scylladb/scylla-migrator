@@ -297,6 +297,7 @@ class MySQLToScyllaValidatorTest extends munit.FunSuite {
       )
     }
     assert(error.getMessage.contains("does not match the MySQL table's actual PK"))
+    assert(error.getMessage.contains("skipSourcePrimaryKeyValidation"))
   }
 
   test("validateSourcePrimaryKey rejects source PK with the same columns in a different order") {
@@ -307,6 +308,130 @@ class MySQLToScyllaValidatorTest extends munit.FunSuite {
       )
     }
     assert(error.getMessage.contains("does not match the MySQL table's actual PK"))
+  }
+
+  test("validateSourcePrimaryKeyOrSkip performs the metadata check by default (flag omitted)") {
+    var lookupCalls = 0
+    val error = intercept[RuntimeException] {
+      MySQLToScyllaValidator.validateSourcePrimaryKeyOrSkip(
+        skipSourcePrimaryKeyValidation = false,
+        primaryKey                     = Seq("custom_key"),
+        database                       = "mydb",
+        table                          = "mytable",
+        lookupActualSourcePrimaryKey = { () =>
+          lookupCalls += 1
+          Seq("id")
+        }
+      )
+    }
+    assertEquals(lookupCalls, 1)
+    assert(error.getMessage.contains("does not match the MySQL table's actual PK"))
+  }
+
+  test("validateSourcePrimaryKeyOrSkip default (false) accepts a matching metadata PK") {
+    MySQLToScyllaValidator.validateSourcePrimaryKeyOrSkip(
+      skipSourcePrimaryKeyValidation = false,
+      primaryKey                     = Seq("id"),
+      database                       = "mydb",
+      table                          = "mytable",
+      lookupActualSourcePrimaryKey   = () => Seq("id")
+    )
+  }
+
+  test("validateSourcePrimaryKeyOrSkip errors when MySQL exposes no PK via metadata") {
+    val error = intercept[RuntimeException] {
+      MySQLToScyllaValidator.validateSourcePrimaryKeyOrSkip(
+        skipSourcePrimaryKeyValidation = false,
+        primaryKey                     = Seq("custom_key"),
+        database                       = "mydb",
+        table                          = "mytable",
+        lookupActualSourcePrimaryKey   = () => Seq.empty
+      )
+    }
+    assert(error.getMessage.contains("does not expose"))
+    assert(error.getMessage.contains("skipSourcePrimaryKeyValidation"))
+  }
+
+  test("validateSourcePrimaryKeyOrSkip bypasses the metadata lookup entirely when enabled") {
+    var lookupCalls = 0
+    MySQLToScyllaValidator.validateSourcePrimaryKeyOrSkip(
+      skipSourcePrimaryKeyValidation = true,
+      primaryKey                     = Seq("custom_key"),
+      database                       = "mydb",
+      table                          = "mytable",
+      lookupActualSourcePrimaryKey = { () =>
+        lookupCalls += 1
+        throw new RuntimeException("lookup should not be called when skipping")
+      }
+    )
+    assertEquals(lookupCalls, 0)
+  }
+
+  test("validateJoinKeyUniquenessOrAcknowledge does nothing when skip is false") {
+    var checkCalls = 0
+    MySQLToScyllaValidator.validateJoinKeyUniquenessOrAcknowledge(
+      skipSourcePrimaryKeyValidation = false,
+      verifySourceJoinKeyUniqueness  = false,
+      acknowledgeUnverifiedJoinKey   = false,
+      joinKey                        = Seq("custom_key"),
+      checkUniqueness = { () =>
+        checkCalls += 1
+      }
+    )
+    assertEquals(checkCalls, 0)
+  }
+
+  test(
+    "validateJoinKeyUniquenessOrAcknowledge runs the uniqueness check when verify is enabled"
+  ) {
+    var checkCalls = 0
+    MySQLToScyllaValidator.validateJoinKeyUniquenessOrAcknowledge(
+      skipSourcePrimaryKeyValidation = true,
+      verifySourceJoinKeyUniqueness  = true,
+      acknowledgeUnverifiedJoinKey   = false,
+      joinKey                        = Seq("custom_key"),
+      checkUniqueness = { () =>
+        checkCalls += 1
+      }
+    )
+    assertEquals(checkCalls, 1)
+  }
+
+  test(
+    "validateJoinKeyUniquenessOrAcknowledge skips the check without erroring when acknowledged"
+  ) {
+    var checkCalls = 0
+    MySQLToScyllaValidator.validateJoinKeyUniquenessOrAcknowledge(
+      skipSourcePrimaryKeyValidation = true,
+      verifySourceJoinKeyUniqueness  = false,
+      acknowledgeUnverifiedJoinKey   = true,
+      joinKey                        = Seq("custom_key"),
+      checkUniqueness = { () =>
+        checkCalls += 1
+        throw new RuntimeException("checkUniqueness should not be called when acknowledged")
+      }
+    )
+    assertEquals(checkCalls, 0)
+  }
+
+  test(
+    "validateJoinKeyUniquenessOrAcknowledge aborts when neither verify nor acknowledge is set"
+  ) {
+    var checkCalls = 0
+    val error = intercept[RuntimeException] {
+      MySQLToScyllaValidator.validateJoinKeyUniquenessOrAcknowledge(
+        skipSourcePrimaryKeyValidation = true,
+        verifySourceJoinKeyUniqueness  = false,
+        acknowledgeUnverifiedJoinKey   = false,
+        joinKey                        = Seq("custom_key"),
+        checkUniqueness = { () =>
+          checkCalls += 1
+        }
+      )
+    }
+    assertEquals(checkCalls, 0)
+    assert(error.getMessage.contains("verifySourceJoinKeyUniqueness"))
+    assert(error.getMessage.contains("acknowledgeUnverifiedJoinKey"))
   }
 
   test("sourcePrimaryKeyFromMetadata uses the literal table name") {
@@ -549,6 +674,36 @@ class MySQLToScyllaValidatorTest extends munit.FunSuite {
 
     assertEquals(prefixed.columns.toList, List("src_id", "src_user.name", "src_a`b"))
     assertEquals(prefixed.collect().toList, List(Row(1, "alpha", "beta")))
+  }
+
+  // --- validateSourceJoinKeyUniqueness tests (Spark-local) ---
+
+  test("validateSourceJoinKeyUniqueness accepts a join key with no duplicates") {
+    import spark.implicits._
+    val df = Seq((1, "a"), (2, "b"), (3, "c")).toDF("id", "name")
+    MySQLToScyllaValidator.validateSourceJoinKeyUniqueness(df, Seq("id"))
+  }
+
+  test("validateSourceJoinKeyUniqueness rejects a join key with duplicate values") {
+    import spark.implicits._
+    val df = Seq((1, "a"), (1, "b"), (2, "c")).toDF("id", "name")
+    val error = intercept[RuntimeException] {
+      MySQLToScyllaValidator.validateSourceJoinKeyUniqueness(df, Seq("id"))
+    }
+    assert(error.getMessage.contains("skipSourcePrimaryKeyValidation"))
+    assert(error.getMessage.contains("not unique"))
+    assert(error.getMessage.contains("id=1"))
+  }
+
+  test("validateSourceJoinKeyUniqueness rejects a composite join key with duplicate combinations") {
+    import spark.implicits._
+    val df =
+      Seq((1, "x", "a"), (1, "x", "b"), (1, "y", "c")).toDF("tenant_id", "user_id", "name")
+    val error = intercept[RuntimeException] {
+      MySQLToScyllaValidator.validateSourceJoinKeyUniqueness(df, Seq("tenant_id", "user_id"))
+    }
+    assert(error.getMessage.contains("tenant_id=1"))
+    assert(error.getMessage.contains("user_id=x"))
   }
 
   // --- addContentHash tests (Spark-local) ---
