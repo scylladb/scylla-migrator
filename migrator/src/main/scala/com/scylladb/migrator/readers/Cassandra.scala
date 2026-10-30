@@ -216,10 +216,12 @@ object Cassandra {
   val widenTimestampValue: Any => Any = {
     case t: java.sql.Timestamp => t.getTime
     case i: java.time.Instant  => i.toEpochMilli
-    case d: java.util.Date     => d.getTime
-    case row: Row              => Row.fromSeq(row.toSeq.map(widenTimestampValue))
-    case set: Set[_]           => set.map(widenTimestampValue)
-    case list: List[_]         => list.map(widenTimestampValue)
+    // CQL `date` (DateType, not widened) arrives as java.sql.Date, a java.util.Date subclass
+    case d: java.sql.Date  => d
+    case d: java.util.Date => d.getTime
+    case row: Row          => Row.fromSeq(row.toSeq.map(widenTimestampValue))
+    case set: Set[_]       => set.map(widenTimestampValue)
+    case list: List[_]     => list.map(widenTimestampValue)
     case map: Map[_, _] =>
       map.map { case (k, v) =>
         widenTimestampValue(k) -> widenTimestampValue(v)
