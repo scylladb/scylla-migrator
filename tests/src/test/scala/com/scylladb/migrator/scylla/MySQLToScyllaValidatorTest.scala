@@ -318,7 +318,7 @@ class MySQLToScyllaValidatorTest extends munit.FunSuite {
         primaryKey                     = Seq("custom_key"),
         database                       = "mydb",
         table                          = "mytable",
-        lookupActualSourcePrimaryKey   = { () =>
+        lookupActualSourcePrimaryKey = { () =>
           lookupCalls += 1
           Seq("id")
         }
@@ -359,7 +359,7 @@ class MySQLToScyllaValidatorTest extends munit.FunSuite {
       primaryKey                     = Seq("custom_key"),
       database                       = "mydb",
       table                          = "mytable",
-      lookupActualSourcePrimaryKey   = { () =>
+      lookupActualSourcePrimaryKey = { () =>
         lookupCalls += 1
         throw new RuntimeException("lookup should not be called when skipping")
       }
@@ -374,7 +374,7 @@ class MySQLToScyllaValidatorTest extends munit.FunSuite {
       verifySourceJoinKeyUniqueness  = false,
       acknowledgeUnverifiedJoinKey   = false,
       joinKey                        = Seq("custom_key"),
-      checkUniqueness                = { () =>
+      checkUniqueness = { () =>
         checkCalls += 1
       }
     )
@@ -390,7 +390,7 @@ class MySQLToScyllaValidatorTest extends munit.FunSuite {
       verifySourceJoinKeyUniqueness  = true,
       acknowledgeUnverifiedJoinKey   = false,
       joinKey                        = Seq("custom_key"),
-      checkUniqueness                = { () =>
+      checkUniqueness = { () =>
         checkCalls += 1
       }
     )
@@ -406,7 +406,7 @@ class MySQLToScyllaValidatorTest extends munit.FunSuite {
       verifySourceJoinKeyUniqueness  = false,
       acknowledgeUnverifiedJoinKey   = true,
       joinKey                        = Seq("custom_key"),
-      checkUniqueness                = { () =>
+      checkUniqueness = { () =>
         checkCalls += 1
         throw new RuntimeException("checkUniqueness should not be called when acknowledged")
       }
@@ -424,7 +424,7 @@ class MySQLToScyllaValidatorTest extends munit.FunSuite {
         verifySourceJoinKeyUniqueness  = false,
         acknowledgeUnverifiedJoinKey   = false,
         joinKey                        = Seq("custom_key"),
-        checkUniqueness                = { () =>
+        checkUniqueness = { () =>
           checkCalls += 1
         }
       )
