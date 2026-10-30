@@ -3,7 +3,7 @@ package com.scylladb.migrator.scylla
 import com.datastax.oss.driver.api.core.CqlSession
 import com.datastax.oss.driver.api.core.cql.Row
 import com.scylladb.migrator.{ Integration, Scylla2026Compat }
-import com.scylladb.migrator.SparkUtils.successfullyPerformMigration
+import com.scylladb.migrator.SparkUtils.{ performValidation, successfullyPerformMigration }
 import org.junit.experimental.categories.Category
 
 import java.net.InetSocketAddress
@@ -29,6 +29,7 @@ class Scylla2026CollectionTimestampPreservationTest extends munit.FunSuite {
   private val sourceTbl = "collts_src"
   private val targetTbl = "collts_dst"
   private val configFile = "scylla2026-to-scylla2026-collection-timestamps.yaml"
+  private val repairConfigFile = "scylla2026-to-scylla2026-collection-timestamps-repair.yaml"
 
   private val scylla2026: Fixture[CqlSession] = new Fixture[CqlSession]("scylla2026") {
     private var session: CqlSession = null
@@ -272,5 +273,88 @@ class Scylla2026CollectionTimestampPreservationTest extends munit.FunSuite {
     assertEquals(dst.tagsWt, List(2000000000000L, 3000000000000L))
     assertEquals(dst.attrs, Map("a" -> 1))
     assertEquals(dst.attrsWt, List(2000000000000L))
+  }
+
+  /** A small row with distinct per-element TTL/WRITETIMEs in both collections. */
+  private def populate(session: CqlSession, table: String, id: String): Unit = {
+    session.execute(
+      s"INSERT INTO ${keyspace}.${table} (id, name) VALUES ('${id}', 'alice') " +
+        "USING TIMESTAMP 1000000000000"
+    )
+    Seq(20 -> 2000000000000L, 10 -> 1000000000000L).foreach { case (v, wt) =>
+      session.execute(
+        s"UPDATE ${keyspace}.${table} USING TIMESTAMP ${wt} SET tags = tags + {${v}} " +
+          s"WHERE id='${id}'"
+      )
+    }
+    Seq(("b", 2, 2000000000000L, Some(1000000)), ("a", 1, 1000000000000L, None)).foreach {
+      case (k, v, wt, ttlOpt) =>
+        val using =
+          ttlOpt.fold(s"USING TIMESTAMP ${wt}")(t => s"USING TIMESTAMP ${wt} AND TTL ${t}")
+        session.execute(
+          s"UPDATE ${keyspace}.${table} ${using} SET attrs = attrs + {'${k}': ${v}} " +
+            s"WHERE id='${id}'"
+        )
+    }
+  }
+
+  test("validation compares per-element TTL/WRITETIME of non-frozen collections") {
+    val session = scylla2026()
+    createTable(session, sourceTbl)
+    createTable(session, targetTbl)
+    val id = "r4"
+    populate(session, sourceTbl, id)
+
+    successfullyPerformMigration(configFile)
+    assertEquals(performValidation(configFile), 0, "a faithful migration should validate")
+
+    // Same values, but one set element now carries a different WRITETIME on the target.
+    session.execute(
+      s"UPDATE ${keyspace}.${targetTbl} USING TIMESTAMP 9000000000000 SET tags = tags + {10} " +
+        s"WHERE id='${id}'"
+    )
+    assertEquals(
+      performValidation(configFile),
+      1,
+      "a differing element WRITETIME must fail validation"
+    )
+
+    // Start from a fresh target, then change one map element's TTL only.
+    createTable(session, targetTbl)
+    successfullyPerformMigration(configFile)
+    assertEquals(performValidation(configFile), 0)
+    // One microsecond newer (well within the WRITETIME tolerance) so the rewrite wins, adding a TTL.
+    session.execute(
+      s"UPDATE ${keyspace}.${targetTbl} USING TIMESTAMP 1000000000001 AND TTL 50000 " +
+        s"SET attrs = attrs + {'a': 1} WHERE id='${id}'"
+    )
+    assertEquals(performValidation(configFile), 1, "a differing element TTL must fail validation")
+  }
+
+  test("copyMissingRows restores per-element TTL/WRITETIME from a ScyllaDB source") {
+    val session = scylla2026()
+    val repairSrc = "collts_rep_src"
+    val repairDst = "collts_rep_dst"
+    createTable(session, repairSrc)
+    createTable(session, repairDst) // target starts empty
+    val id = "r5"
+    populate(session, repairSrc, id)
+
+    assertEquals(performValidation(repairConfigFile), 1, "Should detect the missing target row")
+
+    val src = readMeta(session, repairSrc, id)
+    val dst = readMeta(session, repairDst, id)
+    assertEquals(dst.name, src.name)
+    assertEquals(dst.nameWt, src.nameWt)
+    assertEquals(dst.tags, src.tags)
+    assertEquals(dst.tagsWt, src.tagsWt, "set element WRITETIMEs must be restored")
+    assertEquals(dst.attrs, src.attrs)
+    assertEquals(dst.attrsWt, src.attrsWt, "map element WRITETIMEs must be restored")
+    dst.attrsTtl.zip(src.attrsTtl).foreach { case (dTtl, sTtl) =>
+      if (sTtl == null) assertEquals(dTtl, null)
+      else assert(dTtl != null && math.abs(sTtl - dTtl) <= 600, s"TTL src=$sTtl dst=$dTtl")
+    }
+
+    assertEquals(performValidation(repairConfigFile), 0, "Re-validation after repair should pass")
   }
 }

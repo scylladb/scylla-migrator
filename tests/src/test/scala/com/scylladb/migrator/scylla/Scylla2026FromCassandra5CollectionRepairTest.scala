@@ -8,10 +8,10 @@ import org.junit.experimental.categories.Category
 import java.net.InetSocketAddress
 import scala.jdk.CollectionConverters._
 
-/** Validation and `copyMissingRows` repair from a Cassandra 5.0 source to a ScyllaDB 2026.2 target.
-  * The target only exposes per-element collection metadata via the subscript form, so non-frozen
-  * collections are compared by value, but the source supplies the element metadata the repair
-  * needs. Requires both the `cassandra5` and `scylla2026` services.
+/** Validation and `copyMissingRows` repair between Cassandra 5.0 and ScyllaDB 2026.2, in both
+  * directions. ScyllaDB only exposes per-element collection metadata via the subscript form, which
+  * the validator reads with per-element point lookups; Cassandra 5.0 returns it in the scan.
+  * Requires both the `cassandra5` and `scylla2026` services.
   */
 @Category(Array(classOf[Integration], classOf[Scylla2026Compat]))
 class Scylla2026FromCassandra5CollectionRepairTest extends munit.FunSuite {
@@ -20,6 +20,9 @@ class Scylla2026FromCassandra5CollectionRepairTest extends munit.FunSuite {
   private val sourceTbl = "collts_xrep_src"
   private val targetTbl = "collts_xrep_dst"
   private val configFile = "cassandra5-to-scylla2026-collection-timestamps-repair.yaml"
+  private val reverseSourceTbl = "collts_xrev_src"
+  private val reverseTargetTbl = "collts_xrev_dst"
+  private val reverseConfigFile = "scylla2026-to-cassandra5-collection-timestamps-repair.yaml"
 
   private def session(port: Int, replication: String): Fixture[CqlSession] =
     new Fixture[CqlSession](s"cql-$port") {
@@ -67,13 +70,14 @@ class Scylla2026FromCassandra5CollectionRepairTest extends munit.FunSuite {
     if (r.isNull(col)) null else Integer.valueOf(r.getInt(col))
 
   // Cassandra 5.0: collection-wide form, already in sorted element order.
-  private def readSource(id: String): Meta = {
+  private def readCassandra5(table: String, id: String): Meta = {
     val r = cassandra5()
       .execute(
         s"SELECT tags, WRITETIME(tags) AS tags_wt, attrs, WRITETIME(attrs) AS attrs_wt, " +
-          s"TTL(attrs) AS attrs_ttl FROM ${keyspace}.${sourceTbl} WHERE id = '${id}'"
+          s"TTL(attrs) AS attrs_ttl FROM ${keyspace}.${table} WHERE id = '${id}'"
       )
       .one()
+    assert(r != null, s"expected a row for id=${id} in ${table}")
     Meta(
       r.getSet("tags", classOf[Integer]).asScala.toList.map(_.intValue()).sorted,
       r.getList("tags_wt", classOf[java.lang.Long]).asScala.toList.map(_.longValue()),
@@ -87,11 +91,11 @@ class Scylla2026FromCassandra5CollectionRepairTest extends munit.FunSuite {
   }
 
   // ScyllaDB 2026.2: per-element subscript form.
-  private def readTarget(id: String): Meta = {
+  private def readScylla(table: String, id: String): Meta = {
     val s = scylla2026()
-    val from = s"FROM ${keyspace}.${targetTbl} WHERE id = '${id}'"
+    val from = s"FROM ${keyspace}.${table} WHERE id = '${id}'"
     val base = s.execute(s"SELECT tags, attrs $from").one()
-    assert(base != null, s"expected a row for id=${id} in ${targetTbl}")
+    assert(base != null, s"expected a row for id=${id} in ${table}")
     val tags = base.getSet("tags", classOf[Integer]).asScala.toList.map(_.intValue()).sorted
     val attrs = base
       .getMap("attrs", classOf[String], classOf[Integer])
@@ -108,19 +112,14 @@ class Scylla2026FromCassandra5CollectionRepairTest extends munit.FunSuite {
     Meta(tags, tagsWt, attrs, attrsWt, attrsTtl)
   }
 
-  test("copyMissingRows restores element TTL/WRITETIME on a subscript-only target") {
-    createTable(cassandra5(), sourceTbl)
-    createTable(scylla2026(), targetTbl) // target starts empty
-
-    val id = "r1"
-    val src = cassandra5()
-    src.execute(
-      s"INSERT INTO ${keyspace}.${sourceTbl} (id, name) VALUES ('${id}', 'alice') " +
+  private def populate(session: CqlSession, table: String, id: String): Unit = {
+    session.execute(
+      s"INSERT INTO ${keyspace}.${table} (id, name) VALUES ('${id}', 'alice') " +
         "USING TIMESTAMP 1000000000000"
     )
     Seq(30 -> 3000000000000L, 10 -> 1000000000000L, 20 -> 2000000000000L).foreach { case (v, wt) =>
-      src.execute(
-        s"UPDATE ${keyspace}.${sourceTbl} USING TIMESTAMP ${wt} SET tags = tags + {${v}} " +
+      session.execute(
+        s"UPDATE ${keyspace}.${table} USING TIMESTAMP ${wt} SET tags = tags + {${v}} " +
           s"WHERE id='${id}'"
       )
     }
@@ -128,17 +127,21 @@ class Scylla2026FromCassandra5CollectionRepairTest extends munit.FunSuite {
       case (k, v, wt, ttlOpt) =>
         val using =
           ttlOpt.fold(s"USING TIMESTAMP ${wt}")(t => s"USING TIMESTAMP ${wt} AND TTL ${t}")
-        src.execute(
-          s"UPDATE ${keyspace}.${sourceTbl} ${using} SET attrs = attrs + {'${k}': ${v}} " +
+        session.execute(
+          s"UPDATE ${keyspace}.${table} ${using} SET attrs = attrs + {'${k}': ${v}} " +
             s"WHERE id='${id}'"
         )
     }
+  }
 
-    // The missing row is detected (snapshot before the repair) and repaired.
-    assertEquals(performValidation(configFile), 1, "Should detect the missing target row")
+  /** Same values, but one set element gets a newer WRITETIME on the target. */
+  private def tamper(session: CqlSession, table: String, id: String): Unit =
+    session.execute(
+      s"UPDATE ${keyspace}.${table} USING TIMESTAMP 9000000000000 SET tags = tags + {10} " +
+        s"WHERE id='${id}'"
+    )
 
-    val expected = readSource(id)
-    val actual = readTarget(id)
+  private def assertRepaired(expected: Meta, actual: Meta): Unit = {
     assertEquals(actual.tags, expected.tags)
     assertEquals(actual.tagsWt, expected.tagsWt, "set element WRITETIMEs must be preserved")
     assertEquals(actual.attrs, expected.attrs)
@@ -147,8 +150,39 @@ class Scylla2026FromCassandra5CollectionRepairTest extends munit.FunSuite {
       if (sTtl == null) assertEquals(dTtl, null)
       else assert(dTtl != null && math.abs(sTtl - dTtl) <= 600, s"TTL src=$sTtl dst=$dTtl")
     }
+  }
 
-    // Collections are compared by value against this target; scalars still with metadata.
+  test("Cassandra 5.0 -> ScyllaDB 2026.2: repair and validation of element TTL/WRITETIME") {
+    createTable(cassandra5(), sourceTbl)
+    createTable(scylla2026(), targetTbl) // target starts empty
+    val id = "r1"
+    populate(cassandra5(), sourceTbl, id)
+
+    // The missing row is detected (snapshot before the repair) and repaired.
+    assertEquals(performValidation(configFile), 1, "Should detect the missing target row")
+    assertRepaired(readCassandra5(sourceTbl, id), readScylla(targetTbl, id))
+
+    // Per-element metadata is compared against the subscript-only target.
     assertEquals(performValidation(configFile), 0, "Re-validation after repair should pass")
+    tamper(scylla2026(), targetTbl, id)
+    assertEquals(performValidation(configFile), 1, "a differing element WRITETIME must fail")
+  }
+
+  test("ScyllaDB 2026.2 -> Cassandra 5.0: repair and validation of element TTL/WRITETIME") {
+    createTable(scylla2026(), reverseSourceTbl)
+    createTable(cassandra5(), reverseTargetTbl) // target starts empty
+    val id = "r2"
+    populate(scylla2026(), reverseSourceTbl, id)
+
+    assertEquals(performValidation(reverseConfigFile), 1, "Should detect the missing target row")
+    assertRepaired(readScylla(reverseSourceTbl, id), readCassandra5(reverseTargetTbl, id))
+
+    assertEquals(performValidation(reverseConfigFile), 0, "Re-validation after repair should pass")
+    tamper(cassandra5(), reverseTargetTbl, id)
+    assertEquals(
+      performValidation(reverseConfigFile),
+      1,
+      "a differing element WRITETIME must fail"
+    )
   }
 }

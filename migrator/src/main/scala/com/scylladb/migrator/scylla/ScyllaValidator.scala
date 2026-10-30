@@ -36,6 +36,7 @@ import org.apache.spark.sql.types.{
 import org.apache.spark.storage.StorageLevel
 
 import scala.collection.immutable.ArraySeq
+import scala.collection.mutable
 
 /** The C* to Scylla migration validator */
 object ScyllaValidator {
@@ -96,6 +97,208 @@ object ScyllaValidator {
       case (_: ArrayType, s: scala.collection.Set[_]) => s.toIndexedSeq
       case _                                          => value
     }
+
+  /** How the validator reads one endpoint's per-element collection metadata. */
+  private sealed trait ElementMetadataRead
+
+  /** Projected in the scan/join with the collection-wide form (Cassandra 5.0+). */
+  private case object CollectionWideRead extends ElementMetadataRead
+
+  /** Read with per-element point lookups after the join (ScyllaDB 2026.2+). */
+  private final case class SubscriptRead(binder: readers.Cassandra.PkBinder)
+      extends ElementMetadataRead
+
+  /** Probe how `endpoint` exposes per-element collection metadata. `None` when it cannot be read:
+    * the server supports neither form, or it only supports the subscript form and the primary key
+    * (`pkColumns`, in lookup order) has a type that cannot be bound into a point lookup.
+    */
+  private def elementMetadataRead(
+    endpoint: String,
+    connector: CassandraConnector,
+    keyspace: String,
+    table: String,
+    tableDef: TableDef,
+    pkColumns: Seq[com.datastax.spark.connector.cql.ColumnDef]
+  ): Option[ElementMetadataRead] =
+    readers.Cassandra.probeMetadataReadStrategy(
+      connector,
+      keyspace,
+      table,
+      readers.Cassandra.nonFrozenCollectionColumns(tableDef)
+    ) match {
+      case Right(readers.Cassandra.ArrayMetadataRead) => Some(CollectionWideRead)
+      case Right(readers.Cassandra.SubscriptMetadataRead) =>
+        readers.Cassandra.pkBinder(pkColumns) match {
+          case Right(binder) => Some(SubscriptRead(binder))
+          case Left(reason) =>
+            log.warn(
+              s"Validation $endpoint exposes per-element collection WRITETIME()/TTL() only via " +
+                s"per-element point lookups, which cannot bind its primary key: $reason"
+            )
+            None
+        }
+      case Left(_) =>
+        log.warn(
+          s"Validation $endpoint cannot read per-element collection WRITETIME()/TTL() " +
+            "(requires Cassandra 5.0+ or ScyllaDB 2026.2+)."
+        )
+        None
+    }
+
+  /** A non-frozen collection column whose per-element metadata is read with point lookups.
+    *
+    * @param rowName
+    *   its name in the validator's rows (renamed on both sides)
+    * @param sourceName
+    *   its name in the source table
+    * @param targetName
+    *   its name in the target table
+    */
+  private[scylla] final case class LookupColumn(
+    rowName: String,
+    sourceName: String,
+    targetName: String,
+    sorter: readers.Cassandra.ElementSorter[_]
+  )
+
+  /** One endpoint read with point lookups. `pk` pairs each primary-key column's name in the
+    * validator's rows with its name in this endpoint's table, in `binder` order.
+    */
+  private final case class LookupSide(
+    connector: CassandraConnector,
+    keyspace: String,
+    table: String,
+    pk: Seq[(String, String)],
+    binder: readers.Cassandra.PkBinder,
+    consistencyLevel: com.datastax.oss.driver.api.core.ConsistencyLevel,
+    dropVanishedElements: Boolean
+  )
+
+  /** Add `<col>_ttl`/`<col>_writetime` per-element lists, read with point lookups, to the source
+    * and/or target rows of `joined`, in the same shape the collection-wide form returns. A source
+    * row that no longer exists is skipped; a target row that no longer exists becomes missing.
+    */
+  private def addElementMetadata(
+    joined: RDD[(CassandraRow, Option[CassandraRow])],
+    sourceSide: Option[LookupSide],
+    targetSide: Option[LookupSide],
+    columns: Seq[LookupColumn]
+  ): RDD[(CassandraRow, Option[CassandraRow])] =
+    joined.mapPartitions { pairs =>
+      def reader(side: LookupSide): readers.Cassandra.SubscriptPointReader = {
+        val session = side.connector.openSession()
+        org.apache.spark.TaskContext.get().addTaskCompletionListener[Unit](_ => session.close())
+        new readers.Cassandra.SubscriptPointReader(
+          session,
+          side.keyspace,
+          side.table,
+          side.pk.map(_._2),
+          side.consistencyLevel
+        )
+      }
+      val sourceReader = sourceSide.map(side => side -> reader(side))
+      val targetReader = targetSide.map(side => side -> reader(side))
+      val sourceColumns = columns.map(c => (c.rowName, c.sourceName, c.sorter))
+      val targetColumns = columns.map(c => (c.rowName, c.targetName, c.sorter))
+
+      pairs.flatMap { case (sourceRow, targetRow) =>
+        val source = sourceReader match {
+          case Some((side, r)) => withElementMetadata(sourceRow, side, r, sourceColumns)
+          case None            => Some(sourceRow)
+        }
+        source.map { s =>
+          val target = targetRow.flatMap { row =>
+            targetReader match {
+              case Some((side, r)) => withElementMetadata(row, side, r, targetColumns)
+              case None            => Some(row)
+            }
+          }
+          (s, target)
+        }
+      }
+    }
+
+  /** `row` with each column's per-element `<rowName>_ttl`/`<rowName>_writetime` lists inserted
+    * right after it, in the column's element order. `None` when the row no longer exists.
+    */
+  private def withElementMetadata(
+    row: CassandraRow,
+    side: LookupSide,
+    reader: readers.Cassandra.SubscriptPointReader,
+    columns: Seq[(String, String, readers.Cassandra.ElementSorter[_])]
+  ): Option[CassandraRow] = {
+    val pkBinds = side.binder.bind(side.pk.map { case (rowName, _) => row.getRaw(rowName) })
+    val added = mutable.Map.empty[String, (AnyRef, Seq[Integer], Seq[java.lang.Long])]
+    val it = columns.iterator
+    while (it.hasNext) {
+      val (rowName, tableName, sorter) = it.next()
+      row.getRaw(rowName) match {
+        case null => added(rowName) = (null, null, null)
+        case m: scala.collection.Map[_, _] =>
+          val entries =
+            sorter.sortEntries(m.asInstanceOf[scala.collection.Map[Any, Any]].toIndexedSeq)
+          lookup(reader, tableName, entries.map(_._1), pkBinds, side.dropVanishedElements) match {
+            case None => return None
+            case Some((kept, ttls, wts)) =>
+              val value =
+                if (kept.length == entries.length) m
+                else kept.map(entries).toMap
+              added(rowName) = (value.asInstanceOf[AnyRef], ttls, wts)
+          }
+        case s: scala.collection.Iterable[_] =>
+          val elements =
+            sorter.sortElements(s.asInstanceOf[scala.collection.Iterable[Any]].toIndexedSeq)
+          lookup(reader, tableName, elements, pkBinds, side.dropVanishedElements) match {
+            case None => return None
+            case Some((kept, ttls, wts)) =>
+              val value =
+                if (kept.length == elements.length) s
+                else kept.map(elements).toSet
+              added(rowName) = (value.asInstanceOf[AnyRef], ttls, wts)
+          }
+        case other =>
+          sys.error(s"Unexpected value for non-frozen collection '$rowName': ${other.getClass}")
+      }
+    }
+    val names = mutable.ArrayBuffer.empty[String]
+    val values = mutable.ArrayBuffer.empty[AnyRef]
+    row.metaData.columnNames.indices.foreach { i =>
+      val name = row.metaData.columnNames(i)
+      added.get(name) match {
+        case Some((value, ttls, wts)) =>
+          names ++= Seq(name, name + "_ttl", name + "_writetime")
+          values ++= Seq(value, ttls, wts)
+        case None =>
+          names += name
+          values += row.columnValues(i)
+      }
+    }
+    Some(
+      new CassandraRow(
+        CassandraRowMetadata.fromColumnNames(names.toIndexedSeq),
+        values.toIndexedSeq
+      )
+    )
+  }
+
+  /** Point-read the metadata of `keys`. Returns the indices of the kept elements with their
+    * TTLs/WRITETIMEs: every element, or with `dropVanished` only those whose WRITETIME is still
+    * present. `None` when the row no longer exists.
+    */
+  private def lookup(
+    reader: readers.Cassandra.SubscriptPointReader,
+    column: String,
+    keys: IndexedSeq[Any],
+    pkBinds: Seq[AnyRef],
+    dropVanished: Boolean
+  ): Option[(IndexedSeq[Int], Seq[Integer], Seq[java.lang.Long])] =
+    if (keys.isEmpty) Some((IndexedSeq.empty, Nil, Nil))
+    else
+      reader.read(column, keys, pkBinds, withValues = false).map { case (_, wts, ttls) =>
+        val kept =
+          if (dropVanished) keys.indices.filter(i => wts(i) != null) else keys.indices
+        (kept, kept.map(ttls), kept.map(wts))
+      }
 
   /** `row` without the named columns (a no-op when `names` is empty). */
   private[scylla] def dropColumns(row: CassandraRow, names: Set[String]): CassandraRow =
@@ -189,68 +392,43 @@ object ScyllaValidator {
     // Repair uses the scalar explosion only when there are no per-element collections.
     val repairWithScalarMetadata = includePerColumnMetadata && !perElementCollectionMetadata
 
-    // The source SELECT and target JOIN below project the collection-wide `WRITETIME(col)`/`TTL(col)`
-    // form for per-element metadata. Only Cassandra 5.0+ accepts it: ScyllaDB 2026.2+ only accepts
-    // the element-subscript form, and older servers (Cassandra 4.x, ScyllaDB < 2026.2) neither.
-    // Probe each endpoint up front (same probe the migrate path uses):
-    //   - per-element metadata is COMPARED only when both endpoints accept the collection-wide form;
-    //     otherwise non-frozen collection columns are compared by VALUE only (all scalar/frozen
-    //     metadata is still validated). Comparison must stay symmetric.
-    //   - the SOURCE still projects it whenever it can and copyMissingRows needs it, because repair
-    //     only needs the source's element metadata (missing rows have none on the target).
-    val (sourceCollectionMetadata, targetCollectionMetadata) =
-      if (!perElementCollectionMetadata) (false, false)
-      else {
-        def readsCollectionWide(
-          endpoint: String,
-          connector: CassandraConnector,
-          keyspace: String,
-          table: String,
-          tableDef: TableDef
-        ): Boolean =
-          readers.Cassandra.probeMetadataReadStrategy(
-            connector,
-            keyspace,
-            table,
-            readers.Cassandra.nonFrozenCollectionColumns(tableDef)
-          ) match {
-            case Right(readers.Cassandra.ArrayMetadataRead) => true
-            case Right(readers.Cassandra.SubscriptMetadataRead) =>
-              log.warn(
-                s"Validation $endpoint exposes per-element collection WRITETIME()/TTL() only via " +
-                  "the subscript form (ScyllaDB 2026.2+)."
-              )
-              false
-            case Left(_) =>
-              log.warn(
-                s"Validation $endpoint cannot read per-element collection WRITETIME()/TTL() " +
-                  "(requires Cassandra 5.0+ or ScyllaDB 2026.2+)."
-              )
-              false
-          }
-        val targetTableDef =
-          targetConnector.withSessionDo(
-            Schema.tableFromCassandra(_, targetSettings.keyspace, targetSettings.table)
-          )
+    // How each endpoint exposes per-element collection metadata (same probe the migrate path uses):
+    // Cassandra 5.0+ accepts the collection-wide `WRITETIME(col)`/`TTL(col)` form, projected in the
+    // scan/join below; ScyllaDB 2026.2+ only the element-subscript form, read with per-element point
+    // lookups after the join; older servers neither.
+    //   - per-element metadata is COMPARED when both endpoints can read it; otherwise non-frozen
+    //     collection columns are compared by VALUE only (scalar/frozen metadata is still compared).
+    //   - the SOURCE also reads it for copyMissingRows, which only needs the source's metadata.
+    val targetTableDef =
+      if (!perElementCollectionMetadata) sourceTableDef
+      else
+        targetConnector.withSessionDo(
+          Schema.tableFromCassandra(_, targetSettings.keyspace, targetSettings.table)
+        )
+    val (sourceRead, targetRead) =
+      if (!perElementCollectionMetadata) (None, None)
+      else
         (
-          readsCollectionWide(
+          elementMetadataRead(
             "source",
             sourceConnector,
             sourceSettings.keyspace,
             sourceSettings.table,
-            sourceTableDef
+            sourceTableDef,
+            (sourceTableDef.partitionKey ++ sourceTableDef.clusteringColumns)
           ),
-          readsCollectionWide(
+          elementMetadataRead(
             "target",
             targetConnector,
             targetSettings.keyspace,
             targetSettings.table,
-            targetTableDef
+            targetTableDef,
+            (sourceTableDef.partitionKey ++ sourceTableDef.clusteringColumns)
+              .map(c => targetTableDef.columnByName(config.renamesMap(c.columnName)))
           )
         )
-      }
-    val collectionsValueOnly =
-      perElementCollectionMetadata && !(sourceCollectionMetadata && targetCollectionMetadata)
+    val compareElementMetadata = sourceRead.isDefined && targetRead.isDefined
+    val collectionsValueOnly = perElementCollectionMetadata && !compareElementMetadata
 
     if (collectionsValueOnly) {
       log.warn(
@@ -259,32 +437,36 @@ object ScyllaValidator {
           "validated. Scalar and frozen-collection metadata are still compared."
       )
       // copyMissingRows repair reconstructs per-element collection TTL/WRITETIME from the source
-      // metadata read, so it needs a source that exposes the collection-wide form.
-      if (validationConfig.copyMissingRows && !sourceCollectionMetadata)
+      // metadata, so it needs a source that exposes it.
+      if (validationConfig.copyMissingRows && sourceRead.isEmpty)
         sys.error(
           "copyMissingRows is not supported for non-frozen collections when the source cannot read " +
-            "per-element WRITETIME()/TTL() with the collection-wide form (Cassandra 5.0+): " +
-            "per-element collection metadata cannot be read for repair. Re-run the migration itself " +
-            "(idempotent under USING TIMESTAMP) to converge missing rows, or disable " +
-            "copyMissingRows to validate values only."
+            "per-element WRITETIME()/TTL() (requires Cassandra 5.0+, or ScyllaDB 2026.2+ with a " +
+            "primary key of plain types): per-element collection metadata cannot be read for " +
+            "repair. Re-run the migration itself (idempotent under USING TIMESTAMP) to converge " +
+            "missing rows, or disable copyMissingRows to validate values only."
         )
     }
 
-    // Whether to project per-element metadata for a given regular column, on each side. Non-frozen
-    // collections drop it on an endpoint that cannot read the collection-wide form, and on the
-    // target whenever it is not compared.
-    def projectMetadataFor(columnName: String, endpointCanRead: Boolean): Boolean =
+    val readSourceCollectionMetadata =
+      sourceRead.isDefined && (compareElementMetadata || validationConfig.copyMissingRows)
+    val readTargetCollectionMetadata = compareElementMetadata
+    val sourceLookups: Option[readers.Cassandra.PkBinder] =
+      sourceRead.collect { case SubscriptRead(binder) if readSourceCollectionMetadata => binder }
+    val targetLookups: Option[readers.Cassandra.PkBinder] =
+      targetRead.collect { case SubscriptRead(binder) if readTargetCollectionMetadata => binder }
+
+    // Whether the scan/join projects per-element metadata for a given regular column. Non-frozen
+    // collections project it only on an endpoint that reads it in the scan and when it is needed.
+    def projectMetadataFor(columnName: String, projectCollectionMetadata: Boolean): Boolean =
       includePerColumnMetadata &&
         (!nonFrozenCollectionNames.contains(columnName) ||
-          !perElementCollectionMetadata || endpointCanRead)
-    val projectSourceCollectionMetadata =
-      sourceCollectionMetadata && (!collectionsValueOnly || validationConfig.copyMissingRows)
-    val projectTargetCollectionMetadata = !collectionsValueOnly
+          !perElementCollectionMetadata || projectCollectionMetadata)
 
-    // Collection metadata the source projects only for repair; stripped before comparison so both
+    // Collection metadata the source reads only for repair; stripped before comparison so both
     // rows carry the same columns.
     val sourceOnlyColumns: Set[String] =
-      if (projectSourceCollectionMetadata && !projectTargetCollectionMetadata)
+      if (readSourceCollectionMetadata && !readTargetCollectionMetadata)
         nonFrozenCollectionNames.flatMap { name =>
           val alias = config.renamesMap(name)
           Set(alias + "_ttl", alias + "_writetime")
@@ -296,7 +478,12 @@ object ScyllaValidator {
         sourceTableDef.regularColumns.flatMap { colDef =>
           val alias = config.renamesMap(colDef.columnName)
 
-          if (projectMetadataFor(colDef.columnName, projectSourceCollectionMetadata))
+          if (
+            projectMetadataFor(
+              colDef.columnName,
+              readSourceCollectionMetadata && sourceRead.contains(CollectionWideRead)
+            )
+          )
             List(
               ColumnName(colDef.columnName, Some(alias)),
               TTL(colDef.columnName, Some(alias + "_ttl")),
@@ -335,7 +522,12 @@ object ScyllaValidator {
         sourceTableDef.regularColumns.flatMap { colDef =>
           val renamedColName = config.renamesMap(colDef.columnName)
 
-          if (projectMetadataFor(colDef.columnName, projectTargetCollectionMetadata))
+          if (
+            projectMetadataFor(
+              colDef.columnName,
+              readTargetCollectionMetadata && targetRead.contains(CollectionWideRead)
+            )
+          )
             List(
               ColumnName(renamedColName),
               TTL(renamedColName, Some(renamedColName + "_ttl")),
@@ -370,9 +562,60 @@ object ScyllaValidator {
         .withConnector(targetConnector)
     }
 
+    // On subscript-only endpoints, add the per-element metadata the scan/join could not project.
+    val withElementMetadata =
+      if (sourceLookups.isEmpty && targetLookups.isEmpty) joined
+      else {
+        val pkColumns = sourceTableDef.partitionKey ++ sourceTableDef.clusteringColumns
+        val sourcePk = pkColumns.map(c => (config.renamesMap(c.columnName), c.columnName))
+        val targetPk =
+          pkColumns.map(c => (config.renamesMap(c.columnName), config.renamesMap(c.columnName)))
+        val lookupColumns = readers.Cassandra.nonFrozenCollectionColumns(sourceTableDef).map { c =>
+          val sorter = readers.Cassandra
+            .collectionElementOrdering(c.columnType)
+            .getOrElse(sys.error(s"No element ordering for '${c.columnName}'"))
+          LookupColumn(
+            config.renamesMap(c.columnName),
+            c.columnName,
+            config.renamesMap(c.columnName),
+            sorter
+          )
+        }
+        val sourceSide = sourceLookups.map(binder =>
+          LookupSide(
+            sourceConnector,
+            sourceSettings.keyspace,
+            sourceSettings.table,
+            sourcePk,
+            binder,
+            ConsistencyLevelUtils.parseConsistencyLevel(sourceSettings.consistencyLevel),
+            dropVanishedElements = true
+          )
+        )
+        val targetSide = targetLookups.map(binder =>
+          LookupSide(
+            targetConnector,
+            targetSettings.keyspace,
+            targetSettings.table,
+            targetPk,
+            binder,
+            ConsistencyLevelUtils.parseConsistencyLevel(targetSettings.consistencyLevel),
+            dropVanishedElements = false
+          )
+        )
+        sourceSide.foreach(_ =>
+          log.info("Reading source per-element collection metadata with point lookups.")
+        )
+        targetSide.foreach(_ =>
+          log.info("Reading target per-element collection metadata with point lookups.")
+        )
+        addElementMetadata(joined, sourceSide, targetSide, lookupColumns)
+      }
+
     val cachedJoined =
-      if (validationConfig.copyMissingRows) joined.persist(StorageLevel.MEMORY_AND_DISK)
-      else joined
+      if (validationConfig.copyMissingRows)
+        withElementMetadata.persist(StorageLevel.MEMORY_AND_DISK)
+      else withElementMetadata
 
     try {
       val failures = cachedJoined

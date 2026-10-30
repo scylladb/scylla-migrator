@@ -135,11 +135,14 @@ A source of type ``cassandra`` can be used together with a target of type ``cass
     # marker, so a row inserted USING TTL whose non-key columns are all null or empty (e.g. an empty
     # collection) is written to the target without a TTL.
     #
-    # Validation: per-element collection TTL/WRITETIME are compared only when BOTH endpoints accept
-    # the collection-wide WRITETIME(col)/TTL(col) form (Cassandra 5.0+). Otherwise (ScyllaDB 2026.2+,
-    # or an older server) the validator compares non-frozen collection columns by VALUE only.
-    # copyMissingRows still restores element TTL/WRITETIME when the SOURCE is Cassandra 5.0+, and is
-    # rejected otherwise (re-run the migration to converge instead).
+    # Validation compares per-element collection TTL/WRITETIME when both endpoints can read them:
+    # Cassandra 5.0+ in the scan, ScyllaDB 2026.2+ with per-element point lookups after the scan
+    # (ceil(n / 100) synchronous queries per collection per row on each ScyllaDB side, so expect
+    # validation against ScyllaDB to be slower, and values and metadata to be read at slightly
+    # different times: stop writes first). Otherwise (an older server, or a ScyllaDB endpoint whose
+    # primary key includes a frozen tuple, UDT or collection) non-frozen collection columns are
+    # compared by VALUE only. copyMissingRows restores element TTL/WRITETIME of missing rows when
+    # the SOURCE can read them, and is rejected otherwise (re-run the migration to converge instead).
     # Defaults to false.
     preserveCollectionTimestamps: false
     # Number of splits to use - this should be at minimum the amount of cores

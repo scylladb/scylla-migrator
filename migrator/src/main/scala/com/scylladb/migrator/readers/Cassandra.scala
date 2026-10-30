@@ -265,8 +265,8 @@ object Cassandra {
     * Note that `bigint`, `timestamp`, `date` and `time` all arrive as `Long`, which is exactly why
     * the conversion must be driven by the DECLARED column type rather than the runtime class.
     */
-  private sealed trait PkBindKind
-  private object PkBindKind {
+  private[migrator] sealed trait PkBindKind
+  private[migrator] object PkBindKind {
     case object AsIs extends PkBindKind
     case object TimestampMillis extends PkBindKind
     case object Blob extends PkBindKind
@@ -310,17 +310,40 @@ object Cassandra {
     }
   }
 
+  /** Converts a row's decoded primary-key values into driver-bindable values for a subscript point
+    * read, driven by the declared key column types.
+    */
+  private[migrator] final class PkBinder(kinds: Array[PkBindKind]) extends Serializable {
+    def bind(values: Seq[Any]): Seq[AnyRef] =
+      kinds.indices.map(i => driverPkBindValue(kinds(i), values(i)))
+  }
+
+  /** A [[PkBinder]] for `columns`, or `Left` with the reason when a key column's type cannot be
+    * bound into a point read (tuple, UDT, frozen collection, ...).
+    */
+  private[migrator] def pkBinder(columns: Seq[ColumnDef]): Either[String, PkBinder] =
+    try Right(new PkBinder(columns.map(pkBindKindOf).toArray))
+    catch { case e: IllegalStateException => Left(e.getMessage) }
+
   /** Convert one decoded primary-key value into a driver-bindable value for its declared type. */
   private def driverPkBindValue(kind: PkBindKind, raw: Any): AnyRef = {
     val converted: Any = (kind, raw) match {
-      case (_, null)                                  => null
-      case (PkBindKind.AsIs, v)                       => v
-      case (PkBindKind.TimestampMillis, n: Number)    => java.time.Instant.ofEpochMilli(n.longValue)
-      case (PkBindKind.Blob, b: Array[Byte])          => java.nio.ByteBuffer.wrap(b)
-      case (PkBindKind.Uuid, s: String)               => java.util.UUID.fromString(s)
-      case (PkBindKind.Uuid, u: java.util.UUID)       => u
-      case (PkBindKind.Inet, s: String)               => java.net.InetAddress.getByName(s)
-      case (PkBindKind.Inet, a: java.net.InetAddress) => a
+      case (_, null)                               => null
+      case (PkBindKind.AsIs, v)                    => v
+      case (PkBindKind.TimestampMillis, n: Number) => java.time.Instant.ofEpochMilli(n.longValue)
+      // The validator's `CassandraRow`s keep the driver's own types for these kinds.
+      case (PkBindKind.TimestampMillis, i: java.time.Instant) => i
+      case (PkBindKind.TimestampMillis, d: java.util.Date)    => d.toInstant
+      case (PkBindKind.Blob, b: java.nio.ByteBuffer)          => b
+      case (PkBindKind.DateMillis, d: java.time.LocalDate)    => d
+      case (PkBindKind.TimeNanos, t: java.time.LocalTime)     => t
+      case (PkBindKind.VarInt, b: BigInt)                     => b.bigInteger
+      case (PkBindKind.BigDecimal, b: scala.math.BigDecimal)  => b.bigDecimal
+      case (PkBindKind.Blob, b: Array[Byte])                  => java.nio.ByteBuffer.wrap(b)
+      case (PkBindKind.Uuid, s: String)                       => java.util.UUID.fromString(s)
+      case (PkBindKind.Uuid, u: java.util.UUID)               => u
+      case (PkBindKind.Inet, s: String)                       => java.net.InetAddress.getByName(s)
+      case (PkBindKind.Inet, a: java.net.InetAddress)         => a
       // `java.sql.Date.getTime` is midnight in the JVM default zone; `new java.sql.Date(millis)`
       // is its exact inverse in that same zone, so the round-trip is lossless.
       case (PkBindKind.DateMillis, n: Number)        => new java.sql.Date(n.longValue).toLocalDate
@@ -339,6 +362,102 @@ object Cassandra {
         )
     }
     driverBindValue(converted)
+  }
+
+  /** Per-element `WRITETIME()`/`TTL()` point reads for ONE table on a subscript-only endpoint
+    * (ScyllaDB 2026.2+). Shared by the migration reader ([[readRawRddSubscript]]) and the
+    * validator. Not thread-safe: create one per Spark partition, on the session that partition
+    * holds open.
+    *
+    * Keys are read in chunks of up to [[SubscriptKeyChunkSize]] (`ceil(n / chunk)` synchronous
+    * queries per collection per row), which bounds both the bind-marker count and the number of
+    * distinct prepared statements (one per column and chunk length).
+    */
+  private[migrator] final class SubscriptPointReader(
+    session: com.datastax.oss.driver.api.core.CqlSession,
+    keyspace: String,
+    table: String,
+    pkNames: Seq[String],
+    consistencyLevel: com.datastax.oss.driver.api.core.ConsistencyLevel
+  ) {
+    private val keyspaceQ = quoteCqlIdentifier(keyspace)
+    private val tableQ = quoteCqlIdentifier(table)
+    private val whereClause =
+      pkNames.map(n => s"${quoteCqlIdentifier(n)} = ?").mkString(" AND ")
+    private val stmtCache =
+      mutable.Map.empty[(String, Int, Boolean), (PreparedStatement, CassandraRowMetadata)]
+
+    /** Read the metadata of `keys` (already in the column's element order) of collection `column`
+      * in the row identified by `pkBinds`. Returns `(values, writetimes, ttls)`, element-aligned
+      * with `keys`, where `values` holds the map values as of the read (decoded exactly as the
+      * connector's base scan decodes them) when `withValues`, and is empty otherwise. A null
+      * WRITETIME means the element no longer exists. `None` when the row itself no longer exists.
+      */
+    def read(
+      column: String,
+      keys: IndexedSeq[Any],
+      pkBinds: Seq[AnyRef],
+      withValues: Boolean
+    ): Option[(Array[Any], Array[java.lang.Long], Array[Integer])] = {
+      val n = keys.length
+      val colQ = quoteCqlIdentifier(column)
+      val ttls = new Array[Integer](n)
+      val wts = new Array[java.lang.Long](n)
+      val values = new Array[Any](if (withValues) n else 0)
+      // Selected cells per key: (value,) WRITETIME, TTL.
+      val width = if (withValues) 3 else 2
+
+      var base = 0
+      while (base < n) {
+        val chunkLen = math.min(SubscriptKeyChunkSize, n - base)
+        val (ps, rowMetadata) = stmtCache.getOrElseUpdate(
+          (column, chunkLen, withValues), {
+            val cell =
+              if (withValues) s"$colQ[?], WRITETIME($colQ[?]), TTL($colQ[?])"
+              else s"WRITETIME($colQ[?]), TTL($colQ[?])"
+            val projection = (0 until chunkLen).map(_ => cell).mkString(", ")
+            val prepared =
+              session.prepare(s"SELECT $projection FROM $keyspaceQ.$tableQ WHERE $whereClause")
+            val columnNames =
+              (0 until prepared.getResultSetDefinitions.size).map(i => s"c$i")
+            prepared -> CassandraRowMetadata.fromPreparedStatement(
+              columnNames,
+              prepared,
+              session.getContext.getCodecRegistry
+            )
+          }
+        )
+        // Bind order follows statement text: each key once per selected cell, then the PK values.
+        val keyBinds =
+          (0 until chunkLen).flatMap(j => Seq.fill(width)(driverBindValue(keys(base + j))))
+        val bound = ps
+          .bind((keyBinds ++ pkBinds).toArray: _*)
+          .setConsistencyLevel(consistencyLevel)
+
+        val dr: DriverRow = session.execute(bound).one()
+        if (dr == null) return None
+        // Decode map values exactly as the base scan does (connector conversion, then
+        // `convertValue`/`widenTimestampValue`), so unchanged values are identical.
+        val decoded =
+          if (withValues) CassandraSQLRow.fromJavaDriverRow(dr, rowMetadata) else null
+        var j = 0
+        while (j < chunkLen) {
+          val wtIdx = width * j + width - 2
+          val ttlIdx = wtIdx + 1
+          if (withValues)
+            values(base + j) = widenTimestampValue(convertValue(decoded.get(width * j)))
+          wts(base + j) =
+            if (dr.isNull(wtIdx)) null
+            else java.lang.Long.valueOf(dr.getLong(wtIdx))
+          ttls(base + j) =
+            if (dr.isNull(ttlIdx)) null
+            else Integer.valueOf(dr.getInt(ttlIdx))
+          j += 1
+        }
+        base += chunkLen
+      }
+      Some((values, wts, ttls))
+    }
   }
 
   /** Read the source into an `RDD[Row]` matching `selection.schema` when the server only supports
@@ -436,9 +555,6 @@ object Cassandra {
           sorter
         )
       }
-    val keyspaceQ = quoteCqlIdentifier(source.keyspace)
-    val tableQ = quoteCqlIdentifier(source.table)
-    val whereClause = pkNames.map(n => s"${quoteCqlIdentifier(n)} = ?").mkString(" AND ")
     // Point reads must honor the same source consistency level as the base scan; otherwise the
     // driver's session default (LOCAL_ONE) is used, widening the read-consistency race window
     // between the base scan and the metadata point read.
@@ -456,7 +572,14 @@ object Cassandra {
       // would materialize every output row of the partition in executor memory). The session is
       // borrowed from the connector's pool and returned when the Spark task completes.
       val session = connector.openSession()
-      val stmtCache = mutable.Map.empty[(String, Int), (PreparedStatement, CassandraRowMetadata)]
+      val pointReader =
+        new SubscriptPointReader(
+          session,
+          source.keyspace,
+          source.table,
+          pkNames,
+          pointReadConsistencyLevel
+        )
       val dropped = new java.util.concurrent.atomic.AtomicLong(0L)
       val droppedRows = new java.util.concurrent.atomic.AtomicLong(0L)
       // The session must outlive this method (rows are consumed lazily downstream), so it can only
@@ -530,67 +653,11 @@ object Cassandra {
         if (n == 0)
           return Some((row.get(ord), IndexedSeq.empty[Integer], IndexedSeq.empty[java.lang.Long]))
 
-        val colQ = quoteCqlIdentifier(name)
-        val ttls = new Array[Integer](n)
-        val wts = new Array[java.lang.Long](n)
-        // Map values as of the point read (see below); unused for sets, whose key is the value.
-        val values = new Array[Any](if (isMap) n else 0)
-        // Selected cells per key: (value,) WRITETIME, TTL.
-        val width = if (isMap) 3 else 2
-
-        // Read metadata in fixed-width chunks so a huge cell never exceeds the native-protocol bind
-        // marker limit and only mints a bounded set of prepared statements (one per chunk length).
-        var base = 0
-        while (base < n) {
-          val chunkLen = math.min(SubscriptKeyChunkSize, n - base)
-          val (ps, rowMetadata) = stmtCache.getOrElseUpdate(
-            (name, chunkLen), {
-              val cell =
-                if (isMap) s"$colQ[?], WRITETIME($colQ[?]), TTL($colQ[?])"
-                else s"WRITETIME($colQ[?]), TTL($colQ[?])"
-              val projection = (0 until chunkLen).map(_ => cell).mkString(", ")
-              val prepared =
-                session.prepare(s"SELECT $projection FROM $keyspaceQ.$tableQ WHERE $whereClause")
-              val columnNames =
-                (0 until prepared.getResultSetDefinitions.size).map(i => s"c$i")
-              prepared -> CassandraRowMetadata.fromPreparedStatement(
-                columnNames,
-                prepared,
-                session.getContext.getCodecRegistry
-              )
-            }
-          )
-          // Bind order follows statement text: each key once per selected cell, then the PK values.
-          val keyBinds =
-            (0 until chunkLen).flatMap { j =>
-              Seq.fill(width)(driverBindValue(entries(base + j)._1))
-            }
-          val bound = ps
-            .bind((keyBinds ++ pkBinds).toArray: _*)
-            .setConsistencyLevel(pointReadConsistencyLevel)
-
-          val dr: DriverRow = session.execute(bound).one()
-          if (dr == null) return None
-          // Decode map values exactly as the base scan does (connector conversion, then
-          // `convertValue`/`widenTimestampValue`), so unchanged values are identical.
-          val decoded =
-            if (isMap) CassandraSQLRow.fromJavaDriverRow(dr, rowMetadata) else null
-          var j = 0
-          while (j < chunkLen) {
-            val wtIdx = width * j + width - 2
-            val ttlIdx = wtIdx + 1
-            if (isMap)
-              values(base + j) = widenTimestampValue(convertValue(decoded.get(width * j)))
-            wts(base + j) =
-              if (dr.isNull(wtIdx)) null
-              else java.lang.Long.valueOf(dr.getLong(wtIdx))
-            ttls(base + j) =
-              if (dr.isNull(ttlIdx)) null
-              else Integer.valueOf(dr.getInt(ttlIdx))
-            j += 1
+        val (values, wts, ttls) =
+          pointReader.read(name, entries.map(_._1), pkBinds, withValues = isMap) match {
+            case Some(read) => read
+            case None       => return None
           }
-          base += chunkLen
-        }
 
         // A null WRITETIME means the element no longer exists at the point-read snapshot (element
         // absent, e.g. a concurrent delete). Drop it from BOTH the value and the metadata so the
@@ -754,7 +821,9 @@ object Cassandra {
     * element-order `WRITETIME`/`TTL` lists: map keys for maps, element values for sets (Cassandra
     * stores/returns both in that sorted order). `None` for unsupported element/key types.
     */
-  private def collectionElementOrdering(columnType: ColumnType[_]): Option[ElementSorter[_]] =
+  private[migrator] def collectionElementOrdering(
+    columnType: ColumnType[_]
+  ): Option[ElementSorter[_]] =
     columnType match {
       case m: CqlMapType[_, _] => mapKeyOrdering(m.keyType)
       case s: CqlSetType[_]    => mapKeyOrdering(s.elemType)

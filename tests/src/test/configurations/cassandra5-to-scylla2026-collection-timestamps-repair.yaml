@@ -16,8 +16,8 @@ source:
   fetchSize: 1000
 
 # Cassandra 5.0 source (collection-wide WRITETIME(col)/TTL(col)) and ScyllaDB 2026.2 target
-# (element-subscript form only): validation compares non-frozen collections by value, while
-# copyMissingRows still restores element TTL/WRITETIME from the source's metadata.
+# (element-subscript form only, read with per-element point lookups): validation compares
+# per-element metadata, and copyMissingRows restores it from the source's metadata.
 target:
   type: scylla
   host: scylla2026
