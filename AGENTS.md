@@ -59,10 +59,3 @@ Read `README.md` for deployment instructions.
     For temporary credentials, also set `AWS_SESSION_TOKEN`.
 - Report the checks that you ran and any failures.
   Report the checks that you skipped and the reasons.
-
-## Repository rules
-
-If the repository rule startup hook reports a refresh error, run `$dk-repo-rules refresh`.
-After this refresh attempt, read the repository rule index before you change code.
-If the refresh fails again, read the repository guidance files directly.
-If the refresh fails again, disclose that the private index may be stale.
