@@ -272,6 +272,62 @@ object MySQLToScyllaValidator {
       )
   }
 
+  // Decides whether to trust the configured primaryKey as-is (skip) or verify it against the
+  // MySQL-reported PK (lookupActualSourcePrimaryKey). The lookup is injected so this branching
+  // can be unit tested without a live JDBC connection.
+  private[scylla] def validateSourcePrimaryKeyOrSkip(
+    skipSourcePrimaryKeyValidation: Boolean,
+    primaryKey: Seq[String],
+    database: String,
+    table: String,
+    lookupActualSourcePrimaryKey: () => Seq[String]
+  ): Unit =
+    if (skipSourcePrimaryKeyValidation) {
+      log.warn(
+        "skipSourcePrimaryKeyValidation is set: skipping check that configured primaryKey " +
+          s"matches MySQL's declared PRIMARY KEY. Configured: ${primaryKey.mkString(", ")}."
+      )
+    } else {
+      val actualSourcePK = lookupActualSourcePrimaryKey()
+      if (actualSourcePK.isEmpty)
+        sys.error(
+          s"MySQL table $database.$table does not expose " +
+            "a primary key via JDBC metadata. Validation requires the real source primary key, " +
+            "or set 'skipSourcePrimaryKeyValidation: true' to use a custom join key."
+        )
+      validateSourcePrimaryKey(primaryKey, actualSourcePK)
+    }
+
+  // When skipSourcePrimaryKeyValidation bypasses the MySQL-declared PK check, the configured
+  // join key is no longer guaranteed unique. A non-unique join key can match multiple source
+  // rows to one target row in the left join below, silently hiding missing rows or duplicates.
+  private[scylla] def validateSourceJoinKeyUniqueness(
+    sourceDF: DataFrame,
+    joinKey: Seq[String]
+  ): Unit = {
+    val duplicateExamples = sourceDF
+      .groupBy(joinKey.map(sparkColumn): _*)
+      .count()
+      .filter(sparkColumn("count") > 1)
+      .take(5)
+    if (duplicateExamples.nonEmpty) {
+      val examples = duplicateExamples
+        .map { row =>
+          joinKey.zipWithIndex
+            .map { case (col, idx) => s"$col=${row.get(idx)}" }
+            .mkString("(", ", ", ")")
+        }
+        .mkString(", ")
+      sys.error(
+        s"skipSourcePrimaryKeyValidation is set, but the configured join key " +
+          s"(${joinKey.mkString(", ")}) is not unique in the MySQL source. Found duplicate key " +
+          s"values: $examples. A non-unique join key can match multiple source rows to a single " +
+          "target row, silently hiding missing or extra rows. Configure a join key that uniquely " +
+          "identifies each source row."
+      )
+    }
+  }
+
   private[scylla] def sourcePrimaryKeyFromMetadata(
     metaData: DatabaseMetaData,
     catalog: String,
@@ -625,21 +681,13 @@ object MySQLToScyllaValidator {
       )
     )
 
-    if (sourceSettings.skipSourcePrimaryKeyValidation) {
-      log.warn(
-        "skipSourcePrimaryKeyValidation is set: skipping check that configured primaryKey " +
-          s"matches MySQL's declared PRIMARY KEY. Configured: ${primaryKey.mkString(", ")}."
-      )
-    } else {
-      val actualSourcePK = sourcePrimaryKeyFromMetadata(sourceSettings)
-      if (actualSourcePK.isEmpty)
-        sys.error(
-          s"MySQL table ${sourceSettings.database}.${sourceSettings.table} does not expose " +
-            "a primary key via JDBC metadata. Validation requires the real source primary key, " +
-            "or set 'skipSourcePrimaryKeyValidation: true' to use a custom join key."
-        )
-      validateSourcePrimaryKey(primaryKey, actualSourcePK)
-    }
+    validateSourcePrimaryKeyOrSkip(
+      sourceSettings.skipSourcePrimaryKeyValidation,
+      primaryKey,
+      sourceSettings.database,
+      sourceSettings.table,
+      () => sourcePrimaryKeyFromMetadata(sourceSettings)
+    )
 
     // Always read all columns from MySQL; hash is computed in Spark (not MySQL)
     val rawSourceDF = {
@@ -666,6 +714,19 @@ object MySQLToScyllaValidator {
             "Check your 'renames' configuration for conflicting mappings."
         )
       renamed
+    }
+
+    if (sourceSettings.skipSourcePrimaryKeyValidation) {
+      if (sourceSettings.verifySourceJoinKeyUniqueness)
+        validateSourceJoinKeyUniqueness(rawSourceDF, renamedPK)
+      else
+        log.warn(
+          "skipSourcePrimaryKeyValidation is set but verifySourceJoinKeyUniqueness is not: the " +
+            "configured join key's uniqueness will not be checked. A non-unique join key can " +
+            "match multiple source rows to a single target row, silently hiding missing or " +
+            "extra rows. Set 'verifySourceJoinKeyUniqueness: true' to perform this check (it " +
+            "requires an extra full scan of the source data)."
+        )
     }
 
     log.info(s"Connecting to ScyllaDB target at ${targetSettings.host}:${targetSettings.port}")

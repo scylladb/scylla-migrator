@@ -296,7 +296,10 @@ object SourceSettings {
     fetchSize: Int = MySQL.DefaultFetchSize,
     where: Option[String],
     connectionProperties: Option[Map[String, String]],
-    skipSourcePrimaryKeyValidation: Boolean = false
+    skipSourcePrimaryKeyValidation: Boolean = false,
+    // Verifying uniqueness requires a full scan (groupBy/count) of the source table, so it is
+    // opt-in rather than automatic whenever skipSourcePrimaryKeyValidation is set.
+    verifySourceJoinKeyUniqueness: Boolean = false
   ) extends SourceSettings {
 
     // MySQL reads use Spark JDBC jobs that do not expose durable per-range progress, and
