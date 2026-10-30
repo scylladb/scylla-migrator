@@ -367,6 +367,73 @@ class MySQLToScyllaValidatorTest extends munit.FunSuite {
     assertEquals(lookupCalls, 0)
   }
 
+  test("validateJoinKeyUniquenessOrAcknowledge does nothing when skip is false") {
+    var checkCalls = 0
+    MySQLToScyllaValidator.validateJoinKeyUniquenessOrAcknowledge(
+      skipSourcePrimaryKeyValidation = false,
+      verifySourceJoinKeyUniqueness  = false,
+      acknowledgeUnverifiedJoinKey   = false,
+      joinKey                        = Seq("custom_key"),
+      checkUniqueness                = { () =>
+        checkCalls += 1
+      }
+    )
+    assertEquals(checkCalls, 0)
+  }
+
+  test(
+    "validateJoinKeyUniquenessOrAcknowledge runs the uniqueness check when verify is enabled"
+  ) {
+    var checkCalls = 0
+    MySQLToScyllaValidator.validateJoinKeyUniquenessOrAcknowledge(
+      skipSourcePrimaryKeyValidation = true,
+      verifySourceJoinKeyUniqueness  = true,
+      acknowledgeUnverifiedJoinKey   = false,
+      joinKey                        = Seq("custom_key"),
+      checkUniqueness                = { () =>
+        checkCalls += 1
+      }
+    )
+    assertEquals(checkCalls, 1)
+  }
+
+  test(
+    "validateJoinKeyUniquenessOrAcknowledge skips the check without erroring when acknowledged"
+  ) {
+    var checkCalls = 0
+    MySQLToScyllaValidator.validateJoinKeyUniquenessOrAcknowledge(
+      skipSourcePrimaryKeyValidation = true,
+      verifySourceJoinKeyUniqueness  = false,
+      acknowledgeUnverifiedJoinKey   = true,
+      joinKey                        = Seq("custom_key"),
+      checkUniqueness                = { () =>
+        checkCalls += 1
+        throw new RuntimeException("checkUniqueness should not be called when acknowledged")
+      }
+    )
+    assertEquals(checkCalls, 0)
+  }
+
+  test(
+    "validateJoinKeyUniquenessOrAcknowledge aborts when neither verify nor acknowledge is set"
+  ) {
+    var checkCalls = 0
+    val error = intercept[RuntimeException] {
+      MySQLToScyllaValidator.validateJoinKeyUniquenessOrAcknowledge(
+        skipSourcePrimaryKeyValidation = true,
+        verifySourceJoinKeyUniqueness  = false,
+        acknowledgeUnverifiedJoinKey   = false,
+        joinKey                        = Seq("custom_key"),
+        checkUniqueness                = { () =>
+          checkCalls += 1
+        }
+      )
+    }
+    assertEquals(checkCalls, 0)
+    assert(error.getMessage.contains("verifySourceJoinKeyUniqueness"))
+    assert(error.getMessage.contains("acknowledgeUnverifiedJoinKey"))
+  }
+
   test("sourcePrimaryKeyFromMetadata uses the literal table name") {
     var requestedCatalog: String = null
     var requestedTableName: String = null

@@ -328,6 +328,41 @@ object MySQLToScyllaValidator {
     }
   }
 
+  // Decides what to do about join-key uniqueness when skipSourcePrimaryKeyValidation bypasses
+  // the declared-PK check. The check itself (checkUniqueness) is injected so this decision can
+  // be unit tested without a live DataFrame/Spark job. The three outcomes are: run the full-scan
+  // uniqueness check (verifySourceJoinKeyUniqueness), proceed without it only if the risk has
+  // been explicitly accepted (acknowledgeUnverifiedJoinKey), or abort -- validation must never
+  // silently proceed with an unverified, unacknowledged custom join key.
+  private[scylla] def validateJoinKeyUniquenessOrAcknowledge(
+    skipSourcePrimaryKeyValidation: Boolean,
+    verifySourceJoinKeyUniqueness: Boolean,
+    acknowledgeUnverifiedJoinKey: Boolean,
+    joinKey: Seq[String],
+    checkUniqueness: () => Unit
+  ): Unit =
+    if (skipSourcePrimaryKeyValidation) {
+      if (verifySourceJoinKeyUniqueness)
+        checkUniqueness()
+      else if (acknowledgeUnverifiedJoinKey)
+        log.warn(
+          "skipSourcePrimaryKeyValidation is set and verifySourceJoinKeyUniqueness is false, " +
+            "but acknowledgeUnverifiedJoinKey is set: proceeding without verifying that the " +
+            s"configured join key (${joinKey.mkString(", ")}) is unique in the MySQL source. " +
+            "A non-unique join key can match multiple source rows to a single target row, " +
+            "silently hiding missing or extra rows."
+        )
+      else
+        sys.error(
+          "skipSourcePrimaryKeyValidation is set, but the configured join key " +
+            s"(${joinKey.mkString(", ")}) has not been verified as unique. Set " +
+            "'verifySourceJoinKeyUniqueness: true' to check it (requires a full scan of the " +
+            "source table), or set 'acknowledgeUnverifiedJoinKey: true' to proceed without " +
+            "verification and accept the risk that a non-unique join key can silently hide " +
+            "missing or extra rows."
+        )
+    }
+
   private[scylla] def sourcePrimaryKeyFromMetadata(
     metaData: DatabaseMetaData,
     catalog: String,
@@ -716,18 +751,13 @@ object MySQLToScyllaValidator {
       renamed
     }
 
-    if (sourceSettings.skipSourcePrimaryKeyValidation) {
-      if (sourceSettings.verifySourceJoinKeyUniqueness)
-        validateSourceJoinKeyUniqueness(rawSourceDF, renamedPK)
-      else
-        log.warn(
-          "skipSourcePrimaryKeyValidation is set but verifySourceJoinKeyUniqueness is not: the " +
-            "configured join key's uniqueness will not be checked. A non-unique join key can " +
-            "match multiple source rows to a single target row, silently hiding missing or " +
-            "extra rows. Set 'verifySourceJoinKeyUniqueness: true' to perform this check (it " +
-            "requires an extra full scan of the source data)."
-        )
-    }
+    validateJoinKeyUniquenessOrAcknowledge(
+      sourceSettings.skipSourcePrimaryKeyValidation,
+      sourceSettings.verifySourceJoinKeyUniqueness,
+      sourceSettings.acknowledgeUnverifiedJoinKey,
+      renamedPK,
+      () => validateSourceJoinKeyUniqueness(rawSourceDF, renamedPK)
+    )
 
     log.info(s"Connecting to ScyllaDB target at ${targetSettings.host}:${targetSettings.port}")
 
