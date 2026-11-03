@@ -6,13 +6,49 @@ import com.scylladb.migrator.config.{
   SparkSecretRedaction,
   TargetSettings
 }
-import com.scylladb.migrator.scylla.{ ScyllaMigrator, ScyllaParquetMigrator, SourceDataFrame }
+import com.scylladb.migrator.scylla.{
+  ScyllaMigrator,
+  ScyllaParquetMigrator,
+  SourceBatch,
+  SourceBatches,
+  SourceDataFrame
+}
 import org.apache.logging.log4j.LogManager
-import org.apache.spark.sql.{ AnalysisException, SparkSession }
+import org.apache.spark.sql.{ AnalysisException, DataFrame, SparkSession }
 import scala.util.Using
+import scala.util.control.NonFatal
 
 object Parquet {
   val log = LogManager.getLogger("com.scylladb.migrator.readers.Parquet")
+
+  /** Redact a source path/URI for logging: drop any `user:secret@` authority, query string, and
+    * fragment (e.g. `s3a://AKIA:secret@bucket/p?X-Amz-Signature=...`), keeping only
+    * scheme/host/port/path. Falls back to the raw string for plain local paths or unparseable
+    * inputs. Never use for the actual read — only for log output.
+    */
+  private[readers] def redactPathForLog(path: String): String =
+    try {
+      val uri = new java.net.URI(path)
+      // Fail closed on anything carrying credentials or a signed query, INCLUDING schemeless inputs
+      // that still parse (e.g. `//user:secret@host/p`) — those would otherwise be echoed verbatim.
+      if (uri.getRawUserInfo != null || uri.getRawQuery != null || uri.getRawFragment != null)
+        "<redacted-path>"
+      else if (uri.getScheme == null)
+        if (path.contains("@") || path.contains("?")) "<redacted-path>" else path
+      else {
+        val authority =
+          if (uri.getHost != null)
+            uri.getHost + (if (uri.getPort >= 0) ":" + uri.getPort else "")
+          else if (uri.getAuthority != null) "<redacted-authority>"
+          else ""
+        s"${uri.getScheme}://$authority${Option(uri.getPath).getOrElse("")}"
+      }
+    } catch {
+      // Fail closed: an unparseable input that carries credential/query markers must NOT be logged
+      // verbatim. Plain local paths (no `@`/`?`) are safe to echo as-is.
+      case NonFatal(_) =>
+        if (path.contains("@") || path.contains("?")) "<redacted-path>" else path
+    }
 
   def migrateToScylla(
     config: MigratorConfig,
@@ -78,38 +114,57 @@ object Parquet {
         SparkSecretRedaction.redactionRegex(spark)
       )
     ) { savepointsManager =>
-      val listener = new FileCompletionListener(
-        partitionToFiles,
-        fileToPartitions,
-        savepointsManager
-      )
-      spark.sparkContext.addSparkListener(listener)
+      val sourceDF = if (hasPerElementCollections(df)) {
+        collectionBatches(spark, filesToProcess, TimestampColumns.renameFromParquet(df))
+      } else if (TimestampColumns.hasPerColumnMetaInParquet(df.schema)) {
+        log.info(
+          "Detected per-column CQL timestamp metadata in Parquet schema. " +
+            "Performing row explosion for TTL/writetime preservation."
+        )
+        val renamed = TimestampColumns.renameFromParquet(df)
+        val (explodedRdd, writeSchema, timestampColumns, collectionAppendWrites) =
+          Cassandra.explodeRowsFromPerColumnMetaCollectionAware(spark, renamed)
+        // `savepointsSupported = false` is hardcoded here on purpose: although Parquet sources
+        // *do* support savepoints (`SourceSettings.Parquet.supportsSavepoints == true`), the
+        // resume mechanism is the external `ParquetSavepointsManager` injected via
+        // `ScyllaParquetMigrator.externalSavepointsManager`. Marking the DataFrame as
+        // unsupported tells `ScyllaMigratorBase.createSavepointsManager` not to spin up an
+        // internal CQL manager that would race with the external one.
+        SourceDataFrame(
+          renamed,
+          Some(timestampColumns),
+          savepointsSupported    = false,
+          cassandraExplodedWrite = Some((explodedRdd, writeSchema)),
+          collectionAppendWrites = collectionAppendWrites
+        )
+      } else {
+        SourceDataFrame(df, None, savepointsSupported = false)
+      }
 
-      try {
-        val sourceDF = if (TimestampColumns.hasPerColumnMetaInParquet(df.schema)) {
-          log.info(
-            "Detected per-column CQL timestamp metadata in Parquet schema. " +
-              "Performing row explosion for TTL/writetime preservation."
-          )
-          val renamed = TimestampColumns.renameFromParquet(df)
-          val (explodedRdd, writeSchema, timestampColumns) =
-            Cassandra.explodeRowsFromPerColumnMeta(spark, renamed)
-          // `savepointsSupported = false` is hardcoded here on purpose: although Parquet sources
-          // *do* support savepoints (`SourceSettings.Parquet.supportsSavepoints == true`), the
-          // resume mechanism is the external `ParquetSavepointsManager` injected via
-          // `ScyllaParquetMigrator.externalSavepointsManager`. Marking the DataFrame as
-          // unsupported tells `ScyllaMigratorBase.createSavepointsManager` not to spin up an
-          // internal CQL manager that would race with the external one.
-          SourceDataFrame(
-            renamed,
-            Some(timestampColumns),
-            savepointsSupported    = false,
-            cassandraExplodedWrite = Some((explodedRdd, writeSchema))
-          )
+      // Incremental per-file savepoint marking (via `FileCompletionListener`) is only correct for
+      // a SINGLE-pass write. With per-element collection-append passes, the base write is a
+      // separate Spark job that reads every partition of every file and would make the listener
+      // mark files complete BEFORE the append passes run. A crash mid-append would then persist
+      // those files as done and skip their un-appended collection elements on resume (silent data
+      // loss). The multi-pass case is instead written in batches of files, each marked complete
+      // only after ALL of its passes have succeeded. Re-running reprocesses unfinished batches,
+      // which is safe because base inserts and collection appends are idempotent under
+      // `USING TIMESTAMP`. The common single-pass path keeps its fine-grained per-file resume.
+      val listener =
+        if (sourceDF.batches.isEmpty && sourceDF.collectionAppendWrites.isEmpty) {
+          val l = new FileCompletionListener(partitionToFiles, fileToPartitions, savepointsManager)
+          spark.sparkContext.addSparkListener(l)
+          Some(l)
         } else {
-          SourceDataFrame(df, None, savepointsSupported = false)
+          log.info(
+            "Per-element collection-append passes detected; disabling incremental Parquet file " +
+              "savepoint tracking. Each batch of files is marked complete only after all of its " +
+              "write passes succeed; an interrupted run reprocesses unfinished batches (idempotent)."
+          )
+          None
         }
 
+      try {
         log.info("Created DataFrame from Parquet source")
 
         ScyllaParquetMigrator.migrate(config, target, sourceDF, savepointsManager)
@@ -119,15 +174,17 @@ object Parquet {
         filesToProcess.foreach(savepointsManager.markFileAsProcessed)
         savepointsManager.dumpMigrationState("completed")
 
-        log.info(
-          s"Parquet migration completed successfully: " +
-            s"${listener.getCompletedFilesCount}/${listener.getTotalFilesCount} files processed"
-        )
-
-      } finally {
-        spark.sparkContext.removeSparkListener(listener)
-        log.info(s"Final progress: ${listener.getProgressReport}")
-      }
+        listener.foreach { l =>
+          log.info(
+            s"Parquet migration completed successfully: " +
+              s"${l.getCompletedFilesCount}/${l.getTotalFilesCount} files processed"
+          )
+        }
+      } finally
+        listener.foreach { l =>
+          spark.sparkContext.removeSparkListener(l)
+          log.info(s"Final progress: ${l.getProgressReport}")
+        }
     }
   }
 
@@ -145,8 +202,78 @@ object Parquet {
     ScyllaMigrator.migrate(config, target, sourceDF)
   }
 
+  /** Whether a Parquet frame carries per-element collection metadata (see
+    * [[Cassandra.hasPerElementCollectionMeta]]), so its restore runs collection-append passes.
+    */
+  private[readers] def hasPerElementCollections(df: DataFrame): Boolean =
+    TimestampColumns.hasPerColumnMetaInParquet(df.schema) &&
+      Cassandra.hasPerElementCollectionMeta(TimestampColumns.renameFromParquet(df).schema)
+
+  /** A per-element collection restore of `files`, written in batches of files so that the cache its
+    * multi-pass writes need holds one batch. A batch holds about `collectionBatchPartitions` x
+    * `spark.sql.files.maxPartitionBytes` of Parquet data (at least one file), and records its files
+    * as processed once all of its passes have succeeded.
+    *
+    * @param whole
+    *   the renamed frame of all `files`, used only to describe the input
+    */
+  private[readers] def collectionBatches(
+    spark: SparkSession,
+    files: Seq[String],
+    whole: DataFrame
+  ): SourceDataFrame = {
+    val hadoopConf = spark.sparkContext.hadoopConfiguration
+    def sizeOf(file: String): Long = {
+      val path = new org.apache.hadoop.fs.Path(file)
+      path.getFileSystem(hadoopConf).getFileStatus(path).getLen
+    }
+    val maxPartitionBytes = spark.sessionState.conf.filesMaxPartitionBytes
+    val limit = BigInt(CollectionBatching.batchPartitions(spark)) * maxPartitionBytes
+    val groups = CollectionBatching.group[String](
+      files,
+      sizeOf,
+      if (limit > Long.MaxValue) Long.MaxValue else limit.toLong
+    )
+    log.info(
+      s"Per-element collection restore: writing ${files.size} Parquet file(s) in " +
+        s"${groups.size} batch(es)"
+    )
+    SourceDataFrame(
+      whole,
+      Some(TimestampColumns("ttl", "writetime")),
+      savepointsSupported = false,
+      batches = Some(
+        SourceBatches(
+          groups.size,
+          () =>
+            groups.iterator.map { batchFiles =>
+              val renamed = TimestampColumns.renameFromParquet(spark.read.parquet(batchFiles: _*))
+              val (explodedRdd, writeSchema, timestampColumns, collectionAppendWrites) =
+                Cassandra.explodeRowsFromPerColumnMetaCollectionAware(spark, renamed)
+              SourceBatch(
+                SourceDataFrame(
+                  renamed,
+                  Some(timestampColumns),
+                  savepointsSupported    = false,
+                  cassandraExplodedWrite = Some((explodedRdd, writeSchema)),
+                  collectionAppendWrites = collectionAppendWrites
+                ),
+                s"${batchFiles.size} Parquet file(s)",
+                {
+                  case manager: ParquetSavepointsManager =>
+                    batchFiles.foreach(manager.markFileAsProcessed)
+                  case _ => ()
+                }
+              )
+            }
+        )
+      )
+    )
+  }
+
   def listParquetFiles(spark: SparkSession, path: String): Seq[String] = {
-    log.info(s"Discovering Parquet files in $path")
+    val safePath = redactPathForLog(path)
+    log.info(s"Discovering Parquet files in $safePath")
 
     try {
       val dataFrame = spark.read
@@ -156,14 +283,14 @@ object Parquet {
       val files = dataFrame.inputFiles.toSeq.distinct.sorted
 
       if (files.isEmpty) {
-        throw new IllegalArgumentException(s"No Parquet files found in $path")
+        throw new IllegalArgumentException(s"No Parquet files found in $safePath")
       }
 
       log.info(s"Found ${files.size} Parquet file(s)")
       files
     } catch {
       case e: AnalysisException =>
-        val message = s"Failed to list Parquet files from $path: ${e.getMessage}"
+        val message = s"Failed to list Parquet files from $safePath"
         log.error(message)
         throw new IllegalArgumentException(message, e)
     }

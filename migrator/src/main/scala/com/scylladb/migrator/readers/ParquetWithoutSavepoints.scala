@@ -9,7 +9,10 @@ object ParquetWithoutSavepoints {
   val log = LogManager.getLogger("com.scylladb.migrator.readers.ParquetWithoutSavepoints")
 
   def readDataFrame(spark: SparkSession, source: SourceSettings.Parquet): SourceDataFrame = {
-    log.info(s"Reading Parquet files from ${source.path} (without savepoint tracking)")
+    log.info(
+      s"Reading Parquet files from ${Parquet.redactPathForLog(source.path)} " +
+        "(without savepoint tracking)"
+    )
 
     Parquet.configureHadoopCredentials(spark, source)
 
@@ -21,19 +24,26 @@ object ParquetWithoutSavepoints {
     // file-level tracking for this run, so the DataFrame is marked unsupported to keep
     // `ScyllaMigratorBase.createSavepointsManager` from spinning up a CQL manager that has no
     // accumulator to consume Parquet progress.
-    if (TimestampColumns.hasPerColumnMetaInParquet(df.schema)) {
+    if (Parquet.hasPerElementCollections(df)) {
+      Parquet.collectionBatches(
+        spark,
+        Parquet.listParquetFiles(spark, source.path),
+        TimestampColumns.renameFromParquet(df)
+      )
+    } else if (TimestampColumns.hasPerColumnMetaInParquet(df.schema)) {
       log.info(
         "Detected per-column CQL timestamp metadata in Parquet schema. " +
           "Performing row explosion for TTL/writetime preservation."
       )
       val renamed = TimestampColumns.renameFromParquet(df)
-      val (explodedRdd, writeSchema, timestampColumns) =
-        Cassandra.explodeRowsFromPerColumnMeta(spark, renamed)
+      val (explodedRdd, writeSchema, timestampColumns, collectionAppendWrites) =
+        Cassandra.explodeRowsFromPerColumnMetaCollectionAware(spark, renamed)
       SourceDataFrame(
         renamed,
         Some(timestampColumns),
         savepointsSupported    = false,
-        cassandraExplodedWrite = Some((explodedRdd, writeSchema))
+        cassandraExplodedWrite = Some((explodedRdd, writeSchema)),
+        collectionAppendWrites = collectionAppendWrites
       )
     } else {
       SourceDataFrame(df, None, savepointsSupported = false)
