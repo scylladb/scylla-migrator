@@ -63,23 +63,3 @@ object PartitionKeyedAccumulator {
   ): PartitionKeyedAccumulator[A] =
     new PartitionKeyedAccumulator(initialValue)
 }
-
-/** The per-partition diagnostic result of a repair pass: how many rows were (re)written from that
-  * partition, and a locally-capped sample of comparison failures observed in it.
-  */
-case class PartitionRepairSummary(missingCount: Long, failureSample: List[RowComparisonFailure])
-
-object PartitionRepairSummary {
-
-  /** Combine the per-partition winning summaries into one: sum the counts, and concatenate the
-    * per-partition failure samples, capped at `failuresToFetch` overall.
-    */
-  def combine(
-    summaries: Iterable[PartitionRepairSummary],
-    failuresToFetch: Int
-  ): PartitionRepairSummary =
-    PartitionRepairSummary(
-      summaries.foldLeft(0L)(_ + _.missingCount),
-      summaries.iterator.flatMap(_.failureSample).take(failuresToFetch).toList
-    )
-}

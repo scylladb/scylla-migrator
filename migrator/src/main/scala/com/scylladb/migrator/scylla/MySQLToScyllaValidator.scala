@@ -961,16 +961,23 @@ object MySQLToScyllaValidator {
           "left_anti"
         )
 
-      // writeDataframe is the only action over missingSourceDf, so no persist is needed. The
-      // count is reported once per task completion, keyed by (partitionId, stageAttemptNumber),
-      // so a resubmitted stage (e.g. after a shuffle fetch failure from the anti-join) cannot
+      // writeDataframe is the only action over missingSourceDf, so no persist is needed. Note
+      // that since this is an uncached pass, a repair task that retries after already writing
+      // some rows will re-read the target and see those rows as no longer missing, slightly
+      // undercounting in that scenario even though every row is still written exactly once
+      // overall (see ScyllaValidator's runValidation doc for the full rationale). The count is
+      // reported once per task completion, keyed by (partitionId, stageAttemptNumber), so a
+      // resubmitted stage (e.g. after a shuffle fetch failure from the anti-join) cannot
       // double-count a partition that already succeeded under an older stage attempt - see
       // ScyllaValidator for the full rationale. This block only needs a count (failure sampling
       // already happened above via collectFailureSample), so it uses
       // PartitionKeyedAccumulator[Long] directly rather than PartitionRepairSummary.
+      // Registered WITHOUT a name: a named accumulator has its value snapshotted into every
+      // completed task's metadata for UI/event-log display, which grows quadratically for a map
+      // keyed by partition as more tasks complete (fine for this simple Long-per-partition map,
+      // but kept unnamed for consistency with the other PartitionKeyedAccumulator usages).
       val missingRowCountAcc = new PartitionKeyedAccumulator[Long]()
-      spark.sparkContext
-        .register(missingRowCountAcc, "MySQLToScyllaValidator missing source row count")
+      spark.sparkContext.register(missingRowCountAcc)
 
       val countedMissingSourceRdd: RDD[Row] = missingSourceDf.rdd.mapPartitions { partitionIter =>
         val tc = TaskContext.get()

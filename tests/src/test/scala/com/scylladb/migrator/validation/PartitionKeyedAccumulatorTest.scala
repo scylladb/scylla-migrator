@@ -73,25 +73,3 @@ class PartitionKeyedAccumulatorTest extends munit.FunSuite {
     assertEquals(acc.values.toList, Nil)
   }
 }
-
-class PartitionRepairSummaryTest extends munit.FunSuite {
-  test("combine sums counts and concatenates+caps the failure sample") {
-    val a = PartitionRepairSummary(2L, List.fill(2)(sampleFailure("a")))
-    val b = PartitionRepairSummary(3L, List.fill(2)(sampleFailure("b")))
-
-    val combined = PartitionRepairSummary.combine(List(a, b), failuresToFetch = 3)
-
-    assertEquals(combined.missingCount, 5L)
-    assertEquals(combined.failureSample.size, 3)
-  }
-
-  test("combine with no summaries yields zero count and empty sample") {
-    val combined = PartitionRepairSummary.combine(Nil, failuresToFetch = 3)
-
-    assertEquals(combined.missingCount, 0L)
-    assertEquals(combined.failureSample, Nil)
-  }
-
-  private def sampleFailure(tag: String): RowComparisonFailure =
-    RowComparisonFailure(tag, None, List(RowComparisonFailure.Item.MissingTargetRow))
-}
