@@ -59,9 +59,9 @@ Valid values for the source ``type`` are:
 
 The following subsections detail the schema of each source type.
 
-^^^^^^^^^^^^^^^^^^^^^^^
-Apache Cassandra Source
-^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^
+CQL-Compatible Source
+^^^^^^^^^^^^^^^^^^^^^
 
 A source of type ``cassandra`` can be used together with a target of type ``cassandra`` only.
 
@@ -94,7 +94,7 @@ A source of type ``cassandra`` can be used together with a target of type ``cass
     # available in the Spark cluster, and optimally more; higher splits will lead
     # to more fine-grained resumes. Aim for 8 * (Spark cores).
     splitCount: 256
-    # Number of connections to use to Apache Cassandra when copying
+    # Number of connections to use to the CQL-compatible database when copying
     connections: 8
     # Number of rows to fetch in each read
     fetchSize: 1000
@@ -331,9 +331,9 @@ Valid values for the target ``type`` are:
 
 The following subsections detail the schema of each target type.
 
-^^^^^^^^^^^^^^^^^^^^^^^
-Apache Cassandra Target
-^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^
+CQL-Compatible Target
+^^^^^^^^^^^^^^^^^^^^^
 
 .. code-block:: yaml
 
@@ -358,7 +358,7 @@ Apache Cassandra Target
     # Consistency Level for the target connection
     # Options are: LOCAL_ONE, ONE, LOCAL_QUORUM, QUORUM.
     consistencyLevel: LOCAL_QUORUM
-    # Number of connections to use to ScyllaDB / Apache Cassandra when copying
+    # Number of connections to use to the CQL-compatible database when copying
     connections: 16
     # Spark pads decimals with zeros appropriate to their scale. This causes values
     # like '3.5' to be copied as '3.5000000000...' to the target. There's no good way
