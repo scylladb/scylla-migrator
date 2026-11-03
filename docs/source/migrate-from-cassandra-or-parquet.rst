@@ -208,8 +208,8 @@ Additionally, you can also set the following optional properties:
     # (you can uncomment just one of them, or all or none)
     # TTL in seconds (sample 7776000 is 90 days)
     writeTTLInS: 7776000
-    # writetime in microseconds (sample 1640998861000 is Saturday, January 1, 2022 2:01:01 AM GMT+01:00 )
-    writeWritetimestampInuS: 1640998861000
+    # writetime in microseconds since the Unix epoch (16 digits; sample 1640998861000000 is Saturday, January 1, 2022 1:01:01 AM UTC)
+    writeWritetimestampInuS: 1640998861000000
 
 Where ``<datacenter>``, ``<username>``, ``<pass>``, and ``<path>`` should be replaced with your specific values.
 

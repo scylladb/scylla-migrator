@@ -382,8 +382,8 @@ CQL-Compatible Target (Apache Cassandra, ScyllaDB)
     # (you can uncomment just one of them, or all or none)
     # TTL in seconds (sample 7776000 is 90 days)
     writeTTLInS: 7776000
-    # Optional - writetime in microseconds (sample 1640998861000 is Saturday, January 1, 2022 2:01:01 AM GMT+01:00 )
-    writeWritetimestampInuS: 1640998861000
+    # Optional - writetime in microseconds since the Unix epoch (16 digits; sample 1640998861000000 is Saturday, January 1, 2022 1:01:01 AM UTC)
+    writeWritetimestampInuS: 1640998861000000
     # Optional - SSL as per https://github.com/scylladb/spark-cassandra-connector/blob/master/doc/reference.md#cassandra-ssl-connection-options
     sslOptions:
       clientAuthEnabled: false
