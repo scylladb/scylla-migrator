@@ -59,9 +59,9 @@ Valid values for the source ``type`` are:
 
 The following subsections detail the schema of each source type.
 
-^^^^^^^^^^^^^^^^^^^^^
-CQL-Compatible Source
-^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+CQL-Compatible Source (Apache Cassandra, ScyllaDB)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 A source of type ``cassandra`` can be used together with a target of type ``cassandra`` only.
 
@@ -331,9 +331,9 @@ Valid values for the target ``type`` are:
 
 The following subsections detail the schema of each target type.
 
-^^^^^^^^^^^^^^^^^^^^^
-CQL-Compatible Target
-^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+CQL-Compatible Target (Apache Cassandra, ScyllaDB)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. code-block:: yaml
 
