@@ -97,6 +97,22 @@ services:
       --alternator-port 8000
       --alternator-write-isolation only_rmw_uses_lwt
 
+  # Pinned to 2026.2: the first ScyllaDB release that can read back per-element non-frozen
+  # collection WRITETIME()/TTL() (via the subscript form WRITETIME(col[key])). Used only by the
+  # Scylla-source collection-timestamp integration test; NOT the shared scylla/scylla-source
+  # services (which follow SCYLLA_VERSION and may be older, and use SimpleStrategy fixtures that
+  # 2026.2 rejects). Kept on a dedicated host port so it can run independently.
+  scylla2026:
+    image: scylladb/scylla:2026.2
+    ports:
+      - "9048:9042"
+    expose:
+      - 9048
+    command: >
+      --smp 1
+      --developer-mode 1
+      --overprovisioned 1
+
   s3:
     image: localstack/localstack:s3-community-archive
     ports:

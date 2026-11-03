@@ -18,19 +18,74 @@ import org.apache.spark.sql.types.StructType
 import scala.util.Using
 import scala.util.control.NonFatal
 
+/** A per-element collection-timestamp write pass. Each carries the singleton/grouped
+  * collection-append rows for one non-frozen collection column, written after the base row write
+  * with `col = col + ?` and per-row TTL/WRITETIME so element-level timestamps are preserved.
+  *
+  * @param columnName
+  *   the (source) collection column name; renames are applied by the writer.
+  * @param rdd
+  *   rows of `[primary key columns..., singleton/grouped collection value, ttl, writetime,
+  *   overwrite]`.
+  * @param schema
+  *   positional schema for `rdd`, ending in `ttl` (IntegerType), `writetime` (LongType) and
+  *   [[CollectionAppendWrite.OverwriteColumn]] (BooleanType).
+  */
+case class CollectionAppendWrite(
+  columnName: String,
+  rdd: RDD[Row],
+  schema: StructType
+)
+
+object CollectionAppendWrite {
+
+  /** Marks the one row per collection cell that is written with `col = ?` (overwrite) rather than
+    * `col = col + ?`, so its collection tombstone clears target elements older than the source's.
+    */
+  val OverwriteColumn = "__migrator_overwrite"
+}
+
 /** @param cassandraExplodedWrite
   *   When set, [[migrate]] writes this `RDD[Row]` with [[writers.Scylla.writeRowRDD]] instead of
   *   [[writers.Scylla.writeDataframe]], so exploded rows can carry
   *   [[com.datastax.spark.connector.types.CassandraOption]] on regular columns (explicit CQL null
   *   vs unset). [[dataFrame]] stays the pre-explosion frame (e.g. wide Cassandra read) for
   *   partition metadata and logging.
+  * @param batches
+  *   When set, [[migrate]] writes these batches one after another instead of this frame's own
+  *   passes, and [[dataFrame]] only describes the whole input (partition count, token-range
+  *   coverage). Used for per-element collection preservation, whose multi-pass writes cache their
+  *   input: batching bounds that cache to one batch.
   */
 case class SourceDataFrame(
   dataFrame: DataFrame,
   timestampColumns: Option[TimestampColumns],
   savepointsSupported: Boolean,
-  cassandraExplodedWrite: Option[(RDD[Row], StructType)] = None
+  cassandraExplodedWrite: Option[(RDD[Row], StructType)] = None,
+  collectionAppendWrites: Seq[CollectionAppendWrite] = Nil,
+  batches: Option[SourceBatches] = None
 )
+
+/** One bounded part of a batched multi-pass migration.
+  *
+  * @param source
+  *   the batch's own frame and write passes; its cache is released once they finish
+  * @param description
+  *   what the batch covers, for logging
+  * @param recordProgress
+  *   records the batch as done in the run's savepoints manager; called only after every one of its
+  *   write passes has succeeded
+  */
+final case class SourceBatch(
+  source: SourceDataFrame,
+  description: String,
+  recordProgress: SavepointsManager => Unit
+)
+
+/** The batches of a batched multi-pass migration, built lazily one at a time so that only the batch
+  * being written is read and cached.
+  */
+final case class SourceBatches(count: Int, iterator: () => Iterator[SourceBatch])
 
 trait ScyllaMigratorBase {
   protected val log = LogManager.getLogger("com.scylladb.migrator.scylla")
@@ -82,26 +137,24 @@ trait ScyllaMigratorBase {
         case cqlManager: CqlSavepointsManager => Some(cqlManager.accumulator)
         case _                                => None
       }
-      sourceDF.cassandraExplodedWrite match {
-        case Some((explodedRdd, writeSchema)) =>
-          writers.Scylla.writeRowRDD(
-            target,
-            migratorConfig.getRenamesOrNil,
-            explodedRdd,
-            writeSchema,
-            sourceDF.timestampColumns,
-            tokenRangeAccumulator,
-            migratorConfig.source
-          )
-        case None =>
-          writers.Scylla.writeDataframe(
-            target,
-            migratorConfig.getRenamesOrNil,
-            sourceDF.dataFrame,
-            sourceDF.timestampColumns,
-            tokenRangeAccumulator,
-            migratorConfig.source
-          )
+      sourceDF.batches match {
+        case None          => writePasses(migratorConfig, target, sourceDF, tokenRangeAccumulator)
+        case Some(batches) =>
+          // Each batch is read, cached, written by every pass and released before the next one,
+          // so the cache holds one batch rather than the whole input. Its write tasks see pruned
+          // partitions the connector cannot extract token ranges from, so no accumulator rides
+          // the passes; the batch records its own progress once all of them have succeeded.
+          log.info(s"Writing the source in ${batches.count} batch(es)")
+          batches.iterator().zipWithIndex.foreach { case (batch, index) =>
+            val label = s"batch ${index + 1}/${batches.count}"
+            log.info(s"Writing $label: ${batch.description}")
+            try writePasses(migratorConfig, target, batch.source, None)
+            finally releaseCache(batch.source)
+            maybeSavepointsManager.foreach { manager =>
+              batch.recordProgress(manager)
+              manager.dumpMigrationState(label)
+            }
+          }
       }
     } catch {
       case NonFatal(e) => // Catching everything on purpose to try and dump the accumulator state
@@ -110,7 +163,11 @@ trait ScyllaMigratorBase {
           e
         )
         caughtError = Some(e)
-    } finally
+    } finally {
+      // Release the source frame cache (see F5 in readers.Cassandra.readDataframe). All write
+      // passes are eager actions that have run by now, so nothing still reads it. No-op when the
+      // frame was never persisted (e.g. single-pass or non-Cassandra sources).
+      releaseCache(sourceDF)
       for (savePointsManger <- maybeSavepointsManager) {
         try
           savePointsManger.dumpMigrationState("final")
@@ -129,7 +186,82 @@ trait ScyllaMigratorBase {
           }
         }
       }
+    }
     caughtError.foreach(throw _)
+  }
+
+  /** Release a source frame's cache (see F5 in readers.Cassandra.readDataframe). Its write passes
+    * are eager actions that have run by now, so nothing still reads it. No-op when the frame was
+    * never persisted (e.g. single-pass or non-Cassandra sources). Failures are logged, not raised.
+    */
+  private def releaseCache(source: SourceDataFrame): Unit =
+    try source.dataFrame.unpersist()
+    catch {
+      case NonFatal(e) =>
+        log.warn("Failed to release the cached source DataFrame; continuing", e)
+    }
+
+  /** The base write and the per-element collection-append passes of one source frame. */
+  private def writePasses(
+    migratorConfig: MigratorConfig,
+    target: TargetSettings.Scylla,
+    sourceDF: SourceDataFrame,
+    tokenRangeAccumulator: Option[TokenRangeAccumulator]
+  )(implicit spark: SparkSession): Unit = {
+    // Savepoint correctness for multi-pass collection preservation: a range is only complete once
+    // the base write AND every append pass have written it, so only the final pass may feed the
+    // token-range accumulator. Readers write per-element collections in batches (see
+    // `SourceDataFrame.batches`), which pass no accumulator and record each batch only after all
+    // of its passes have succeeded; recording from the base write instead would mark ranges done
+    // BEFORE the append passes run, and a resume would then skip their collection elements.
+    val hasCollectionAppends = sourceDF.collectionAppendWrites.nonEmpty
+    val baseAccumulator = if (hasCollectionAppends) None else tokenRangeAccumulator
+
+    sourceDF.cassandraExplodedWrite match {
+      case Some((explodedRdd, writeSchema)) =>
+        writers.Scylla.writeRowRDD(
+          target,
+          migratorConfig.getRenamesOrNil,
+          explodedRdd,
+          writeSchema,
+          sourceDF.timestampColumns,
+          baseAccumulator,
+          migratorConfig.source
+        )
+      case None =>
+        writers.Scylla.writeDataframe(
+          target,
+          migratorConfig.getRenamesOrNil,
+          sourceDF.dataFrame,
+          sourceDF.timestampColumns,
+          baseAccumulator,
+          migratorConfig.source
+        )
+    }
+
+    // Per-element collection timestamp preservation: after the base row write (scalars + frozen
+    // collections), replay each non-frozen collection column with `col = col + ?` and per-row
+    // TTL/WRITETIME. Only the last pass carries the token-range accumulator (see above).
+    if (hasCollectionAppends) {
+      log.info(
+        s"Applying ${sourceDF.collectionAppendWrites.size} per-element collection-append " +
+          s"pass(es): ${sourceDF.collectionAppendWrites.map(_.columnName).mkString(", ")}"
+      )
+      val lastIndex = sourceDF.collectionAppendWrites.size - 1
+      sourceDF.collectionAppendWrites.zipWithIndex.foreach { case (caw, index) =>
+        val accumulatorForPass =
+          if (index == lastIndex) tokenRangeAccumulator else None
+        writers.Scylla.writeCollectionAppendRDD(
+          target,
+          migratorConfig.getRenamesOrNil,
+          caw.columnName,
+          caw.rdd,
+          caw.schema,
+          accumulatorForPass,
+          migratorConfig.source
+        )
+      }
+    }
   }
 }
 
@@ -169,6 +301,9 @@ object ScyllaMigrator extends ScyllaMigratorBase {
     target: TargetSettings.Parquet,
     migratorConfig: MigratorConfig
   )(implicit spark: SparkSession): Unit = {
+    // Per-element collection TTL/WRITETIME are exported as array sidecars
+    // (`__migrator_meta_<col>_ttl/_writetime`) and re-hydrated into collection-append passes on
+    // the Parquet restore path (see `explodeRowsFromPerColumnMetaCollectionAware`).
     val sourceDF = readers.Cassandra.readDataframe(
       spark,
       source,
@@ -189,6 +324,7 @@ object ScyllaMigrator extends ScyllaMigratorBase {
         SparkSecretRedaction.redactionRegex(spark)
       )
     ) { savepointsManager =>
+      var caughtError: Option[Throwable] = None
       try
         writers.Parquet.writeDataframe(target, dfForParquet)
       catch {
@@ -197,8 +333,18 @@ object ScyllaMigrator extends ScyllaMigratorBase {
             "Caught error while writing Parquet. Will create a savepoint before exiting",
             e
           )
+          caughtError = Some(e)
       } finally
-        savepointsManager.dumpMigrationState("final")
+        try savepointsManager.dumpMigrationState("final")
+        catch {
+          case NonFatal(finallyEx) =>
+            caughtError.foreach(_.addSuppressed(finallyEx))
+            if (caughtError.isEmpty) caughtError = Some(finallyEx)
+        }
+      // Re-throw so the process exits non-zero on a failed/partial Parquet export (including the
+      // per-element collection array sidecars). Mirrors `ScyllaMigratorBase.migrate`; without this
+      // a truncated export would be silently restored as complete on the Parquet import path.
+      caughtError.foreach(throw _)
     }
   }
 }

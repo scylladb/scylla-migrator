@@ -77,7 +77,11 @@ object SourceSettings {
     preserveTimestamps: Boolean,
     where: Option[String],
     consistencyLevel: String,
-    cloud: Option[CloudConfig] = None
+    cloud: Option[CloudConfig] = None,
+    // Opt-in: preserve per-element TTL/WRITETIME of non-frozen collection columns (maps, sets).
+    // Requires a source that supports reading collection-element metadata (Cassandra 5.0+ /
+    // modern ScyllaDB). Has no effect unless `preserveTimestamps` is also true.
+    preserveCollectionTimestamps: Boolean = false
   ) extends SourceSettings {
     val supportsSavepoints: Boolean = true
   }
@@ -137,8 +141,9 @@ object SourceSettings {
         connections        <- c.get[Option[Int]]("connections")
         fetchSize          <- c.get[Int]("fetchSize")
         preserveTimestamps <- c.get[Boolean]("preserveTimestamps")
-        where              <- c.get[Option[String]]("where")
-        consistencyLevel   <- c.get[String]("consistencyLevel")
+        preserveCollectionTimestamps <- c.getOrElse[Boolean]("preserveCollectionTimestamps")(false)
+        where                        <- c.get[Option[String]]("where")
+        consistencyLevel             <- c.get[String]("consistencyLevel")
         _ <- if (cloud.isDefined && localDC.isDefined)
                Left(
                  DecodingFailure(
@@ -172,23 +177,25 @@ object SourceSettings {
         preserveTimestamps,
         where,
         consistencyLevel,
-        cloud
+        cloud,
+        preserveCollectionTimestamps
       )
     }
 
     implicit val encoder: Encoder.AsObject[Cassandra] = Encoder.AsObject.instance { c =>
       val common = io.circe.JsonObject(
-        "localDC"            -> c.localDC.asJson,
-        "credentials"        -> c.credentials.asJson,
-        "sslOptions"         -> c.sslOptions.asJson,
-        "keyspace"           -> c.keyspace.asJson,
-        "table"              -> c.table.asJson,
-        "splitCount"         -> c.splitCount.asJson,
-        "connections"        -> c.connections.asJson,
-        "fetchSize"          -> c.fetchSize.asJson,
-        "preserveTimestamps" -> c.preserveTimestamps.asJson,
-        "where"              -> c.where.asJson,
-        "consistencyLevel"   -> c.consistencyLevel.asJson
+        "localDC"                      -> c.localDC.asJson,
+        "credentials"                  -> c.credentials.asJson,
+        "sslOptions"                   -> c.sslOptions.asJson,
+        "keyspace"                     -> c.keyspace.asJson,
+        "table"                        -> c.table.asJson,
+        "splitCount"                   -> c.splitCount.asJson,
+        "connections"                  -> c.connections.asJson,
+        "fetchSize"                    -> c.fetchSize.asJson,
+        "preserveTimestamps"           -> c.preserveTimestamps.asJson,
+        "preserveCollectionTimestamps" -> c.preserveCollectionTimestamps.asJson,
+        "where"                        -> c.where.asJson,
+        "consistencyLevel"             -> c.consistencyLevel.asJson
       )
       c.cloud match {
         case Some(cloud) =>
