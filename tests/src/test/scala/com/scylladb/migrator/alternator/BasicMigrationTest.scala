@@ -16,6 +16,10 @@ class BasicMigrationTest extends MigratorSuiteWithDynamoDBLocal {
     runBasicMigration(tableName, "dynamodb-to-alternator-basic-provisioned.yaml")
   }
 
+  withTable("BasicTest").test("Write to target without client-side load balancing") { tableName =>
+    runBasicMigration(tableName, "dynamodb-to-alternator-basic-no-load-balancing.yaml")
+  }
+
   private def runBasicMigration(tableName: String, configFile: String): Unit = {
     val keys = Map("id" -> AttributeValue.fromS("12345"))
     val attrs = Map("foo" -> AttributeValue.fromS("bar"))

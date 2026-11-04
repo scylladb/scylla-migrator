@@ -408,7 +408,7 @@ object DynamoUtils {
     alternatorSettings: Option[AlternatorSettings] = None
   ): DynamoDbClient = {
     val baseBuilder: DynamoDbClientBuilder =
-      alternatorSettings match {
+      alternatorSettings.filter(_.loadBalancingEnabled) match {
         case Some(settings) =>
           val altBuilder = AlternatorDynamoDbClient.builder()
           applyAlternatorSettings(altBuilder, settings)
@@ -537,6 +537,11 @@ object DynamoUtils {
     // YARN environment. We disable it to be agnostic to the type of cluster.
     jobConf.set(DynamoDBConstants.YARN_RESOURCE_MANAGER_ENABLED, "false")
 
+    // The transformer also strips consumed capacity from requests, so it is installed for every
+    // Alternator source or target. Without load balancing it keeps the default client, which sends
+    // every request to the configured endpoint; the other Alternator settings (e.g.
+    // maxItemsPerBatch) still apply.
+    val useAlternatorClient = alternatorSettings.exists(_.loadBalancingEnabled)
     if (alternatorSettings.isDefined)
       jobConf.set(
         DynamoDBConstants.CUSTOM_CLIENT_BUILDER_TRANSFORMER,
@@ -544,7 +549,7 @@ object DynamoUtils {
       )
 
     jobConf.set(RemoveConsumedCapacityConfig, removeConsumedCapacity.toString)
-    jobConf.set(UseAlternatorClientConfig, alternatorSettings.isDefined.toString)
+    jobConf.set(UseAlternatorClientConfig, useAlternatorClient.toString)
 
     jobConf.set("mapred.output.format.class", classOf[DynamoDBOutputFormat].getName)
     jobConf.set("mapred.input.format.class", classOf[DynamoDBInputFormat].getName)

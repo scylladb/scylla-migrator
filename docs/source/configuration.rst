@@ -333,6 +333,42 @@ A source of type ``alternator`` can be used together with a target of type ``dyn
     connectionAcquisitionTimeoutMs: 10000
     connectionTimeoutMs: 15000
     maxItemsPerBatch: 100
+    # Optional - Set to false to send every request to 'endpoint' with the plain AWS SDK client
+    # instead of discovering and load balancing over the nodes. Required behind a private
+    # endpoint, see below. Default: true.
+    loadBalancing: true
+
+.. _config-alternator-private-endpoint:
+
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+Alternator through a private endpoint (PrivateLink, Private Service Connect)
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+By default, the migrator uses the Alternator load-balancing client, which asks the ``endpoint``
+for the list of nodes (``/localnodes``) and then sends requests to the nodes directly. Behind a
+ScyllaDB Cloud private endpoint those node addresses are not reachable. The Alternator client in
+use has no support for private endpoints yet, so set:
+
+- ``endpoint`` to the private endpoint address and its port that reaches all nodes, with
+  ``https://`` when the private connection only accepts TLS;
+- ``loadBalancing: false``, so that every request goes to that endpoint, whose load balancer spreads
+  the requests over the nodes.
+
+The settings that only the load-balancing client applies (``datacenter``, ``rack``, the refresh
+intervals, ``compression``, ``optimizeHeaders`` and the connection pool settings) cannot be combined
+with ``loadBalancing: false``. ``maxItemsPerBatch`` and ``removeConsumedCapacity`` still apply.
+
+.. code-block:: yaml
+
+  source:
+    type: alternator
+    table: <table>
+    endpoint:
+      host: https://<private-endpoint-address>
+      port: <private-endpoint-port>
+    loadBalancing: false
+
+The same applies to an Alternator target.
 
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 DynamoDB S3 Export Source
@@ -569,6 +605,10 @@ Alternator Target
     connectionAcquisitionTimeoutMs: 10000
     connectionTimeoutMs: 15000
     maxItemsPerBatch: 100
+    # Optional - Set to false to send every request to 'endpoint' with the plain AWS SDK client.
+    # Required behind a private endpoint, see :ref:`config-alternator-private-endpoint`.
+    # Default: true.
+    loadBalancing: true
 
 -------
 Renames

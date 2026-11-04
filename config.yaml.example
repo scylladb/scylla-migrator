@@ -254,6 +254,12 @@ source:
 #   ## connectionAcquisitionTimeoutMs: 10000
 #   ## connectionTimeoutMs: 15000
 #   ## maxItemsPerBatch: 100
+#   # Set to false behind a private endpoint (AWS PrivateLink, GCP Private Service Connect): every
+#   # request then goes to 'endpoint' (the private endpoint address and its port that reaches all
+#   # nodes) with the plain AWS SDK client, because the node addresses that the load-balancing
+#   # client discovers are not reachable. The settings above, except maxItemsPerBatch, then
+#   # cannot be used.
+#   ## loadBalancing: true
 
 # Example for loading from a DynamoDB S3 export (see https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/S3DataExport.Output.html)
 # source:
@@ -462,6 +468,12 @@ target:
 #   ## connectionAcquisitionTimeoutMs: 10000
 #   ## connectionTimeoutMs: 15000
 #   ## maxItemsPerBatch: 100
+#   # Set to false behind a private endpoint (AWS PrivateLink, GCP Private Service Connect): every
+#   # request then goes to 'endpoint' (the private endpoint address and its port that reaches all
+#   # nodes) with the plain AWS SDK client, because the node addresses that the load-balancing
+#   # client discovers are not reachable. The settings above, except maxItemsPerBatch, then
+#   # cannot be used.
+#   ## loadBalancing: true
 
 # Optional savepoint configuration for resumable migrations. Savepoints are configuration
 # files (like this one), saved by the migrator as it runs. Their purpose is to skip data

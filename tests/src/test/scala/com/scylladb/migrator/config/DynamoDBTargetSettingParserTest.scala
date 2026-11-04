@@ -286,6 +286,79 @@ class DynamoDBTargetSettingParserTest extends munit.FunSuite {
     )
   }
 
+  test("alternator target with loadBalancing: false and maxItemsPerBatch parses") {
+    val config =
+      """type: alternator
+        |table: MyTable
+        |streamChanges: false
+        |endpoint:
+        |  host: https://pe-alternator.example.com
+        |  port: 8043
+        |loadBalancing: false
+        |maxItemsPerBatch: 25
+        |""".stripMargin
+
+    val result = yaml.parser
+      .parse(config)
+      .flatMap(_.as[TargetSettings])
+
+    result match {
+      case Right(target: TargetSettings.Alternator) =>
+        assertEquals(target.alternatorConfig.loadBalancing, Some(false))
+        assert(!target.alternatorConfig.loadBalancingEnabled)
+        assertEquals(target.alternatorConfig.maxItemsPerBatch, Some(25))
+      case other => fail(s"Expected an Alternator target, got $other")
+    }
+  }
+
+  test("alternator target with loadBalancing: false rejects load-balancing client settings") {
+    val config =
+      """type: alternator
+        |table: MyTable
+        |streamChanges: false
+        |endpoint:
+        |  host: http://10.0.0.1
+        |  port: 8000
+        |loadBalancing: false
+        |datacenter: dc1
+        |compression: true
+        |""".stripMargin
+
+    val result = yaml.parser
+      .parse(config)
+      .flatMap(_.as[TargetSettings])
+
+    assert(result.isLeft, s"Expected a decoding failure but got: ${result}")
+    assert(
+      result.left.exists(e =>
+        e.getMessage.contains(
+          "'datacenter', 'compression' only apply to the Alternator " +
+            "load-balancing client"
+        )
+      ),
+      s"Expected error about load-balancing settings, got: ${result.left.map(_.getMessage)}"
+    )
+  }
+
+  test("dynamodb target with loadBalancing fails") {
+    val config =
+      """type: dynamodb
+        |table: Dummy
+        |streamChanges: false
+        |loadBalancing: false
+        |""".stripMargin
+
+    val result = yaml.parser
+      .parse(config)
+      .flatMap(_.as[TargetSettings])
+
+    assert(result.isLeft, s"Expected a decoding failure but got: ${result}")
+    assert(
+      result.left.exists(_.getMessage.contains("loadBalancing")),
+      s"Expected error about loadBalancing, got: ${result.left.map(_.getMessage)}"
+    )
+  }
+
   test("dynamodb target with removeConsumedCapacity fails") {
     val config =
       """type: dynamodb
