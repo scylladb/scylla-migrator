@@ -3,10 +3,13 @@ package com.scylladb.migrator
 import com.scylladb.migrator.config.{
   Credentials,
   MigratorConfig,
+  SavepointTarget,
   Savepoints,
   SourceSettings,
   TargetSettings
 }
+
+import com.datastax.spark.connector.rdd.partitioner.dht.{ LongToken, Token }
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{ Files, Path }
@@ -118,6 +121,52 @@ class SavepointsResumeTest extends munit.FunSuite {
     }
   }
 
+  test("production file resume and seeding reject the same unsafe coordinates") {
+    withTempDir("resume-unsafe-coordinates") { dir =>
+      val config = baseConfig(dir.toString)
+      writeSavepoint(dir, millis = 1000L, seq = 1L, skip = Set("safe"))
+      val unsafe = Seq(
+        savepointFileName(SavepointsManager.MaxReasonableSeedValue, 1L),
+        savepointFileName(
+          SavepointsManager.MaxReasonableSeedValue - 1L,
+          SavepointsManager.MaxSavepointSequenceValue
+        ),
+        savepointFileName(2000L, SavepointsManager.MaxSavepointSequenceValue + 1L),
+        "savepoint_99999999999999999999999_1.yaml"
+      )
+      unsafe.foreach { name =>
+        Files.write(
+          dir.resolve(name),
+          config
+            .copy(skipParquetFiles = Some(Set("unsafe")))
+            .renderRedacted
+            .getBytes(StandardCharsets.UTF_8)
+        )
+      }
+      assertEquals(SavepointsResume.resume(config, None, None).skipParquetFiles, Some(Set("safe")))
+      assertEquals(SavepointStore.file(config).seedState(), Some(SavepointCoordinates(1000L, 1L)))
+    }
+  }
+
+  test("legacy filename seconds remain readable and seed subsequent savepoints") {
+    withTempDir("resume-legacy") { dir =>
+      val config = baseConfig(dir.toString)
+      Files.write(
+        dir.resolve("savepoint_2.yaml"),
+        config
+          .copy(skipParquetFiles = Some(Set("legacy")))
+          .renderRedacted
+          .getBytes(StandardCharsets.UTF_8)
+      )
+      writeSavepoint(dir, millis = 1000L, seq = 1L, skip = Set("older"))
+      assertEquals(
+        SavepointsResume.resume(config, None, None).skipParquetFiles,
+        Some(Set("legacy"))
+      )
+      assertEquals(SavepointStore.file(config).seedState(), Some(SavepointCoordinates(2000L, 0L)))
+    }
+  }
+
   test("resume unions the savepoint skip-state with any skip-state already in the config") {
     withTempDir("resume-union") { dir =>
       writeSavepoint(dir, millis = 2000L, seq = 1L, skip = Set("from-savepoint.parquet"))
@@ -172,6 +221,31 @@ class SavepointsResumeTest extends munit.FunSuite {
       val merged = SavepointsResume.resume(baseConfig(missing.toString), None, None)
       assertEquals(merged.skipParquetFiles, None)
     }
+  }
+
+  test("table lookup failure returns the unchanged launch configuration") {
+    val base = baseConfig("unused")
+    val config = base.copy(savepoints =
+      base.savepoints.copy(
+        target = Some(SavepointTarget.TargetTable())
+      )
+    )
+    // No SparkContext: connector construction fails before touching a database.
+    assertEquals(SavepointsResume.resume(config, None, None), config)
+    val disabled = config.copy(savepoints = config.savepoints.copy(autoResume = false))
+    assertEquals(SavepointsResume.resume(disabled, None, None), disabled)
+  }
+
+  test("resume unions token ranges and scan segments while retaining launch settings") {
+    val base = baseConfig("unused")
+    val first = Set[(Token[_], Token[_])]((LongToken(0), LongToken(10)))
+    val second = Set[(Token[_], Token[_])]((LongToken(10), LongToken(20)))
+    val live = base.copy(skipTokenRanges = Some(first), skipSegments = Some(Set(1)))
+    val saved = base.copy(skipTokenRanges = Some(second), skipSegments = Some(Set(2)))
+    assertEquals(
+      SavepointsResume.mergeSkipState(live, saved),
+      live.copy(skipTokenRanges = Some(first ++ second), skipSegments = Some(Set(1, 2)))
+    )
   }
 
   private class WritingManager(cfg: MigratorConfig, processed: Set[String])

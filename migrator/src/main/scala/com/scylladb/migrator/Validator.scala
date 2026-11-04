@@ -39,13 +39,13 @@ object Validator {
 
   def main(args: Array[String]): Unit = {
     val sparkConf = new SparkConf()
+    config.SparkTaskRetries.applyDefault(sparkConf)
     SparkSecretRedaction.ensureMigratorRedactionRegex(sparkConf)
 
     implicit val spark = SparkSession
       .builder()
       .config(sparkConf)
       .appName("scylla-validator")
-      .config("spark.task.maxFailures", "1024")
       .config("spark.stage.maxConsecutiveAttempts", "60")
       .getOrCreate()
 

@@ -9,6 +9,7 @@ import com.scylladb.migrator.config.{
   SSLOptions,
   Savepoints,
   SourceSettings,
+  StreamChangesSetting,
   TargetSettings
 }
 
@@ -264,7 +265,7 @@ class ValidatorLoggingTest extends munit.FunSuite {
           table                       = "dst",
           writeThroughput             = Some(100),
           throughputWritePercent      = Some(0.5f),
-          streamChanges               = false,
+          streamChanges               = StreamChangesSetting.Disabled,
           skipInitialSnapshotTransfer = None
         ),
         renames          = None,
@@ -301,7 +302,7 @@ class ValidatorLoggingTest extends munit.FunSuite {
           table                       = "dst",
           writeThroughput             = Some(100),
           throughputWritePercent      = Some(0.5f),
-          streamChanges               = false,
+          streamChanges               = StreamChangesSetting.Disabled,
           skipInitialSnapshotTransfer = None,
           removeConsumedCapacity      = true,
           billingMode                 = None,

@@ -33,7 +33,7 @@ This page describes how to set up a Spark cluster locally on your machine by usi
 
    http://localhost:8080
 
-5. Rename the file ``config.yaml.example`` to ``config.yaml``, and `configure <./#configure-the-migration>`_ it according to your needs.
+5. Rename the file ``config.yaml.example`` to ``config.yaml``, and :ref:`configure <configure-the-migration>` it according to your needs.
 
 6. Finally, run the migration.
 

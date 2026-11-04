@@ -143,18 +143,34 @@ class StreamedItemsTest extends MigratorSuiteWithAWS {
       fail(s"Assertion was not true after ${delay}", failure)
   }
 
-  /** Delete the DynamoDB table automatically created by the Kinesis library
+  /** Delete the DynamoDB table automatically created by the Kinesis library.
+    *
+    * Two naming schemes are in play because this release made the KCL application name
+    * deterministic:
+    *
+    *   - Legacy: `migrator_<sourceTable>_<currentTimeMillis>` (pre-deterministic)
+    *   - Current: `migrator_<sourceTable>` (deterministic, what
+    *     [[com.scylladb.migrator.writers.DynamoStreamReplication.defaultCheckpointAppName]]
+    *     produces today)
+    *
+    * We match both so the test cleans up after itself regardless of which path produced the lease
+    * table — otherwise, switching to the new naming would leave orphaned lease tables between runs
+    * and cross-contaminate state on re-execution.
+    *
     * @param sourceTableName
     *   Source table that had streams enabled
     */
-  private def deleteStreamTable(sourceTableName: String): Unit =
+  private def deleteStreamTable(sourceTableName: String): Unit = {
+    val exact = s"migrator_${sourceTableName}"
+    val prefix = s"${exact}_"
     sourceDDb()
       .listTablesPaginator()
       .tableNames()
       .stream()
-      .filter(name => name.startsWith(s"migrator_${sourceTableName}_"))
+      .filter(name => name == exact || name.startsWith(prefix))
       .forEach { streamTableName =>
         deleteTableIfExists(sourceDDb(), streamTableName)
       }
+  }
 
 }

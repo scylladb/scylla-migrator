@@ -36,7 +36,9 @@ object TargetSettings {
     private val SentinelPort: Int = 0
 
     implicit val decoder: Decoder[Scylla] = Decoder.instance { c =>
-      val hasHost = c.get[Option[String]]("host").exists(_.isDefined)
+      val hasHost =
+        c.get[Option[String]]("host")(Decoder.decodeOption(ContactPoints.decoder))
+          .exists(_.isDefined)
       val hasPort = c.get[Option[Int]]("port").exists(_.isDefined)
       for {
         cloud <- c.get[Option[CloudConfig]]("cloud")
@@ -67,14 +69,14 @@ object TargetSettings {
                  )
                case (true, false, false) => Right(())
              }
-        host                          <- c.getOrElse[String]("host")(SentinelHost)
-        port                          <- c.getOrElse[Int]("port")(SentinelPort)
-        localDC                       <- c.get[Option[String]]("localDC")
-        credentials                   <- c.get[Option[Credentials]]("credentials")
-        sslOptions                    <- c.get[Option[SSLOptions]]("sslOptions")
-        keyspace                      <- c.get[String]("keyspace")
-        table                         <- c.get[String]("table")
-        connections                   <- c.get[Option[Int]]("connections")
+        host        <- c.getOrElse[String]("host")(SentinelHost)(ContactPoints.decoder)
+        port        <- c.getOrElse[Int]("port")(SentinelPort)
+        localDC     <- c.get[Option[String]]("localDC")
+        credentials <- c.get[Option[Credentials]]("credentials")
+        sslOptions  <- c.get[Option[SSLOptions]]("sslOptions")
+        keyspace    <- c.get[String]("keyspace")
+        table       <- c.get[String]("table")
+        connections <- c.get[Option[Int]]("connections")
         stripTrailingZerosForDecimals <- c.get[Boolean]("stripTrailingZerosForDecimals")
         writeTTLInS                   <- c.get[Option[Int]]("writeTTLInS")
         writeWritetimestampInuS       <- c.get[Option[Long]]("writeWritetimestampInuS")
@@ -157,7 +159,7 @@ object TargetSettings {
     def table: String
     def writeThroughput: Option[Int]
     def throughputWritePercent: Option[Float]
-    def streamChanges: Boolean
+    def streamChanges: StreamChangesSetting
     def skipInitialSnapshotTransfer: Option[Boolean]
 
     /** Whether to strip `ConsumedCapacity` from DynamoDB responses.
@@ -181,7 +183,7 @@ object TargetSettings {
     table: String,
     writeThroughput: Option[Int],
     throughputWritePercent: Option[Float],
-    streamChanges: Boolean,
+    streamChanges: StreamChangesSetting,
     skipInitialSnapshotTransfer: Option[Boolean],
     billingMode: Option[BillingMode] = None
   ) extends DynamoDBLike {
@@ -196,7 +198,7 @@ object TargetSettings {
     table: String,
     writeThroughput: Option[Int],
     throughputWritePercent: Option[Float],
-    streamChanges: Boolean,
+    streamChanges: StreamChangesSetting,
     skipInitialSnapshotTransfer: Option[Boolean],
     removeConsumedCapacity: Boolean = true,
     billingMode: Option[BillingMode] = None,
@@ -234,7 +236,7 @@ object TargetSettings {
   }
 
   private def validateScyllaTarget(t: Scylla): List[String] =
-    ContactPoints.parse("Scylla target", t.host, t.port).swap.getOrElse(Nil) ++
+    ContactPoints.validate("Scylla target", t.host) ++
       HostValidation.validatePort("Scylla target", t.port)
 
   implicit val decoder: Decoder[TargetSettings] =
@@ -287,7 +289,7 @@ object TargetSettings {
             table                  <- cursor.get[String]("table")
             writeThroughput        <- cursor.get[Option[Int]]("writeThroughput")
             throughputWritePercent <- cursor.get[Option[Float]]("throughputWritePercent")
-            streamChanges          <- cursor.get[Boolean]("streamChanges")
+            streamChanges          <- cursor.get[StreamChangesSetting]("streamChanges")
             skipInitialSnapshotTransfer <-
               cursor.get[Option[Boolean]]("skipInitialSnapshotTransfer")
             // Default to true for Alternator (Scylla doesn't support ConsumedCapacity).

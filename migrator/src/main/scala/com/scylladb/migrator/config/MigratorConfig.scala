@@ -7,7 +7,6 @@ import io.circe.generic.extras.Configuration
 import io.circe.generic.extras.semiauto.deriveConfiguredDecoder
 import io.circe.syntax._
 import io.circe.yaml.parser
-import io.circe.yaml.syntax._
 import io.circe.{ Decoder, DecodingFailure, Encoder, Error, Json, JsonObject }
 import org.apache.hadoop.conf.{ Configuration => HadoopConfiguration }
 
@@ -21,8 +20,9 @@ case class MigratorConfig(
   skipParquetFiles: Option[Set[String]],
   validation: Option[Validation]
 ) {
-  def render: String = this.asJson.asYaml.spaces2
-  def renderRedacted: String = MigratorConfig.redactSecrets(this.asJson).asYaml.spaces2
+  def render: String = MigratorConfig.yamlPrinter.pretty(this.asJson)
+  def renderRedacted: String =
+    MigratorConfig.yamlPrinter.pretty(MigratorConfig.redactSecrets(this.asJson))
   override def toString: String = renderRedacted
 
   def getRenamesOrNil: List[Rename] = renames.getOrElse(Nil)
@@ -37,7 +37,9 @@ case class MigratorConfig(
 
 }
 object MigratorConfig {
-  private val RedactedValue = "<redacted>"
+  // Aerospike's declared bin order determines its DataFrame column order on reload.
+  private val yamlPrinter = io.circe.yaml.Printer.spaces2.copy(preserveOrder = true)
+  private[migrator] val RedactedValue = "<redacted>"
   implicit val config: Configuration = Configuration.default.withDefaults
 
   implicit val tokenEncoder: Encoder[Token[_]] = Encoder.instance {
@@ -65,7 +67,17 @@ object MigratorConfig {
         // this decoder.
         val savepointsRequired = decoded.source.supportsSavepoints
 
-        if (!savepointsProvided && savepointsRequired)
+        val savepointErrors =
+          if (savepointsRequired) Savepoints.validate(decoded.savepoints) else Nil
+
+        if (savepointErrors.nonEmpty)
+          Left(
+            DecodingFailure(
+              s"Invalid savepoints configuration: ${savepointErrors.mkString(" ")}",
+              cursor.history
+            )
+          )
+        else if (!savepointsProvided && savepointsRequired)
           Left(
             DecodingFailure(
               "Missing required field: savepoints. This field is optional only for sources " +
@@ -73,14 +85,24 @@ object MigratorConfig {
               cursor.history
             )
           )
+        else if (
+          decoded.savepoints.resolvedTarget.isInstanceOf[SavepointTarget.TargetTable] &&
+          !decoded.target.isInstanceOf[TargetSettings.Scylla]
+        )
+          Left(
+            DecodingFailure(
+              "savepoints.target.type: target-table is supported only when target.type is 'scylla'.",
+              cursor.history
+            )
+          )
         else {
           (decoded.source, decoded.target) match {
             case (_: SourceSettings.Alternator, t: TargetSettings.DynamoDBLike)
-                if t.streamChanges =>
+                if t.streamChanges.isEnabled =>
               Left(
                 DecodingFailure(
-                  "'streamChanges: true' is not supported when the source is an Alternator table. " +
-                    "Scylla Alternator does not support DynamoDB Streams.",
+                  "'streamChanges' streaming replication is not supported when the source is an Alternator table. " +
+                    "Scylla Alternator does not support DynamoDB Streams or AWS-side Kinesis publishing from the source.",
                   cursor.history
                 )
               )
@@ -92,14 +114,29 @@ object MigratorConfig {
                   cursor.history
                 )
               )
-            case (_: SourceSettings.DynamoDBS3Export, t: TargetSettings.DynamoDBLike)
-                if t.streamChanges =>
-              Left(
-                DecodingFailure(
-                  "'streamChanges: true' is not supported when the source is a DynamoDB S3 export.",
-                  cursor.history
-                )
-              )
+            case (s: SourceSettings.DynamoDBS3Export, t: TargetSettings.DynamoDBLike) =>
+              t.streamChanges match {
+                case StreamChangesSetting.DynamoDBStreams =>
+                  Left(
+                    DecodingFailure(
+                      "'streamChanges' with DynamoDB Streams is not supported when the source is a DynamoDB S3 export. " +
+                        "Use Kinesis Data Streams (`type: kinesis` and `streamArn`) together with `source.streamSource` " +
+                        "for the live DynamoDB table instead. See docs/source/stream-changes.rst.",
+                      cursor.history
+                    )
+                  )
+                case _: StreamChangesSetting.KinesisDataStreams if s.streamSource.isEmpty =>
+                  Left(
+                    DecodingFailure(
+                      "When the source is dynamodb-s3-export and target streamChanges uses Kinesis, " +
+                        "`source.streamSource` must be set to the live DynamoDB table whose changes should be replayed. " +
+                        "See docs/source/stream-changes.rst.",
+                      cursor.history
+                    )
+                  )
+                case _ =>
+                  Right(decoded)
+              }
             case _ => Right(decoded)
           }
         }
@@ -135,7 +172,7 @@ object MigratorConfig {
     value.isString && (SensitiveKeys
       .isSensitiveKey(key) || key == "where")
 
-  private[config] def redactSecrets(json: Json): Json =
+  private[migrator] def redactSecrets(json: Json): Json =
     json.arrayOrObject(
       json,
       arr => Json.fromValues(arr.map(redactSecrets)),
@@ -164,10 +201,13 @@ object MigratorConfig {
   ): MigratorConfig = {
     val configData = PathIO.forPath(path, hadoopConfiguration).readUtf8(path)
 
+    loadFromString(configData)
+  }
+
+  def loadFromString(configData: String): MigratorConfig =
     parser
       .parse(configData)
       .leftWiden[Error]
       .flatMap(_.as[MigratorConfig])
       .valueOr(throw _)
-  }
 }

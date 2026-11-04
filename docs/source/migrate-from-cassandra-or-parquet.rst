@@ -25,7 +25,11 @@ In both cases, when reading from Apache Cassandra or ScyllaDB, the type of sourc
 
   source:
     type: cassandra
-    # Host name of one of the nodes of your database cluster
+    # Host name of one or more nodes of your database cluster. Use a YAML list
+    # (e.g. [node-1, node-2, node-3]) or a comma-separated string to give several
+    # contact points (DNS names or IPs), so the migrator can still connect if one
+    # of them is down. A DNS name counts as a single contact point even if it
+    # resolves to several addresses, so list distinct per-node names.
     host: <cassandra-server-01>
     # TCP port to use for CQL
     port: 9042
@@ -137,7 +141,11 @@ The migration ``target`` can be Apache Cassandra or ScyllaDB. In both cases, we 
   target:
     # can be 'cassandra' or 'scylla', it does not matter
     type: cassandra
-    # Host name of one of the nodes of your target database cluster
+    # Host name of one or more nodes of your target database cluster. Use a YAML list
+    # (e.g. [node-1, node-2, node-3]) or a comma-separated string to give several
+    # contact points (DNS names or IPs), so the migrator can still connect if one
+    # of them is down. A DNS name counts as a single contact point even if it
+    # resolves to several addresses, so list distinct per-node names.
     host: <scylla-server-01>
     # TCP port for CQL
     port: 9042
@@ -200,8 +208,8 @@ Additionally, you can also set the following optional properties:
     # (you can uncomment just one of them, or all or none)
     # TTL in seconds (sample 7776000 is 90 days)
     writeTTLInS: 7776000
-    # writetime in microseconds (sample 1640998861000 is Saturday, January 1, 2022 2:01:01 AM GMT+01:00 )
-    writeWritetimestampInuS: 1640998861000
+    # writetime in microseconds since the Unix epoch (16 digits; sample 1640998861000000 is Saturday, January 1, 2022 1:01:01 AM UTC)
+    writeWritetimestampInuS: 1640998861000000
 
 Where ``<datacenter>``, ``<username>``, ``<pass>``, and ``<path>`` should be replaced with your specific values.
 

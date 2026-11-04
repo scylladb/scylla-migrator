@@ -86,7 +86,7 @@ object Connectors {
 
   private[migrator] def sparkSessionOptions(options: SessionOptions): Map[String, String] = {
     val base = Map(
-      ConnectionHost  -> options.host,
+      ConnectionHost  -> ContactPoints.split(options.host).mkString(","),
       ConnectionPort  -> options.port.toString,
       QueryRetryCount -> options.queryRetryCount.toString
     )
@@ -287,12 +287,15 @@ object Connectors {
     auth: com.datastax.spark.connector.cql.AuthConf,
     sslOptions: Option[SSLOptions]
   ): ContactInfo = {
-    val contactPoints = ContactPoints
-      .parse("Contact point", host, port)
-      .fold(errors => throw new IllegalArgumentException(errors.mkString(" ")), identity)
+    val contactPoints = ContactPoints.split(host).map { h =>
+      val resolvedHost =
+        if (h.startsWith("[") && h.endsWith("]")) h.slice(1, h.length - 1)
+        else h
+      new InetSocketAddress(resolvedHost, port)
+    }
     IpBasedContactInfo(
-      hosts    = contactPoints.map(point => new InetSocketAddress(point.host, point.port)).toSet,
-      authConf = auth,
+      hosts            = contactPoints.toSet,
+      authConf         = auth,
       cassandraSSLConf = cassandraSSLConf(sslOptions)
     )
   }

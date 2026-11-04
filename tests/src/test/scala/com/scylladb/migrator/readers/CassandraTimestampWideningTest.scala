@@ -104,6 +104,13 @@ class CassandraTimestampWideningTest extends munit.FunSuite {
     assertEquals(Cassandra.widenTimestampValue(i), 43L)
   }
 
+  test("widenTimestampValue leaves CQL date values (java.sql.Date) unchanged") {
+    val date = java.sql.Date.valueOf("2024-02-29")
+    assertEquals(Cassandra.widenTimestampValue(date), date)
+    assertEquals(Cassandra.widenTimestampValue(Row(1, date)), Row(1, date))
+    assertEquals(Cassandra.widenTimestampValue(List(date)), List(date))
+  }
+
   test("widenTimestampValue recurses into Row, Set, List, Map") {
     val ts1 = new java.sql.Timestamp(10L)
     val ts2 = new java.sql.Timestamp(20L)

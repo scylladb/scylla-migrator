@@ -1,7 +1,11 @@
 # Example configuration for migrating from Cassandra:
 source:
   type: cassandra
-  host: cassandra-server-01
+  # Contact points: one host, or several (YAML list or comma-separated string) so the
+  # migration still starts if one of them is down or restarting. DNS names or IPs; ideally
+  # one per rack. The driver discovers the rest of the cluster. A DNS name counts as a
+  # single contact point even if it resolves to several addresses.
+  host: [cassandra-server-01, cassandra-server-02, cassandra-server-03]
   port: 9042
   #optional, if not specified None will be used
   #localDC: <localdc>
@@ -30,9 +34,59 @@ source:
   # Connector driver default is LOCAL_ONE. Our recommendation is LOCAL_QUORUM.
   # If using ONE or LOCAL_ONE, ensure the source system is fully repaired.
   consistencyLevel: LOCAL_QUORUM
-  # Preserve TTLs and WRITETIMEs of cells in the source database. Note that this
-  # option is *incompatible* when copying tables with collections (lists, maps, sets).
+  # Preserve TTLs and WRITETIMEs of cells in the source database. Frozen collections
+  # (frozen<list/map/set>) are stored as a single cell and ARE supported. By default this
+  # option is *incompatible* with non-frozen (multi-cell) collections (lists, maps, sets),
+  # whose elements each carry their own TTL/WRITETIME (see preserveCollectionTimestamps).
   preserveTimestamps: true
+  # Opt-in: also preserve the per-element TTL/WRITETIME of non-frozen (multi-cell) collection
+  # columns. When enabled, each element's original TTL/WRITETIME is re-applied via collection
+  # appends after the base row write. Requires a source that can read collection-element metadata:
+  # Cassandra 5.0+ (via WRITETIME(col)/TTL(col)) or ScyllaDB 2026.2+ (via the per-element subscript
+  # form WRITETIME(col[key])/TTL(col[key]), auto-detected). Supported for non-frozen sets and maps whose element/key
+  # type has a well-defined order (text/ascii/varchar and integer types); non-frozen lists and
+  # other key/element types remain unsupported (freeze them, or leave this disabled). Static
+  # non-frozen collections are also unsupported: such tables are rejected before the migration
+  # starts. On a ScyllaDB 2026.2+ source, tables whose primary key includes a frozen tuple, UDT or
+  # collection are rejected too (the Cassandra 5.0+ path has no such limit).
+  # Elements are restored by update: the group with the oldest WRITETIME is written with
+  # col = ? (whose collection tombstone, one microsecond older, removes target elements older than
+  # every source element, e.g. stale or target-only entries from an earlier run), the rest with
+  # col = col + ?. Target elements NEWER than every source element are kept (last write wins), and
+  # a null/empty source collection leaves the target collection untouched. Very large non-frozen
+  # collections are expanded into up to one update per distinct element TTL/WRITETIME, which can be
+  # memory- and throughput-intensive. So that every write pass reads the same snapshot, the source
+  # is read, cached (executor memory, spilling to spark.local.dir) and written in batches of source
+  # splits (a Parquet restore: batches of files of about that size), each batch's cache released and
+  # its progress saved before the next. A batch is spark.default.parallelism splits by default; set
+  # -Dscylla.migrator.collectionBatchPartitions=<n> on the driver to change it (non-positive: one
+  # batch). Executor local disk must hold about one batch plus its per-element metadata, so raise
+  # splitCount for large tables. An interrupted run resumes from the last completed batch. Has no
+  # effect unless preserveTimestamps is also true.
+  #
+  # Source-quiescence is REQUIRED. On the ScyllaDB 2026.2+ subscript path the collection elements are
+  # listed by a base scan and their metadata read by per-row point reads (map values are re-read in
+  # the same point read, so a value always carries its own cell's metadata). A concurrent write in
+  # between can still delete an element (dropped + logged) or add one (never queried, silently
+  # absent, not counted in the dropped-element warning). The Cassandra 5.0+ array path reads values
+  # and metadata in one scan and is unaffected. Stop source writes before migrating.
+  #
+  # TTLs are read as remaining seconds and re-applied on write, so the clock advances between read and
+  # write/compare on long runs; use validation's ttlToleranceMillis to absorb this drift. A short-lived
+  # element can expire on the source between read and append and still be written to the target, where
+  # it briefly reappears; prefer collection TTLs comfortably longer than the job duration.
+  # CQL exposes no TTL for a row marker, so a row inserted USING TTL whose non-key columns are all
+  # null or empty (e.g. an empty collection) is written to the target without a TTL.
+  #
+  # Validation compares per-element collection TTL/WRITETIME when both endpoints can read them:
+  # Cassandra 5.0+ in the scan, ScyllaDB 2026.2+ with per-element point lookups after the scan
+  # (ceil(n / 100) synchronous queries per collection per row on each ScyllaDB side: slower, and
+  # values and metadata are read at slightly different times, so stop writes first). Otherwise (an
+  # older server, or a ScyllaDB endpoint whose primary key includes a frozen tuple, UDT or
+  # collection) it compares non-frozen collection columns by VALUE only. copyMissingRows restores
+  # element TTL/WRITETIME of missing rows when the SOURCE can read them, and is rejected otherwise.
+  # Defaults to false.
+  preserveCollectionTimestamps: false
   # Number of splits to use - this should be at minimum the amount of cores
   # available in the Spark cluster, and optimally more; higher splits will lead
   # to more fine-grained resumes. Aim for 8 * (Spark cores).
@@ -66,8 +120,8 @@ source:
 
   # Optional - Connect to ScyllaDB Cloud through a private endpoint (AWS PrivateLink,
   # GCP Private Service Connect). 'host'/'port' must then be the private endpoint address and
-  # port you were given (the port is not necessarily 9042); list several addresses in 'host',
-  # comma-separated, optionally as 'address:port', and all of them are tried for the initial
+  # port you were given (the port is not necessarily 9042); list several addresses in 'host'
+  # (YAML list or comma-separated, all using 'port'), and all of them are tried for the initial
   # connection. 'cloud' must not be set. 'localDC' can be omitted
   # when the listed connection IDs only route one datacenter; set it otherwise.
   # List every connection ID the migrator may use (a datacenter can have one per availability
@@ -312,7 +366,9 @@ source:
 # Configuration for the database you're copying into
 target:
   type: scylla
-  host: scylla 
+  # One host or several (see source.host) - listing several keeps a rolling restart of the
+  # target cluster from stopping the migration
+  host: [scylla-server-01, scylla-server-02, scylla-server-03]
   port: 9042
   #optional, if not specified None will be used
   #localDC: <localdc>
@@ -358,8 +414,8 @@ target:
   # (you can uncomment just one of them, or all or none)
   # TTL in seconds (sample 7776000 is 90 days)
   #writeTTLInS: 7776000
-  # writetime in microseconds (sample 1640998861000 is Saturday, January 1, 2022 2:01:01 AM GMT+01:00 )
-  #writeWritetimestampInuS: 1640998861000
+  # writetime in microseconds since the Unix epoch (16 digits; sample 1640998861000000 is Saturday, January 1, 2022 1:01:01 AM UTC)
+  #writeWritetimestampInuS: 1640998861000000
 
   # Optional - Connect via a DataStax Astra Cloud Secure Connect bundle.
   # Same path rules as the source cloud block above. See source section for details.
@@ -534,8 +590,41 @@ savepoints:
   #   # credentials:
   #   #   accessKey: ...
   #   #   secretKey: ...
-  # Interval in which savepoints will be created
+
+  # Interval in which savepoints will be created. Required for file/cloud destinations.
+  # For target-table (alias: target-database), defaults to 300 seconds when omitted.
   intervalSeconds: 300
+
+  # Optional, enabled by default. Merge saved progress into this launch configuration.
+  # Set false to start without saved progress. Credentials always come from this configuration.
+  autoResume: true
+
+  # Optional target-table savepoints for CQL targets (type: scylla or cassandra):
+  # Remove the active path above before enabling this target block.
+  # The metadata table is created automatically. The keyspace must already exist.
+  # The config_yaml column stores redacted savepoint YAML. Resume restores progress only.
+  # Its unsalted source WHERE digest allows confirming guessed low-entropy filters.
+  # Protect access to the metadata table and saved payloads.
+  # Metadata reads/writes always use LOCAL_QUORUM, independent of bulk consistency.
+  # Run one migration per savepoint job: stop the previous run before restarting.
+  # Use separate job IDs for separate migrations. Accidental overlap can overwrite progress.
+  # History is append-only with full payloads: monitor table/partition and payload sizes.
+  # Small read pages preserve older fallback but do not bound history or payload size.
+  # Large payloads can fail writes. No automatic retention or bounded payload representation.
+  # target:
+  #   type: target-table # Alias: target-database
+  #   # Default: target.keyspace, preserving its exact case.
+  #   keyspace: null
+  #   # Names allow only ASCII letters, digits and underscores, even inside quotes.
+  #   # Explicit keyspace/table names use CQL case rules: MyKs becomes myks;
+  #   # use the YAML value '"MyKs"' to preserve case.
+  #   # Default metadata table name
+  #   table: scylla_migrator_savepoints
+  #   # Optional stable job id override. Matching configuration identity is still required.
+  #   # If omitted, the migrator derives one from the
+  #   # redacted configuration identity, including renames but excluding progress,
+  #   # savepoints, and validation.
+  #   jobId: null
 
   # Optional - enables file-level savepoint tracking for parquet migrations.
   # When enabled (default), the migrator tracks which parquet files have been fully migrated

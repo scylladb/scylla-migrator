@@ -232,8 +232,8 @@ Same block on `source` (type `cassandra`/`scylla`) and `target` (type `scylla`):
 ```yaml
 target:
   type: scylla
-  host: <endpoint-addr-1>,<endpoint-addr-2>:<port-2>   # initial contact points only
-  port: <private-endpoint-port>      # user-provided; default for addresses without a port
+  host: [<endpoint-addr-1>, <endpoint-addr-2>]   # initial contact points only
+  port: <private-endpoint-port>      # user-provided; used by every address in host
   localDC: <datacenter>              # required with clientRoutes
   credentials: { username: <u>, password: <p> }
   clientRoutes:
@@ -351,30 +351,30 @@ Result with that setup: the full `make test-integration-scylla` scope (CI's serv
   preserve the client source port, such as the Docker port forwarding in the integration tests.
 - The preflight checks coverage when the job starts. Route changes during a run rely on the driver's
   `CLIENT_ROUTES_CHANGE` handling (not yet verified).
-- Contact points (resolved in this branch): the Spark driver and every executor JVM bootstrap their
-  own session through the contact points, so a single private endpoint address made session
-  creation depend on one endpoint, and the node behind it, being up. `host` now accepts several
-  addresses, comma-separated, each optionally `address:port` with `port` as the default
-  (`config/ContactPoints.scala`), the same syntax as the connector's
-  `spark.cassandra.connection.host`. All of them become contact points (`IpBasedContactInfo.hosts`),
-  so users who have several private endpoint addresses (e.g. one per availability zone) list them
-  all. The integration test checks that a session opens when the first listed address does not
-  answer.
+- Contact points (resolved): the Spark driver and every executor JVM bootstrap their own session
+  through the contact points, so a single private endpoint address made session creation depend
+  on one endpoint, and the node behind it, being up. `host` accepts several addresses, as a YAML
+  list or comma-separated, all using `port` (`config/ContactPoints.scala`, from upstream
+  scylladb/scylla-migrator#418). This branch first had its own variant with per-entry ports and
+  adopted the upstream one when merging `master`. All of them become contact points
+  (`IpBasedContactInfo.hosts`), so users who have several private endpoint addresses (e.g. one per
+  availability zone) list them all. The integration test checks that a session opens when the
+  first listed address does not answer.
 - Alternator (DynamoDB API) is not covered by client routes. The Alternator Java client
   (`com.scylladb.alternator:load-balancing`, from `scylladb/alternator-client-java`; the migrator
-  uses 2.0.3) has no client routes or PrivateLink support in any release up to 2.0.6 (GitHub) /
+  uses 2.0.5 since upstream scylladb/scylla-migrator#403) has no client routes or PrivateLink support in any release up to 2.0.6 (GitHub) /
   2.0.7 (Maven Central). It is planned in the open issue scylladb/alternator-client-java#114
   "PrivateLink support" (Jira DRIVER-360, epic DRIVER-54), which has no branch or PR yet (§9,
   question 6). Meanwhile:
   - With `alternatorSettings`, the client discovers nodes through `/localnodes`, which returns node
-    addresses that are unreachable behind a private endpoint. On 2.0.3 requests are sent to those
-    addresses and fail. Releases 2.0.4 to 2.0.6 make the client fall back instead: scope fallback
-    when nodes are unreachable (#84, 2.0.4); node health routing, which admits discovered nodes only
-    after a direct `/localnodes` check and keeps failing nodes out of traffic (#136, 2.0.6); and a
-    return to the configured contact endpoint, trying each of its DNS addresses (#157, 2.0.6). With
-    ≥ 2.0.6, traffic should therefore end up on the configured private endpoint address. Not
-    verified.
-  - What works with the current client (2.0.3), implemented in this branch: the Alternator settings
+    addresses that are unreachable behind a private endpoint. Up to 2.0.5 requests are sent to
+    those addresses and fail (2.0.4's scope fallback, #84, only falls back to wider scopes of the
+    same discovered nodes). Release 2.0.6 makes the client fall back to the configured endpoint:
+    node health routing admits discovered nodes only after a direct `/localnodes` check and keeps
+    failing nodes out of traffic (#136), and the client returns to the configured contact endpoint,
+    trying each of its DNS addresses (#157). With ≥ 2.0.6, traffic should therefore end up on the
+    configured private endpoint address. Not verified.
+  - What works with the current client (2.0.5), implemented in this branch: the Alternator settings
     accept `loadBalancing: false` (default `true`) on `type: alternator` sources and targets. The
     migrator then uses the plain AWS SDK client on the Spark driver (`DynamoUtils.buildDynamoClient`)
     and on the executors: `DynamoUtils.setDynamoDBJobConf` still installs
@@ -384,7 +384,7 @@ Result with that setup: the full `make test-integration-scylla` scope (CI's serv
     requests. Alternator semantics are kept: `removeConsumedCapacity`, `maxItemsPerBatch`. The
     settings that only the load-balancing client applies (`datacenter`, `rack`, refresh intervals,
     `compression`, `optimizeHeaders`, connection pool settings) are rejected together with
-    `loadBalancing: false`. Version 2.0.3 offers nothing else for private endpoints: it cannot turn
+    `loadBalancing: false`. Version 2.0.5 offers nothing else for private endpoints: it cannot turn
     discovery off.
   - Tests: unit tests for the job configuration, the client choice and the config rules, and a
     DynamoDB-to-Alternator migration with `loadBalancing: false` (`BasicMigrationTest`). No real
@@ -723,10 +723,8 @@ against a local snapshot of the Phase B branch, published with `publishLocal` an
    - Interim behaviour and what the migrator can do now are in §5.4.
 
    Migrator follow-ups:
-   1. Raise `com.scylladb.alternator:load-balancing` from 2.0.3 to ≥ 2.0.6, to get the fallbacks of
-      #84, #136 and #157. Separate change: it affects every Alternator migration. The 2.0.5 rename
-      of the response compression builder API does not touch the migrator, which only sets request
-      compression.
+   1. Raise `com.scylladb.alternator:load-balancing` from 2.0.5 (master since #403) to ≥ 2.0.6, to
+      get the fallbacks of #136 and #157. Separate change: it affects every Alternator migration.
    2. Done in this branch: `loadBalancing: false`, and documentation that for Alternator behind a
       private endpoint, `endpoint` is the private endpoint address and its port that reaches all
       nodes (§5.4).

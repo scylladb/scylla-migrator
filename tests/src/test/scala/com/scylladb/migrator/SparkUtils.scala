@@ -3,9 +3,10 @@ package com.scylladb.migrator
 import com.scylladb.migrator.config.{
   DynamoDBEndpoint,
   MigratorConfig,
+  SavepointTarget,
   Savepoints,
-  SavepointsTarget,
   SourceSettings,
+  SparkSecretRedaction,
   TargetSettings
 }
 import com.scylladb.migrator.validation.RowComparisonFailure
@@ -95,6 +96,23 @@ object SparkUtils {
     Migrator.migrate(config)(spark)
   }
 
+  /** Exercise the same launch resolution as main without changing direct migration tests. */
+  def successfullyPerformMigrationWithAutoResume(
+    migratorConfigFile: String,
+    autoResume: Boolean = true
+  ): MigratorConfig = {
+    val loaded = loadAndRemapConfig(migratorConfigFile)
+    val config = loaded.copy(savepoints = loaded.savepoints.copy(autoResume = autoResume))
+    val resumed = SavepointsResume.resume(
+      config,
+      Some(spark.sparkContext.hadoopConfiguration),
+      SparkSecretRedaction.redactionRegex(spark),
+      Some(spark.sparkContext)
+    )
+    Migrator.migrate(resumed)(spark)
+    resumed
+  }
+
   /** Run validation and return the exit code.
     *
     * @return
@@ -158,7 +176,8 @@ object SparkUtils {
     "cassandra3"    -> 9045,
     "cassandra5"    -> 9047,
     "scylla"        -> 9042,
-    "scylla-source" -> 9044
+    "scylla-source" -> 9044,
+    "scylla2026"    -> 9048
   )
 
   /** Map from Docker Compose MySQL hostnames to the exposed localhost port. */
@@ -173,7 +192,7 @@ object SparkUtils {
     ("http://s3", 4566)       -> ("http://localhost", 4566)
   )
 
-  private def remapForLocalExecution(config: MigratorConfig): MigratorConfig = {
+  private[migrator] def remapForLocalExecution(config: MigratorConfig): MigratorConfig = {
     val newSource = config.source match {
       case c: SourceSettings.Cassandra if c.cloud.isEmpty =>
         c.copy(host = "localhost", port = cqlHostPortMap.getOrElse(c.host, c.port))
@@ -194,6 +213,11 @@ object SparkUtils {
           host = "localhost",
           port = mysqlHostPortMap.getOrElse(m.host, m.port)
         )
+      case a: SourceSettings.Aerospike =>
+        // Apply Aerospike host/port overrides when remapping a source for local tests.
+        val host = sys.env.getOrElse("AEROSPIKE_HOST", "localhost")
+        val port = sys.env.get("AEROSPIKE_PORT").map(_.toInt).orElse(a.port).getOrElse(3000)
+        a.copy(hosts = Seq(host), port = Some(port))
     }
     val newTarget = config.target match {
       case s: TargetSettings.Scylla if s.cloud.isEmpty =>
@@ -214,8 +238,8 @@ object SparkUtils {
 
   private def remapSavepoints(savepoints: Savepoints): Savepoints = {
     val remappedTarget = savepoints.target.map {
-      case SavepointsTarget.Filesystem(path) =>
-        SavepointsTarget.Filesystem(remapContainerPath(path))
+      case SavepointTarget.Filesystem(path) =>
+        SavepointTarget.Filesystem(remapContainerPath(path))
       case other => other
     }
 

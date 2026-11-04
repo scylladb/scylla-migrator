@@ -1,0 +1,49 @@
+source:
+  type: cassandra
+  host: cassandra5
+  port: 9042
+  localDC: datacenter1
+  credentials:
+    username: dummy
+    password: dummy
+  keyspace: test
+  table: collts_rep_src
+  consistencyLevel: LOCAL_QUORUM
+  preserveTimestamps: true
+  preserveCollectionTimestamps: true
+  splitCount: 8
+  connections: 8
+  fetchSize: 1000
+
+# Target points at the Cassandra 5.0 container (remapped to the cassandra5 host port by the test
+# harness) because ScyllaDB cannot read back WRITETIME()/TTL() of non-frozen collections for
+# verification, whereas Cassandra 5.0 can.
+target:
+  type: scylla
+  host: cassandra5
+  port: 9042
+  localDC: datacenter1
+  credentials:
+    username: dummy
+    password: dummy
+  keyspace: test
+  table: collts_rep_dst
+  consistencyLevel: LOCAL_QUORUM
+  connections: 16
+  stripTrailingZerosForDecimals: false
+
+savepoints:
+  path: /app/savepoints
+  intervalSeconds: 300
+
+validation:
+  compareTimestamps: true
+  ttlToleranceMillis: 60000
+  writetimeToleranceMillis: 1000
+  failuresToFetch: 100
+  floatingPointTolerance: 0.001
+  timestampMsTolerance: 0
+  copyMissingRows: true
+  # Keep source per-element timestamps intact on the repaired base write as well, so the test can
+  # assert exact WRITETIME preservation end to end.
+  repairWritetimeStrategy: source

@@ -59,9 +59,9 @@ Valid values for the source ``type`` are:
 
 The following subsections detail the schema of each source type.
 
-^^^^^^^^^^^^^^^^^^^^^^^
-Apache Cassandra Source
-^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+CQL-Compatible Source (Apache Cassandra, ScyllaDB)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 A source of type ``cassandra`` can be used together with a target of type ``cassandra`` only.
 
@@ -69,8 +69,11 @@ A source of type ``cassandra`` can be used together with a target of type ``cass
 
   source:
     type: cassandra
-    # Host name of one of the nodes of your database cluster. Several hosts can be listed,
-    # comma-separated, each optionally with its own port: "<host-1>,<host-2>:<port-2>"
+    # Host name of one or more nodes of your database cluster. Use a YAML list
+    # (e.g. [node-1, node-2, node-3]) or a comma-separated string to give several
+    # contact points (DNS names or IPs), so the migrator can still connect if one
+    # of them is down. A DNS name counts as a single contact point even if it
+    # resolves to several addresses, so list distinct per-node names.
     host: <cassandra-server-01>
     # TCP port to use for CQL
     port: 9042
@@ -88,14 +91,71 @@ A source of type ``cassandra`` can be used together with a target of type ``cass
     # Options are: LOCAL_ONE, ONE, LOCAL_QUORUM, QUORUM.
     # We recommend using LOCAL_QUORUM. If using ONE or LOCAL_ONE, ensure the source system is fully repaired.
     consistencyLevel: LOCAL_QUORUM
-    # Preserve TTLs and WRITETIMEs of cells in the source database. Note that this
-    # option is *incompatible* when copying tables with collections (lists, maps, sets).
+    # Preserve TTLs and WRITETIMEs of cells in the source database. Frozen collections
+    # (frozen<list/map/set>) are stored as a single cell and ARE supported. By default this
+    # option is *incompatible* with non-frozen (multi-cell) collections (lists, maps, sets),
+    # whose elements each carry their own TTL/WRITETIME (see preserveCollectionTimestamps).
     preserveTimestamps: true
+    # Opt-in: also preserve the per-element TTL/WRITETIME of non-frozen (multi-cell) collection
+    # columns. Each element's original TTL/WRITETIME is re-applied via collection appends after the
+    # base row write. Requires a source that can read collection-element metadata: Cassandra 5.0+
+    # (WRITETIME(col)/TTL(col)) or ScyllaDB 2026.2+ (per-element subscript WRITETIME(col[key]),
+    # auto-detected). Supported for non-frozen sets and maps whose element/key type has a
+    # well-defined order (text/ascii/varchar and integer types); non-frozen lists and other
+    # key/element types remain unsupported. Static non-frozen collections are also unsupported:
+    # such tables are rejected before the migration starts. On a ScyllaDB 2026.2+ source, tables
+    # whose primary key includes a frozen tuple, UDT or collection are rejected too (the Cassandra
+    # 5.0+ path has no such limit).
+    # Elements are restored by update: the group with the oldest WRITETIME is written with
+    # col = ? (whose collection tombstone, one microsecond older, removes target elements older
+    # than every source element, e.g. stale or target-only entries from an earlier run), the rest
+    # with col = col + ?. Target elements NEWER than every source element are kept (last write
+    # wins), and a null/empty source collection leaves the target collection untouched. Very large
+    # non-frozen collections are expanded into up to one update per distinct element TTL/WRITETIME,
+    # which can be memory- and throughput-intensive. So that every write pass reads the same
+    # snapshot, the source is read, cached (executor memory, spilling to spark.local.dir) and
+    # written in batches: one batch of source splits (a Parquet restore: a batch of files of about
+    # that many splits' size) at a time, its cache released and its progress saved in a savepoint
+    # before the next one. A batch is spark.default.parallelism splits by default (one wave of
+    # tasks); set -Dscylla.migrator.collectionBatchPartitions=<n> on the driver to change it (a
+    # non-positive value writes the whole input as one batch). Executor local disk must hold about
+    # one batch of source data plus its per-element metadata, so raise splitCount for large tables
+    # to keep batches small. An interrupted run resumes from the last completed batch.
+    # Has no effect unless preserveTimestamps is also true.
+    #
+    # Source-quiescence is REQUIRED. On the ScyllaDB 2026.2+ subscript path, collection elements are
+    # listed by a base scan and their metadata read by per-row point reads (map values are re-read in
+    # the same point read, so a value always carries its own cell's metadata). A concurrent write in
+    # between can still: (a) delete an element -> it is dropped from the migrated row and logged;
+    # (b) add an element -> it is never queried and is silently absent (it is not in the base scan,
+    # so it is not counted in the dropped-element warning). On the Cassandra 5.0+ array path values
+    # and metadata come from one scan, so neither applies. Stop writes to the source before
+    # migrating.
+    #
+    # TTL note: TTLs are read as remaining seconds and re-applied on write, so long-running migrations
+    # (and validation) see the clock advance between read and write/compare; use validation's
+    # ttlToleranceMillis to absorb this drift. A short-lived element can even expire on the source
+    # between the read and the append, in which case it is still written to the target with its
+    # remaining-TTL-at-read-time and briefly reappears there. Prefer migrating tables whose collection
+    # TTLs are comfortably longer than the expected job duration. CQL exposes no TTL for a row
+    # marker, so a row inserted USING TTL whose non-key columns are all null or empty (e.g. an empty
+    # collection) is written to the target without a TTL.
+    #
+    # Validation compares per-element collection TTL/WRITETIME when both endpoints can read them:
+    # Cassandra 5.0+ in the scan, ScyllaDB 2026.2+ with per-element point lookups after the scan
+    # (ceil(n / 100) synchronous queries per collection per row on each ScyllaDB side, so expect
+    # validation against ScyllaDB to be slower, and values and metadata to be read at slightly
+    # different times: stop writes first). Otherwise (an older server, or a ScyllaDB endpoint whose
+    # primary key includes a frozen tuple, UDT or collection) non-frozen collection columns are
+    # compared by VALUE only. copyMissingRows restores element TTL/WRITETIME of missing rows when
+    # the SOURCE can read them, and is rejected otherwise (re-run the migration to converge instead).
+    # Defaults to false.
+    preserveCollectionTimestamps: false
     # Number of splits to use - this should be at minimum the amount of cores
     # available in the Spark cluster, and optimally more; higher splits will lead
     # to more fine-grained resumes. Aim for 8 * (Spark cores).
     splitCount: 256
-    # Number of connections to use to Apache Cassandra when copying
+    # Number of connections to use to the CQL-compatible database (Apache Cassandra, ScyllaDB) when copying
     connections: 8
     # Number of rows to fetch in each read
     fetchSize: 1000
@@ -191,9 +251,8 @@ and executors never need to reach the node IP addresses. Client routes require S
   The port is the one of the private endpoint, not necessarily 9042 (the usual port without client
   routes). They are only used for the initial connection.
 - When you have several private endpoint addresses (for example one per availability zone), list
-  them all in ``host``, comma-separated; an address with a different port is written
-  ``address:port``, and ``port`` applies to the others. The migrator tries all of them for the
-  initial connection, so it still connects while one of them is unavailable.
+  them all in ``host``, as a YAML list or comma-separated; they all use ``port``. The migrator tries
+  all of them for the initial connection, so it still connects while one of them is unavailable.
 - ``localDC`` is optional when the listed connection IDs only route the nodes of one datacenter:
   that datacenter is then used. Set it when they route several datacenters.
 - ``cloud`` must not be set.
@@ -221,8 +280,8 @@ order of ``endpoints`` does not choose which.
 
   source:
     type: scylla
-    # Private endpoint address(es) used for the initial connection, comma-separated,
-    # e.g. "<private-endpoint-address-az1>,<private-endpoint-address-az2>:<other-port>"
+    # Private endpoint address(es) used for the initial connection, as a YAML list or
+    # comma-separated, e.g. [<private-endpoint-address-az1>, <private-endpoint-address-az2>]
     host: <private-endpoint-address>
     # Port of the private endpoint
     port: <private-endpoint-port>
@@ -449,16 +508,19 @@ Valid values for the target ``type`` are:
 
 The following subsections detail the schema of each target type.
 
-^^^^^^^^^^^^^^^^^^^^^^^
-Apache Cassandra Target
-^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+CQL-Compatible Target (Apache Cassandra, ScyllaDB)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. code-block:: yaml
 
   target:
     type: cassandra
-    # Host name of one of the nodes of your target database cluster. Several hosts can be
-    # listed, comma-separated, each optionally with its own port: "<host-1>,<host-2>:<port-2>"
+    # Host name of one or more nodes of your target database cluster. Use a YAML list
+    # (e.g. [node-1, node-2, node-3]) or a comma-separated string to give several
+    # contact points (DNS names or IPs), so the migrator can still connect if one
+    # of them is down. A DNS name counts as a single contact point even if it
+    # resolves to several addresses, so list distinct per-node names.
     host: <scylla-server-01>
     # TCP port for CQL
     port: 9042
@@ -477,7 +539,7 @@ Apache Cassandra Target
     # Consistency Level for the target connection
     # Options are: LOCAL_ONE, ONE, LOCAL_QUORUM, QUORUM.
     consistencyLevel: LOCAL_QUORUM
-    # Number of connections to use to ScyllaDB / Apache Cassandra when copying
+    # Number of connections to use to the CQL-compatible database (Apache Cassandra, ScyllaDB) when copying
     connections: 16
     # Spark pads decimals with zeros appropriate to their scale. This causes values
     # like '3.5' to be copied as '3.5000000000...' to the target. There's no good way
@@ -493,8 +555,8 @@ Apache Cassandra Target
     # (you can uncomment just one of them, or all or none)
     # TTL in seconds (sample 7776000 is 90 days)
     writeTTLInS: 7776000
-    # Optional - writetime in microseconds (sample 1640998861000 is Saturday, January 1, 2022 2:01:01 AM GMT+01:00 )
-    writeWritetimestampInuS: 1640998861000
+    # Optional - writetime in microseconds since the Unix epoch (16 digits; sample 1640998861000000 is Saturday, January 1, 2022 1:01:01 AM UTC)
+    writeWritetimestampInuS: 1640998861000000
     # Optional - SSL as per https://github.com/scylladb/spark-cassandra-connector/blob/master/doc/reference.md#cassandra-ssl-connection-options
     sslOptions:
       clientAuthEnabled: false
@@ -674,18 +736,10 @@ writes so that re-running the migration is safe.
     path: /app/savepoints
     # Interval at which savepoints will be created
     intervalSeconds: 300
-    # Optional. When true (the default), the migrator scans this location on startup and resumes
-    # from the most recent savepoint automatically. Set to false to always start from the
-    # configuration as written.
+    # Optional, enabled by default. Merge saved progress into the launch configuration.
     autoResume: true
 
-Savepoint files are written with credentials redacted (secrets are replaced with
-``<redacted>``), so they are safe to keep in shared or long-lived storage. Because of this,
-a savepoint file cannot be used directly as a standalone configuration file; rely on
-``autoResume`` to continue an interrupted migration. See
-:doc:`resume an interrupted migration </resume-interrupted-migration>`.
-
-The legacy ``path`` field is shorthand for an explicit local filesystem target:
+For local paths, the top-level ``path`` is a shorthand for an explicit filesystem target:
 
 .. code-block:: yaml
 
@@ -694,6 +748,89 @@ The legacy ``path`` field is shorthand for an explicit local filesystem target:
     target:
       type: filesystem
       path: /app/savepoints
+
+Specify either ``savepoints.path`` or ``savepoints.target``, never both. A structured
+``filesystem`` target requires its own nonempty ``target.path``.
+For file and cloud destinations, ``intervalSeconds`` must be set explicitly.
+For ``target-table`` (also accepted as ``target-database``), it defaults to 300 seconds
+when omitted.
+
+For CQL targets (``target.type: scylla`` or its ``cassandra`` alias), savepoints can also be stored in the target database:
+
+.. code-block:: yaml
+
+  savepoints:
+    intervalSeconds: 300
+    autoResume: true
+    target:
+      type: target-table
+      # Optional. Default: target.keyspace. The keyspace must already exist.
+      keyspace: null
+      # Optional. Created automatically if it does not exist.
+      table: scylla_migrator_savepoints
+      # Optional. If omitted, the migrator derives a stable job id from the
+      # redacted configuration identity, including renames but excluding progress,
+      # savepoints, and validation.
+      # Explicit IDs select rows but still require matching configuration identity.
+      jobId: null
+
+Explicit ``savepoints.target.keyspace`` and ``savepoints.target.table`` values use
+CQL naming rules: only ASCII letters, digits, and underscores are allowed, even
+inside quotes. An unquoted simple name such as ``MyKs`` becomes ``myks``.
+To preserve case, include the CQL double quotes inside the YAML string:
+
+.. code-block:: yaml
+
+  savepoints:
+    target:
+      type: target-table
+      keyspace: '"MyKs"'
+      table: '"MySavepoints"'
+
+When ``savepoints.target.keyspace`` is omitted, the migrator inherits the exact
+case of ``target.keyspace`` as used by the data connector.
+
+The ``target-table`` backend supports migration ``target.type: scylla`` and its
+``cassandra`` alias.
+Metadata writes, resume reads, and seed reads always use ``LOCAL_QUORUM``,
+independently of bulk-data consistency.
+See :doc:`resume-interrupted-migration` for availability costs and limitations.
+The migrator creates the metadata table automatically, but it does not create the keyspace. Each
+savepoint is stored as an append-only version in this table:
+
+.. code-block:: cql
+
+  CREATE TABLE IF NOT EXISTS <keyspace>.<table> (
+    job_id text,
+    epoch_millis bigint,
+    sequence bigint,
+    schema_version int,
+    reason text,
+    migrator_version text,
+    config_sha256 text,
+    config_yaml text,
+    PRIMARY KEY ((job_id), epoch_millis, sequence)
+  ) WITH CLUSTERING ORDER BY (epoch_millis DESC, sequence DESC);
+
+Run only one active migration per savepoint job. Stop the previous run before
+restarting it, and use separate job IDs for separate migrations. Operators must
+enforce this restriction: accidental overlap can overwrite progress.
+
+History is append-only and each row contains a full redacted configuration payload.
+Monitor metadata table and job partition growth, and the size of ``config_yaml`` as
+progress accumulates. Reads use small pages and retain fallback to older usable
+savepoints, but history can grow without limit and large payloads can fail database
+writes. Paging does not bound individual payload size, stored history, or total scan
+work. There is no automatic retention or bounded payload representation.
+
+The ``config_yaml`` column contains redacted savepoint YAML, matching file-backed
+savepoints. Automatic resume is enabled by default for every backend. Only progress is merged
+into the launch configuration; credentials and other settings come from that live configuration.
+Missing or failed lookups warn and continue from the launch configuration. Set
+``savepoints.autoResume: false`` to disable lookup. Table payloads retain a SHA-256 digest
+of any source WHERE filter to verify dataset identity without storing the cleartext filter.
+This unsalted digest allows a reader to confirm guessed filters, so it does not protect
+low-entropy filter values. Restrict access to the metadata table and its saved payloads.
 
 The structured ``filesystem`` target accepts only local filesystem paths, including
 ``file://`` paths. For Hadoop filesystem URIs, use the legacy ``path`` field directly.

@@ -1,6 +1,6 @@
 package com.scylladb.migrator.scylla
 
-import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings }
+import com.scylladb.migrator.config.{ MigratorConfig, SourceSettings, TargetSettings }
 import com.scylladb.migrator.readers.{ Parquet, ParquetSavepointsManager }
 import org.apache.spark.sql.SparkSession
 
@@ -71,7 +71,7 @@ class ParquetSavepointsTest extends munit.FunSuite {
     try {
       val config = MigratorConfig(
         source           = SourceSettings.Parquet("dummy", None, None, None),
-        target           = null,
+        target           = testTarget,
         renames          = None,
         savepoints       = com.scylladb.migrator.config.Savepoints(300, tempDir.toString),
         skipTokenRanges  = None,
@@ -158,7 +158,7 @@ class ParquetSavepointsTest extends munit.FunSuite {
 
       val config = MigratorConfig(
         source           = parquetSource,
-        target           = null,
+        target           = testTarget,
         renames          = None,
         savepoints       = com.scylladb.migrator.config.Savepoints(300, savepointsDir.toString),
         skipTokenRanges  = None,
@@ -205,4 +205,20 @@ class ParquetSavepointsTest extends munit.FunSuite {
         .forEach(Files.delete)
     }
   }
+
+  private val testTarget: TargetSettings.Scylla =
+    TargetSettings.Scylla(
+      host                          = "localhost",
+      port                          = 9042,
+      localDC                       = None,
+      credentials                   = None,
+      sslOptions                    = None,
+      keyspace                      = "ks",
+      table                         = "tbl",
+      connections                   = None,
+      stripTrailingZerosForDecimals = false,
+      writeTTLInS                   = None,
+      writeWritetimestampInuS       = None,
+      consistencyLevel              = "LOCAL_QUORUM"
+    )
 }

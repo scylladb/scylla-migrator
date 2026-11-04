@@ -57,7 +57,7 @@ An `Ansible <https://www.ansible.com/>`_ playbook is provided in the `ansible fo
    - Visit ``http://<spark-master-hostname>:4040`` for the active Spark application UI after a job starts.
    - Visit ``http://<spark-master-hostname>:18080`` for the Spark history server.
 
-8. `Review and modify config.yaml <./#configure-the-migration>`_ based on whether you're performing a migration to CQL or Alternator.
+8. :ref:`Review and modify config.yaml <configure-the-migration>` based on whether you're performing a migration to CQL or Alternator.
 
    - If you're migrating to the ScyllaDB CQL interface (from Apache Cassandra, ScyllaDB, or another CQL source), make a copy of ``../config.yaml.example``, review the comments, and edit as directed.
    - If you're migrating to Alternator (from DynamoDB or another ScyllaDB Alternator source), make a copy of ``files/config.dynamodb.yml``, review the comments, and edit as directed.

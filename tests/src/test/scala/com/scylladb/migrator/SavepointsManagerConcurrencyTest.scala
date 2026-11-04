@@ -1,6 +1,12 @@
 package com.scylladb.migrator
 
-import com.scylladb.migrator.config.{ MigratorConfig, Savepoints, SourceSettings, TargetSettings }
+import com.scylladb.migrator.config.{
+  MigratorConfig,
+  SavepointTarget,
+  Savepoints,
+  SourceSettings,
+  TargetSettings
+}
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{ Files, Path }
@@ -59,8 +65,9 @@ class SavepointsManagerConcurrencyTest extends munit.FunSuite {
     cfg: MigratorConfig,
     processed: => Set[String],
     snapshotDelayMillis: Long = 0L,
-    onSnapshotStarted: () => Unit = () => ()
-  ) extends SavepointsManager(cfg) {
+    onSnapshotStarted: () => Unit = () => (),
+    savepointStore: Option[SavepointStore] = None
+  ) extends SavepointsManager(cfg, savepointStore) {
     def describeMigrationState(): String = s"Processed: ${processed.size}"
     def updateConfigWithMigrationState(): MigratorConfig = {
       onSnapshotStarted()
@@ -355,6 +362,143 @@ class SavepointsManagerConcurrencyTest extends munit.FunSuite {
     } finally deleteRecursively(dir)
   }
 
+  test("seed at maximum 10-digit counter rolls over to the next millisecond") {
+    val dir = Files.createTempDirectory("savepoints-seed-counter-rollover")
+    try {
+      val seedMillis = System.currentTimeMillis() + TimeUnit.DAYS.toMillis(365)
+      val maxCounter = SavepointsManager.MaxSavepointSequenceValue
+      val planted =
+        dir.resolve(f"savepoint_${seedMillis}%013d_${maxCounter}%010d.yaml")
+      Files.write(planted, Array.emptyByteArray)
+
+      val cfg = newConfig(dir, intervalSeconds = 3600)
+      val manager = new TestManager(cfg, processed = Set("rollover"))
+      try manager.dumpMigrationState("after-counter-rollover-seed")
+      finally manager.close()
+
+      val produced =
+        listSavepoints(dir).map(_.getFileName.toString).filter(_ != planted.getFileName.toString)
+      assertEquals(produced.size, 1)
+      produced.head match {
+        case savepointName(head, tailOrNull) =>
+          assertEquals(head.toLong, seedMillis + 1L)
+          assertEquals(tailOrNull, "0000000001")
+          assertEquals(tailOrNull.length, 10)
+        case other =>
+          fail(s"produced filename ${other} does not match the savepoint filename grammar")
+      }
+    } finally deleteRecursively(dir)
+  }
+
+  test("seed ignores max counter when rolling over would create an unresumable timestamp") {
+    val dir = Files.createTempDirectory("savepoints-seed-counter-rollover-boundary")
+    try {
+      val seedMillis = SavepointsManager.MaxReasonableSeedValue - 1L
+      val maxCounter = SavepointsManager.MaxSavepointSequenceValue
+      val planted =
+        dir.resolve(f"savepoint_${seedMillis}%013d_${maxCounter}%010d.yaml")
+      Files.write(planted, Array.emptyByteArray)
+
+      val cfg = newConfig(dir, intervalSeconds = 3600)
+      val manager = new TestManager(cfg, processed = Set("bounded"))
+      try manager.dumpMigrationState("after-boundary-counter-rollover-seed")
+      finally manager.close()
+
+      val produced =
+        listSavepoints(dir).filter(_.getFileName.toString != planted.getFileName.toString)
+      assertEquals(produced.size, 1)
+      assert(
+        SavepointsManager.savepointSortKey(produced.head.getFileName.toString).isDefined,
+        s"manager wrote an unresumable savepoint coordinate: ${produced.head.getFileName}"
+      )
+
+      val resumed = SavepointsResume.resume(cfg, None, None)
+      assertEquals(resumed.skipParquetFiles.getOrElse(Set.empty), Set("bounded"))
+    } finally deleteRecursively(dir)
+  }
+
+  test("exhausted coordinate space never writes an unreadable successor") {
+    val dir = Files.createTempDirectory("savepoints-exhausted")
+    val store = new RecordingStore(
+      Some(
+        SavepointCoordinates(
+          SavepointsManager.MaxReasonableSeedValue - 1L,
+          SavepointsManager.MaxSavepointSequenceValue - 2L
+        )
+      )
+    )
+    val manager = new TestManager(
+      newConfig(dir, intervalSeconds = 3600),
+      processed      = Set("safe"),
+      savepointStore = Some(store)
+    )
+    try {
+      manager.dumpMigrationState("last-safe")
+      assertEquals(store.records.size, 1)
+      val coordinate = store.records.head.coordinates
+      assert(SavepointsManager.isResumeSafeCoordinate(coordinate.epochMillis, coordinate.sequence))
+      (1 to 2).foreach { _ =>
+        val error = intercept[IllegalStateException](manager.dumpMigrationState("exhausted"))
+        assert(error.getMessage.contains("coordinate space exhausted"))
+        assertEquals(store.records.size, 1)
+      }
+    } finally {
+      manager.close()
+      deleteRecursively(dir)
+    }
+  }
+
+  test("seed rejects hostile coordinates returned by savepoint stores") {
+    val dir = Files.createTempDirectory("savepoints-hostile-store-seed")
+    val store = new RecordingStore(
+      Some(SavepointCoordinates(java.lang.Long.MAX_VALUE, java.lang.Long.MAX_VALUE))
+    )
+    try {
+      val cfg = newConfig(dir, intervalSeconds = 3600)
+      val manager = new TestManager(
+        cfg,
+        processed      = Set("alpha"),
+        savepointStore = Some(store)
+      )
+      try manager.dumpMigrationState("after-hostile-store-seed")
+      finally manager.close()
+
+      val record = store.records.headOption.getOrElse(fail("manager wrote no savepoint"))
+      assert(
+        record.coordinates.epochMillis < SavepointsManager.MaxReasonableSeedValue,
+        s"hostile epoch_millis was accepted: ${record.coordinates.epochMillis}"
+      )
+      assertEquals(record.coordinates.sequence, 1L)
+    } finally deleteRecursively(dir)
+  }
+
+  test("direct managers reject target-table configs without an explicit savepoint store") {
+    val dir = Files.createTempDirectory("savepoints-direct-target-table")
+    try {
+      val cfg = newConfig(dir, intervalSeconds = 3600).copy(
+        savepoints = Savepoints(
+          intervalSeconds = 3600,
+          path            = dir.toString,
+          target          = Some(SavepointTarget.TargetTable())
+        )
+      )
+
+      val thrown =
+        try {
+          val manager = new TestManager(cfg, processed = Set("alpha"))
+          manager.close()
+          None
+        } catch {
+          case e: IllegalArgumentException => Some(e)
+        }
+
+      assert(
+        thrown.exists(_.getMessage.contains("target-table")),
+        "a target-table savepoint config must not silently fall back to filesystem storage"
+      )
+    } finally deleteRecursively(dir)
+  }
+
   test("hostile filenames do not crash sort / findLatest") {
     // An attacker (or a buggy external tool) could drop a savepoint-looking file whose numeric
     // fields overflow `Long`.  `parseLong` then throws `NumberFormatException`; an un-guarded
@@ -381,6 +525,34 @@ class SavepointsManagerConcurrencyTest extends munit.FunSuite {
         winner.getFileName.toString != hostile.getFileName.toString,
         s"hostile filename ${hostile.getFileName} beat the real savepoint in sort order"
       )
+    } finally deleteRecursively(dir)
+  }
+
+  test("seed ignores filenames with overflowing counters") {
+    val dir = Files.createTempDirectory("savepoints-hostile-counter-seed")
+    try {
+      val farFuture = System.currentTimeMillis() + TimeUnit.DAYS.toMillis(365)
+      val hostile = dir.resolve(s"savepoint_${farFuture}_999999999999999999999999999.yaml")
+      Files.write(hostile, Array.emptyByteArray)
+
+      val cfg = newConfig(dir, intervalSeconds = 3600)
+      val manager = new TestManager(cfg, processed = Set("real"))
+      try manager.dumpMigrationState("after-hostile-counter")
+      finally manager.close()
+
+      val produced =
+        listSavepoints(dir).map(_.getFileName.toString).filter(_ != hostile.getFileName.toString)
+      assertEquals(produced.size, 1)
+      produced.head match {
+        case savepointName(head, tailOrNull) =>
+          assert(
+            head.toLong < farFuture,
+            s"invalid overflowing counter should not seed the next savepoint at ${farFuture}"
+          )
+          assertEquals(tailOrNull, "0000000001")
+        case other =>
+          fail(s"produced filename ${other} does not match the savepoint filename grammar")
+      }
     } finally deleteRecursively(dir)
   }
 
@@ -488,5 +660,21 @@ class SavepointsManagerConcurrencyTest extends munit.FunSuite {
         s"latest savepoint ${winner.getFileName} did not contain the completed terminal snapshot"
       )
     } finally deleteRecursively(dir)
+  }
+
+  private class RecordingStore(seed: Option[SavepointCoordinates]) extends SavepointStore {
+    private val saved = scala.collection.mutable.ArrayBuffer.empty[SavepointRecord]
+
+    def records: Seq[SavepointRecord] = saved.toSeq
+
+    override def prepare(): Unit = ()
+
+    override def seedState(): Option[SavepointCoordinates] = seed
+
+    override def save(record: SavepointRecord): String = {
+      saved += record
+      s"record-${saved.size}"
+    }
+
   }
 }

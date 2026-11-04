@@ -1,0 +1,35 @@
+# Integration-test configuration for the Kinesis Data Streams streaming path.
+#
+# The `streamArn` below is an EXAMPLE value; it is NOT a real stream. Two consumers read this
+# file:
+#
+#   - `StreamChangesSettingParserTest` asserts that the example YAML parses into a
+#     `MigratorConfig` so the shape of the `streamChanges` object is pinned in tests.
+#   - `KinesisStreamedItemsTest` (gated behind `KINESIS_LIVE_TEST=1`) loads this config, then
+#     overrides the `streamArn` and `appName` from environment variables before spark-submit.
+#     It requires a real AWS account with a pre-created Kinesis Data Stream and IAM permissions
+#     matching docs/source/stream-changes.rst.
+source:
+  type: dynamodb
+  table: KinesisStreamedItemsTest
+  region: us-east-1
+
+target:
+  type: dynamodb
+  table: KinesisStreamedItemsTest
+  region: dummy
+  endpoint:
+    host: http://scylla
+    port: 8000
+  credentials:
+    accessKey: dummy
+    secretKey: dummy
+  streamChanges:
+    type: kinesis
+    streamArn: arn:aws:kinesis:us-east-1:111122223333:stream/KinesisStreamedItemsTest-example
+    appName: migrator_KinesisStreamedItemsTest
+  billingMode: PAY_PER_REQUEST
+
+savepoints:
+  path: /app/savepoints
+  intervalSeconds: 300

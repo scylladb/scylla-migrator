@@ -1,23 +1,67 @@
 package com.scylladb.migrator.config
 
-import io.circe.{ Decoder, DecodingFailure, Encoder, Json }
+import io.circe.{ Decoder, DecodingFailure, Encoder, Json, JsonObject }
 import io.circe.generic.semiauto.deriveEncoder
 import io.circe.syntax._
 
 import java.util.Locale
 
-sealed trait SavepointsTarget {
+/** Configuration for periodic savepoints written during a migration run.
+  *
+  * @param intervalSeconds
+  *   How often, in seconds, a savepoint should be written.
+  * @param path
+  *   Filesystem path or Hadoop filesystem URI where file-backed savepoint data will be stored.
+  * @param enableParquetFileTracking
+  *   When `true` (the default), enables tracking of already-processed Parquet files as part of the
+  *   savepoint state. This prevents the same Parquet file from being migrated more than once if the
+  *   job is restarted or savepoints are resumed. Set this to `false` to keep the legacy behavior
+  *   where Parquet files are not tracked in savepoints. Disabling tracking may be useful for
+  *   backwards compatibility with older savepoints or when file tracking is handled by an external
+  *   mechanism, but it means repeated runs may reprocess the same Parquet files.
+  * @param target
+  *   Savepoint storage target. Missing target defaults to `filesystem` using `path`.
+  * @param autoResume
+  *   When `true` (the default), merge saved progress into the launch configuration. Lookup failures
+  *   warn and leave the launch configuration unchanged.
+  */
+case class Savepoints(
+  intervalSeconds: Int = Savepoints.DefaultIntervalSeconds,
+  path: String = Savepoints.DefaultPath,
+  enableParquetFileTracking: Boolean = true,
+  target: Option[SavepointTarget] = None,
+  autoResume: Boolean = true
+) {
+  def resolvedTarget: SavepointTarget =
+    target.getOrElse(SavepointTarget.Filesystem(path))
+
+  def effectiveTarget: SavepointTarget =
+    resolvedTarget
+
+  def storagePath: String =
+    resolvedTarget match {
+      case target: SavepointTarget.StoragePathTarget => target.storagePath
+      case _: SavepointTarget.TargetTable            => path
+    }
+
+  def filesystemPath: String = storagePath
+}
+
+sealed trait SavepointTarget {
   def targetType: String
 }
 
-object SavepointsTarget {
+object SavepointTarget {
+  private[config] def isTableType(value: String): Boolean =
+    value == "target-table" || value == "target-database"
+
   private val UriScheme = """^([A-Za-z][A-Za-z0-9+.-]*):/{2}.*""".r
 
-  sealed trait StoragePathTarget extends SavepointsTarget {
+  sealed trait StoragePathTarget extends SavepointTarget {
     def storagePath: String
   }
 
-  case class Filesystem(path: String) extends StoragePathTarget {
+  case class Filesystem(path: String = Savepoints.DefaultPath) extends StoragePathTarget {
     override val targetType: String = "filesystem"
     override def storagePath: String = path
   }
@@ -83,6 +127,14 @@ object SavepointsTarget {
     }
   }
 
+  case class TargetTable(
+    keyspace: Option[String] = None,
+    table: String = Savepoints.DefaultTargetTable,
+    jobId: Option[String] = None
+  ) extends SavepointTarget {
+    override val targetType: String = "target-table"
+  }
+
   private def nonEmpty(value: String, field: String, cursor: io.circe.HCursor) =
     Either.cond(
       value.trim.nonEmpty,
@@ -110,7 +162,7 @@ object SavepointsTarget {
       case _ => Right(())
     }
 
-  implicit val decoder: Decoder[SavepointsTarget] =
+  implicit val decoder: Decoder[SavepointTarget] =
     Decoder.instance { cursor =>
       cursor.get[String]("type").flatMap {
         case "filesystem" | "path" =>
@@ -135,6 +187,12 @@ object SavepointsTarget {
             credentials <- cursor.get[Option[GCSCredentials]]("credentials")
             _           <- nonEmpty(bucket, "bucket", cursor)
           } yield GCS(bucket.trim, prefix, projectId, credentials)
+        case tableType if isTableType(tableType) =>
+          for {
+            keyspace <- cursor.get[Option[String]]("keyspace")
+            table    <- cursor.getOrElse[String]("table")(Savepoints.DefaultTargetTable)
+            jobId    <- cursor.get[Option[String]]("jobId")
+          } yield TargetTable(keyspace, table, jobId)
         case "hadoop" =>
           Left(
             DecodingFailure(
@@ -143,31 +201,23 @@ object SavepointsTarget {
               cursor.history
             )
           )
-        case "target-table" | "target-database" =>
-          Left(
-            DecodingFailure(
-              "Savepoints target type 'target-table' is not supported by this runtime. " +
-                "Use a local filesystem, savepoints.path Hadoop URI, S3, or GCS savepoint target.",
-              cursor.history
-            )
-          )
         case otherwise =>
           Left(
             DecodingFailure(
-              s"Invalid savepoints target type: ${otherwise}",
+              s"Invalid savepoints.target.type '${otherwise}'. Canonical target types: filesystem, s3, gcs, target-table",
               cursor.history
             )
           )
       }
     }
 
-  implicit val encoder: Encoder[SavepointsTarget] =
+  implicit val encoder: Encoder[SavepointTarget] =
     Encoder.instance {
       case t: Filesystem =>
-        deriveEncoder[Filesystem]
-          .encodeObject(t)
-          .add("type", Json.fromString(t.targetType))
-          .asJson
+        JsonObject(
+          "type" -> t.targetType.asJson,
+          "path" -> t.path.asJson
+        ).asJson
       case t: S3 =>
         deriveEncoder[S3]
           .encodeObject(t)
@@ -180,92 +230,93 @@ object SavepointsTarget {
           .filter { case (_, v) => !v.isNull }
           .add("type", Json.fromString(t.targetType))
           .asJson
+      case target @ TargetTable(keyspace, table, jobId) =>
+        JsonObject(
+          "type"     -> target.targetType.asJson,
+          "keyspace" -> keyspace.asJson,
+          "table"    -> table.asJson,
+          "jobId"    -> jobId.asJson
+        ).filter { case (_, value) => !value.isNull }.asJson
     }
 }
 
-/** Configuration for periodic savepoints written during a migration run.
-  *
-  * @param intervalSeconds
-  *   How often, in seconds, a savepoint should be written.
-  * @param path
-  *   Local filesystem path or Hadoop filesystem URI (directory or prefix) where savepoint data will
-  *   be stored.
-  * @param enableParquetFileTracking
-  *   When `true` (the default), enables tracking of already-processed Parquet files as part of the
-  *   savepoint state. This prevents the same Parquet file from being migrated more than once if the
-  *   job is restarted or savepoints are resumed.
-  *
-  * Set this to `false` to keep the legacy behavior where Parquet files are not tracked in
-  * savepoints. Disabling tracking may be useful for backwards compatibility with older savepoints
-  * or when file tracking is handled by an external mechanism, but it means repeated runs may
-  * reprocess the same Parquet files.
-  * @param target
-  *   Optional typed savepoint destination. When omitted, the legacy `path` field is interpreted as
-  *   a filesystem/Hadoop URI destination.
-  * @param autoResume
-  *   When `true` (the default), the migrator scans this savepoints location on startup and merges
-  *   the skip-state (`skipTokenRanges`/`skipSegments`/`skipParquetFiles`) of the most recent
-  *   savepoint into the running configuration, so re-running the same config resumes where the
-  *   previous run left off. Set to `false` to always start from the configuration as written (for
-  *   example, to force a full re-migration while reusing the same savepoints directory).
-  */
-case class Savepoints(
-  intervalSeconds: Int,
-  path: String,
-  enableParquetFileTracking: Boolean = true,
-  target: Option[SavepointsTarget] = None,
-  autoResume: Boolean = true
-) {
-  def effectiveTarget: SavepointsTarget.StoragePathTarget =
-    target match {
-      case Some(target: SavepointsTarget.StoragePathTarget) => target
-      case None                                             => SavepointsTarget.Filesystem(path)
-    }
+object SavepointsTarget {
+  type StoragePathTarget = SavepointTarget.StoragePathTarget
+  type Filesystem = SavepointTarget.Filesystem
+  type S3 = SavepointTarget.S3
+  type GCSCredentials = SavepointTarget.GCSCredentials
+  type GCS = SavepointTarget.GCS
+  type TargetTable = SavepointTarget.TargetTable
 
-  def storagePath: String = effectiveTarget.storagePath
+  val Filesystem = SavepointTarget.Filesystem
+  val S3 = SavepointTarget.S3
+  val GCSCredentials = SavepointTarget.GCSCredentials
+  val GCS = SavepointTarget.GCS
+  val TargetTable = SavepointTarget.TargetTable
 }
 
 object Savepoints {
-  val Default: Savepoints = Savepoints(intervalSeconds = 300, path = "/app/savepoints")
+  val DefaultIntervalSeconds: Int = 300
+  val DefaultPath: String = "/app/savepoints"
+  val DefaultTargetTable: String = "scylla_migrator_savepoints"
+  val Default: Savepoints = Savepoints()
 
   implicit val decoder: Decoder[Savepoints] =
     Decoder.instance { cursor =>
+      val targetCursor = cursor
+        .downField("target")
+        .success
+        .filter(_.focus.exists(!_.isNull))
+
+      val tableTarget = targetCursor.exists(
+        _.get[String]("type").toOption.exists(SavepointTarget.isTableType)
+      )
+
       for {
-        intervalSeconds <- cursor.get[Int]("intervalSeconds")
-        enableParquetFileTracking <-
-          cursor.getOrElse[Boolean]("enableParquetFileTracking")(true)
-        autoResume  <- cursor.getOrElse[Boolean]("autoResume")(true)
-        maybePath   <- cursor.get[Option[String]]("path")
-        maybeTarget <- cursor.get[Option[SavepointsTarget]]("target")
+        intervalSeconds <- if (tableTarget)
+                             cursor.getOrElse[Int]("intervalSeconds")(DefaultIntervalSeconds)
+                           else cursor.get[Int]("intervalSeconds")
+        maybePath <- cursor.get[Option[String]]("path")
         _ <- Either.cond(
-               maybePath.isEmpty || maybeTarget.isEmpty,
+               maybePath.isEmpty || targetCursor.isEmpty,
                (),
                DecodingFailure(
                  "Specify only one of savepoints.path or savepoints.target.",
                  cursor.history
                )
              )
-        path <- maybeTarget match {
-                  case Some(target: SavepointsTarget.StoragePathTarget) =>
-                    Right(target.storagePath)
-                  case Some(other) =>
-                    Left(
-                      DecodingFailure(
-                        s"Savepoints target type '${other.targetType}' does not resolve to a storage path.",
-                        cursor.history
-                      )
-                    )
-                  case None =>
-                    maybePath
-                      .filter(_.trim.nonEmpty)
-                      .toRight(
-                        DecodingFailure(
-                          "Savepoints configuration requires either 'path' or 'target'.",
-                          cursor.history
-                        )
-                      )
-                }
-      } yield Savepoints(intervalSeconds, path, enableParquetFileTracking, maybeTarget, autoResume)
+        _ <- Either.cond(
+               maybePath.forall(_.trim.nonEmpty) &&
+                 (maybePath.isDefined || targetCursor.isDefined),
+               (),
+               DecodingFailure(
+                 "Savepoints configuration requires an explicit nonempty path or target destination.",
+                 cursor.history
+               )
+             )
+        path = maybePath.getOrElse(DefaultPath)
+        enableParquetFileTracking <-
+          cursor.getOrElse[Boolean]("enableParquetFileTracking")(true)
+        autoResume <- cursor.getOrElse[Boolean]("autoResume")(true)
+        target <- targetCursor match {
+                    case Some(cursor) =>
+                      SavepointTarget.decoder
+                        .apply(cursor)
+                        .map(Some(_))
+                    case _ => Right(None)
+                  }
+        resolvedPath = target match {
+                         case Some(target: SavepointTarget.StoragePathTarget) =>
+                           target.storagePath
+                         case _ => path
+                       }
+      } yield Savepoints(
+        intervalSeconds,
+        resolvedPath,
+        enableParquetFileTracking,
+        target,
+        autoResume
+      )
     }
 
   implicit val encoder: Encoder[Savepoints] =
@@ -290,4 +341,31 @@ object Savepoints {
         ): _*
       )
     }
+
+  // Keyspace/table restrictions are narrower than generic quoted CQL identifiers.
+  private def validMetadataName(name: String): Boolean =
+    name.matches("[A-Za-z0-9_]+|\"[A-Za-z0-9_]+\"")
+
+  private[config] def validate(savepoints: Savepoints): List[String] = {
+    val errors = List.newBuilder[String]
+    if (savepoints.intervalSeconds <= 0)
+      errors += s"'intervalSeconds' must be positive, got ${savepoints.intervalSeconds}."
+    savepoints.resolvedTarget match {
+      case SavepointTarget.TargetTable(keyspace, table, jobId) =>
+        if (keyspace.exists(_.trim.isEmpty))
+          errors += "'target.keyspace' must not be empty when set."
+        if (table.trim.isEmpty)
+          errors += "'target.table' must not be empty."
+        keyspace.filter(_.trim.nonEmpty).foreach { name =>
+          if (!validMetadataName(name))
+            errors += "'target.keyspace' must contain only ASCII letters, digits, or underscores, optionally enclosed in CQL double quotes."
+        }
+        if (table.trim.nonEmpty && !validMetadataName(table))
+          errors += "'target.table' must contain only ASCII letters, digits, or underscores, optionally enclosed in CQL double quotes."
+        if (jobId.exists(_.trim.isEmpty))
+          errors += "'target.jobId' must not be empty when set."
+      case _: SavepointTarget.StoragePathTarget => ()
+    }
+    errors.result()
+  }
 }

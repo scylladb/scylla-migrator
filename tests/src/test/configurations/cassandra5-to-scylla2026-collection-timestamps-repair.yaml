@@ -1,0 +1,47 @@
+source:
+  type: cassandra
+  host: cassandra5
+  port: 9042
+  localDC: datacenter1
+  credentials:
+    username: dummy
+    password: dummy
+  keyspace: test
+  table: collts_xrep_src
+  consistencyLevel: LOCAL_QUORUM
+  preserveTimestamps: true
+  preserveCollectionTimestamps: true
+  splitCount: 8
+  connections: 8
+  fetchSize: 1000
+
+# Cassandra 5.0 source (collection-wide WRITETIME(col)/TTL(col)) and ScyllaDB 2026.2 target
+# (element-subscript form only, read with per-element point lookups): validation compares
+# per-element metadata, and copyMissingRows restores it from the source's metadata.
+target:
+  type: scylla
+  host: scylla2026
+  port: 9042
+  localDC: datacenter1
+  credentials:
+    username: dummy
+    password: dummy
+  keyspace: test
+  table: collts_xrep_dst
+  consistencyLevel: LOCAL_QUORUM
+  connections: 16
+  stripTrailingZerosForDecimals: false
+
+savepoints:
+  path: /app/savepoints
+  intervalSeconds: 300
+
+validation:
+  compareTimestamps: true
+  ttlToleranceMillis: 60000
+  writetimeToleranceMillis: 1000
+  failuresToFetch: 100
+  floatingPointTolerance: 0.001
+  timestampMsTolerance: 0
+  copyMissingRows: true
+  repairWritetimeStrategy: source

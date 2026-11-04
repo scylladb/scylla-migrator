@@ -265,11 +265,11 @@ class ClientRoutesConfigTest extends munit.FunSuite {
     assertEquals(parsed.localDC, Some("dc1"))
   }
 
-  test("target: host may list several private endpoint addresses, each with its own port") {
+  test("target: host may list several private endpoint addresses") {
     val config =
       """type: scylla
-        |host: "pe-az1.example.com:9142,pe-az2.example.com"
-        |port: 9143
+        |host: [pe-az1.example.com, pe-az2.example.com]
+        |port: 9142
         |clientRoutes:
         |  endpoints:
         |    - connectionId: conn-dc1-az1
@@ -280,21 +280,9 @@ class ClientRoutesConfigTest extends munit.FunSuite {
         |stripTrailingZerosForDecimals: false
         |""".stripMargin
     val parsed = parseTarget(config)
-    assertEquals(parsed.host, "pe-az1.example.com:9142,pe-az2.example.com")
-    assertEquals(parsed.port, 9143)
-  }
-
-  test("target: rejects an invalid entry in the host list") {
-    val config =
-      """type: scylla
-        |host: "pe-az1.example.com:9142,pe-az2.example.com:notaport"
-        |port: 9143
-        |keyspace: ks
-        |table: tbl
-        |consistencyLevel: LOCAL_QUORUM
-        |stripTrailingZerosForDecimals: false
-        |""".stripMargin
-    assertDecodingError(parseTarget(config), "has an invalid port 'notaport'")
+    assertEquals(parsed.host, "pe-az1.example.com,pe-az2.example.com")
+    assertEquals(parsed.port, 9142)
+    assertEquals(parsed.clientRoutes.map(_.endpoints.size), Some(2))
   }
 
   test("target: accepts clientRoutes without localDC (the connector infers it)") {

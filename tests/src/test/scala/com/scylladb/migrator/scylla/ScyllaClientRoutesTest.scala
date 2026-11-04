@@ -96,29 +96,31 @@ class ScyllaClientRoutesTest extends MigratorSuite(sourcePort = 9044) {
   }
 
   test("every listed private endpoint address is a contact point") {
-    // Nothing listens on port 1: the session opens through the other address.
+    // Nothing listens on 127.0.0.2: the session opens through the other address.
     val connector = Connectors.targetConnector(
       new SparkConf(false),
-      routedTarget(connectionId).copy(host = s"127.0.0.1:1,localhost:$routedPort")
+      routedTarget(connectionId).copy(host = "127.0.0.2,localhost")
     )
-    val (contactPorts, nodePorts) = connector.withSessionDo { session =>
+    val (contactPoints, nodePorts) = connector.withSessionDo { session =>
       session.execute("SELECT release_version FROM system.local")
-      val contactPoints = session.getContext
+      val driverContactPoints = session.getContext
         .asInstanceOf[InternalDriverContext]
         .getMetadataManager
         .getContactPoints
         .asScala
         .toList
-      val ports = contactPoints.map(_.getEndPoint.resolve()).collect {
-        case address: InetSocketAddress => address.getPort
+      val addresses = driverContactPoints.map(_.getEndPoint.resolve()).collect {
+        case address: InetSocketAddress => address
       }
       val routed =
         session.getMetadata.getNodes.values.asScala.toList.map(_.getEndPoint.resolve()).collect {
           case address: InetSocketAddress => address.getPort
         }
-      (ports.toSet, routed)
+      (addresses, routed)
     }
-    assertEquals(contactPorts, Set(1, routedPort))
+    // The driver adds every address a name resolves to (e.g. both loopback addresses of localhost).
+    assertEquals(contactPoints.map(_.getHostString).toSet, Set("127.0.0.2", "localhost"))
+    assertEquals(contactPoints.map(_.getPort).toSet, Set(routedPort))
     assertEquals(nodePorts, List(routedPort))
   }
 

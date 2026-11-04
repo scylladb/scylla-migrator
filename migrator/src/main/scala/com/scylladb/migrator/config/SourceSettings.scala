@@ -3,7 +3,7 @@ package com.scylladb.migrator.config
 import cats.implicits._
 import com.scylladb.migrator.AwsUtils
 import io.circe.syntax._
-import io.circe.{ Decoder, DecodingFailure, Encoder, Json }
+import io.circe.{ Decoder, DecodingFailure, Encoder, Json, JsonObject }
 import io.circe.generic.semiauto.{ deriveDecoder, deriveEncoder }
 import io.circe.generic.extras.Configuration
 import io.circe.generic.extras.semiauto.{ deriveConfiguredDecoder => deriveExtrasDecoder }
@@ -17,6 +17,7 @@ import software.amazon.awssdk.services.dynamodb.model.BillingMode
 
 import java.util.Locale
 import scala.util.Try
+import scala.collection.immutable.ListMap
 
 /** Endpoint for DynamoDB-protocol connections.
   *
@@ -78,6 +79,10 @@ object SourceSettings {
     where: Option[String],
     consistencyLevel: String,
     cloud: Option[CloudConfig] = None,
+    // Opt-in: preserve per-element TTL/WRITETIME of non-frozen collection columns (maps, sets).
+    // Requires a source that supports reading collection-element metadata (Cassandra 5.0+ /
+    // modern ScyllaDB). Has no effect unless `preserveTimestamps` is also true.
+    preserveCollectionTimestamps: Boolean = false,
     clientRoutes: Option[ClientRoutesSettings] = None
   ) extends SourceSettings {
     val supportsSavepoints: Boolean = true
@@ -94,7 +99,9 @@ object SourceSettings {
     private val SentinelPort: Int = 0
 
     implicit val decoder: Decoder[Cassandra] = Decoder.instance { c =>
-      val hasHost = c.get[Option[String]]("host").exists(_.isDefined)
+      val hasHost =
+        c.get[Option[String]]("host")(Decoder.decodeOption(ContactPoints.decoder))
+          .exists(_.isDefined)
       val hasPort = c.get[Option[Int]]("port").exists(_.isDefined)
       for {
         cloud <- c.get[Option[CloudConfig]]("cloud")
@@ -125,7 +132,7 @@ object SourceSettings {
                  )
                case (true, false, false) => Right(())
              }
-        host               <- c.getOrElse[String]("host")(SentinelHost)
+        host               <- c.getOrElse[String]("host")(SentinelHost)(ContactPoints.decoder)
         port               <- c.getOrElse[Int]("port")(SentinelPort)
         localDC            <- c.get[Option[String]]("localDC")
         credentials        <- c.get[Option[Credentials]]("credentials")
@@ -136,9 +143,10 @@ object SourceSettings {
         connections        <- c.get[Option[Int]]("connections")
         fetchSize          <- c.get[Int]("fetchSize")
         preserveTimestamps <- c.get[Boolean]("preserveTimestamps")
-        where              <- c.get[Option[String]]("where")
-        consistencyLevel   <- c.get[String]("consistencyLevel")
-        clientRoutes       <- c.get[Option[ClientRoutesSettings]]("clientRoutes")
+        preserveCollectionTimestamps <- c.getOrElse[Boolean]("preserveCollectionTimestamps")(false)
+        where                        <- c.get[Option[String]]("where")
+        consistencyLevel             <- c.get[String]("consistencyLevel")
+        clientRoutes                 <- c.get[Option[ClientRoutesSettings]]("clientRoutes")
         _ <- if (cloud.isDefined && clientRoutes.isDefined)
                Left(
                  DecodingFailure(
@@ -181,24 +189,26 @@ object SourceSettings {
         where,
         consistencyLevel,
         cloud,
+        preserveCollectionTimestamps,
         clientRoutes
       )
     }
 
     implicit val encoder: Encoder.AsObject[Cassandra] = Encoder.AsObject.instance { c =>
       val common = io.circe.JsonObject(
-        "localDC"            -> c.localDC.asJson,
-        "credentials"        -> c.credentials.asJson,
-        "sslOptions"         -> c.sslOptions.asJson,
-        "keyspace"           -> c.keyspace.asJson,
-        "table"              -> c.table.asJson,
-        "splitCount"         -> c.splitCount.asJson,
-        "connections"        -> c.connections.asJson,
-        "fetchSize"          -> c.fetchSize.asJson,
-        "preserveTimestamps" -> c.preserveTimestamps.asJson,
-        "where"              -> c.where.asJson,
-        "consistencyLevel"   -> c.consistencyLevel.asJson,
-        "clientRoutes"       -> c.clientRoutes.asJson
+        "localDC"                      -> c.localDC.asJson,
+        "credentials"                  -> c.credentials.asJson,
+        "sslOptions"                   -> c.sslOptions.asJson,
+        "keyspace"                     -> c.keyspace.asJson,
+        "table"                        -> c.table.asJson,
+        "splitCount"                   -> c.splitCount.asJson,
+        "connections"                  -> c.connections.asJson,
+        "fetchSize"                    -> c.fetchSize.asJson,
+        "preserveTimestamps"           -> c.preserveTimestamps.asJson,
+        "preserveCollectionTimestamps" -> c.preserveCollectionTimestamps.asJson,
+        "where"                        -> c.where.asJson,
+        "consistencyLevel"             -> c.consistencyLevel.asJson,
+        "clientRoutes"                 -> c.clientRoutes.asJson
       )
       c.cloud match {
         case Some(cloud) =>
@@ -267,6 +277,15 @@ object SourceSettings {
     val alternatorSettings: Option[AlternatorSettings] = Some(alternatorConfig)
   }
 
+  /** Standalone codec for the `DynamoDB` source shape used when it is embedded *inside* another
+    * source (e.g. [[DynamoDBS3Export.streamSource]]). The outer `SourceSettings.decoder` still
+    * dispatches on the `type` tag; this one is field-based and ignores `type`, which is what the
+    * nested case wants.
+    */
+  object DynamoDB {
+    implicit val decoder: Decoder[DynamoDB] = deriveDecoder[DynamoDB]
+    implicit val encoder: Encoder[DynamoDB] = deriveEncoder[DynamoDB]
+  }
   case class Parquet(
     path: String,
     credentials: Option[AWSCredentials],
@@ -496,6 +515,96 @@ object SourceSettings {
     }
   }
 
+  /** @param schema
+    *   Required ordered mapping of bin names to types; an empty mapping selects only generated
+    *   columns. Missing declared bins remain null.
+    * @param invalidRecordHandling
+    *   Skip invalid records by default, or null invalid fields where the destination allows it.
+    * @param listOverflowHandling
+    *   Destination policy consumed by the Aerospike-to-ScyllaDB integration in #412; the source
+    *   reader does not apply it. Skip records exceeding the shared non-frozen list write budget by
+    *   default, or replace all contributing lists with null (nullify) or empty lists after ordinary
+    *   destination validation.
+    * @param preserveTTL
+    *   When true, adds the column named by ttlColumn (default: 'aero_ttl', IntegerType) with the
+    *   record's remaining TTL in seconds: -1 means no expiration, and 0 means the record expired
+    *   before conversion. This is ordinary source metadata, not a destination write TTL; consumers
+    *   applying expiry must handle these sentinel values explicitly. (default: false)
+    * @param preserveGeneration
+    *   When true, adds the column named by generationColumn (default: 'aero_generation',
+    *   IntegerType) with the record's generation counter. (default: false)
+    * @param totalTimeoutMs
+    *   Total timeout in milliseconds for Aerospike operations. When not specified, defaults to
+    *   `min(3 * socketTimeoutMs, Int.MaxValue)` if socketTimeoutMs is set, otherwise 30000ms.
+    * @param maxPollRetries
+    *   Maximum consecutive idle poll timeouts before failing a partition (default: 5). At the
+    *   default 120-second poll timeout, the idle-poll budget is 10 minutes. Scan retries reset this
+    *   budget; polls overlapping retry backoff do not count.
+    * @param maxConnsPerNode
+    *   Maximum number of connections to each Aerospike node (default: Aerospike client default).
+    * @param connPoolsPerNode
+    *   Number of connection pools per Aerospike node (default: Aerospike client default).
+    */
+  case class Aerospike(
+    keyMode: AerospikeKeyMode,
+    hosts: Seq[String],
+    port: Option[Int],
+    namespace: String,
+    set: String,
+    splitCount: Option[Int],
+    queueSize: Option[Int],
+    credentials: Option[Credentials],
+    connectTimeoutMs: Option[Int],
+    socketTimeoutMs: Option[Int],
+    tlsName: Option[String],
+    schema: ListMap[String, String],
+    pollTimeoutSeconds: Option[Int],
+    preserveTTL: Option[Boolean],
+    preserveGeneration: Option[Boolean],
+    totalTimeoutMs: Option[Int],
+    maxScanRetries: Option[Int],
+    maxPollRetries: Option[Int],
+    maxConnsPerNode: Option[Int],
+    connPoolsPerNode: Option[Int],
+    keyColumn: Option[String] = None,
+    ttlColumn: Option[String] = None,
+    generationColumn: Option[String] = None,
+    invalidRecordHandling: AerospikeInvalidRecordHandling = AerospikeInvalidRecordHandling.Skip,
+    listOverflowHandling: AerospikeListOverflowHandling = AerospikeListOverflowHandling.Skip
+  ) extends SourceSettings {
+    def ttlEnabled: Boolean = preserveTTL.getOrElse(false)
+    def generationEnabled: Boolean = preserveGeneration.getOrElse(false)
+    def keyColumnName: String =
+      keyColumn.getOrElse(com.scylladb.migrator.readers.Aerospike.KeyColumnName)
+    def ttlColumnName: String =
+      ttlColumn.getOrElse(com.scylladb.migrator.readers.Aerospike.TtlColumnName)
+    def generationColumnName: String =
+      generationColumn.getOrElse(com.scylladb.migrator.readers.Aerospike.GenerationColumnName)
+
+    // Aerospike reads use a custom partition-range RDD with no durable per-range progress
+    // tracking, so resumable savepoints are not supported. The reader derives
+    // `SourceDataFrame.savepointsSupported` from this flag.
+    val supportsSavepoints: Boolean = false
+  }
+
+  /** @param streamSource
+    *   When the target specifies `streamChanges` with a streaming destination (DDB Streams or
+    *   Kinesis), the S3 snapshot must be paired with a still-live source DynamoDB table from which
+    *   change events are consumed. This block captures the credentials / region / table name for
+    *   that live table. The migrator enables the configured streaming destination on this table and
+    *   uses the S3 export's `exportTime` (or `startTime` as a fallback) as the Kinesis
+    *   `AT_TIMESTAMP` default, so changes that happened after the export was taken are replayed
+    *   into the target.
+    *
+    * When the target does not stream changes, `streamSource` is ignored; supply it only when you
+    * have a live table you want to keep in sync.
+    *
+    * GitHub issue #250 acceptance criterion #4: "If the source is s3 export, we can use describe
+    * stream 'start time' as timestamp to start the stream from the time the s3 export was created."
+    * This field makes that possible (you cannot derive the live-table coordinates from the manifest
+    * alone — the manifest has a `tableArn` but not credentials or a user-supplied endpoint
+    * override).
+    */
   case class DynamoDBS3Export(
     bucket: String,
     manifestKey: String,
@@ -503,7 +612,8 @@ object SourceSettings {
     endpoint: Option[DynamoDBEndpoint],
     region: Option[String],
     credentials: Option[AWSCredentials],
-    usePathStyleAccess: Option[Boolean]
+    usePathStyleAccess: Option[Boolean],
+    streamSource: Option[DynamoDB] = None
   ) extends SourceSettings {
     lazy val finalCredentials: Option[com.scylladb.migrator.AWSCredentials] =
       AwsUtils.computeFinalCredentials(credentials, endpoint, region)
@@ -611,8 +721,30 @@ object SourceSettings {
   }
 
   private def validateCassandraSource(s: Cassandra): List[String] =
-    ContactPoints.parse("Cassandra source", s.host, s.port).swap.getOrElse(Nil) ++
+    ContactPoints.validate("Cassandra source", s.host) ++
       HostValidation.validatePort("Cassandra source", s.port)
+
+  // ListMap preserves insertion order from YAML, ensuring schema column order is deterministic.
+  // The standard Map may reorder keys for maps with 5+ entries.
+  private implicit val listMapStringDecoder: Decoder[ListMap[String, String]] =
+    Decoder.decodeJsonObject.emap { obj =>
+      val builder = ListMap.newBuilder[String, String]
+      val errors = List.newBuilder[String]
+      obj.toList.foreach { case (k, v) =>
+        v.asString match {
+          case Some(s) => builder += k -> s
+          case None    => errors += s"Expected string value for key '$k', got: ${v.noSpaces}"
+        }
+      }
+      val errs = errors.result()
+      if (errs.nonEmpty) Left(errs.mkString("; "))
+      else Right(builder.result())
+    }
+
+  private implicit val listMapStringEncoder: Encoder[ListMap[String, String]] =
+    Encoder.instance { m =>
+      Json.fromJsonObject(JsonObject.fromIterable(m.map { case (k, v) => k -> Json.fromString(v) }))
+    }
 
   implicit val decoder: Decoder[SourceSettings] = Decoder.instance { cursor =>
     cursor.get[String]("type").flatMap {
@@ -872,6 +1004,45 @@ object SourceSettings {
           else
             checkRemainingValidations()
         }
+      case "aerospike" =>
+        // Default only when absent: an explicit YAML null must fail the enum decoder.
+        val withHandlingDefault = cursor.withFocus(_.mapObject { obj =>
+          Seq("invalidRecordHandling", "listOverflowHandling").foldLeft(obj) { (fields, name) =>
+            if (fields.contains(name)) fields else fields.add(name, Json.fromString("skip"))
+          }
+        })
+        deriveDecoder[Aerospike].tryDecode(withHandlingDefault).flatMap { a =>
+          val errors = List.newBuilder[String]
+          Try(
+            com.scylladb.migrator.readers.AerospikeHosts.parse(
+              a.hosts,
+              a.port.getOrElse(com.scylladb.migrator.readers.Aerospike.DefaultPort)
+            )
+          ).failed.foreach(e => errors += e.getMessage)
+          a.splitCount.foreach(s => if (s <= 0) errors += s"splitCount must be positive, got $s")
+          a.queueSize.foreach(q => if (q <= 0) errors += s"queueSize must be positive, got $q")
+          a.pollTimeoutSeconds
+            .foreach(p => if (p <= 0) errors += s"pollTimeoutSeconds must be positive, got $p")
+          a.maxPollRetries
+            .foreach(r => if (r <= 0) errors += s"maxPollRetries must be positive, got $r")
+          a.maxConnsPerNode
+            .foreach(n => if (n <= 0) errors += s"maxConnsPerNode must be positive, got $n")
+          a.connPoolsPerNode
+            .foreach(n => if (n <= 0) errors += s"connPoolsPerNode must be positive, got $n")
+          a.socketTimeoutMs
+            .foreach(t => if (t <= 0) errors += s"socketTimeoutMs must be positive, got $t")
+          a.connectTimeoutMs
+            .foreach(t => if (t <= 0) errors += s"connectTimeoutMs must be positive, got $t")
+          a.totalTimeoutMs
+            .foreach(t => if (t <= 0) errors += s"totalTimeoutMs must be positive, got $t")
+          a.maxScanRetries
+            .foreach(r => if (r < 0) errors += s"maxScanRetries must be non-negative, got $r")
+          Try(com.scylladb.migrator.readers.Aerospike.buildSchema(a)).failed
+            .foreach(e => errors += e.getMessage)
+          val errs = errors.result()
+          if (errs.nonEmpty) Left(DecodingFailure(errs.mkString("; "), cursor.history))
+          else Right(a)
+        }
       case otherwise =>
         Left(DecodingFailure(s"Unknown source type: ${otherwise}", cursor.history))
     }
@@ -918,6 +1089,11 @@ object SourceSettings {
       deriveEncoder[MySQL]
         .encodeObject(s)
         .add("type", Json.fromString("mysql"))
+        .asJson
+    case s: Aerospike =>
+      deriveEncoder[Aerospike]
+        .encodeObject(s)
+        .add("type", Json.fromString("aerospike"))
         .asJson
   }
 }

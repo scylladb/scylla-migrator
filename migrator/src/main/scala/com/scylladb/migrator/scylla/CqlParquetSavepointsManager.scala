@@ -2,8 +2,8 @@ package com.scylladb.migrator.scylla
 
 import com.datastax.spark.connector.rdd.partitioner.{ CassandraPartition, CqlTokenRange }
 import com.datastax.spark.connector.rdd.partitioner.dht.Token
-import com.scylladb.migrator.SavepointsManager
-import com.scylladb.migrator.config.{ MigratorConfig, SparkSecretRedaction }
+import com.scylladb.migrator.{ SavepointStore, SavepointsManager }
+import com.scylladb.migrator.config.MigratorConfig
 import org.apache.logging.log4j.LogManager
 import org.apache.spark.scheduler.{ SparkListener, SparkListenerTaskEnd }
 import org.apache.spark.{ SparkContext, Success => TaskEndSuccess }
@@ -20,11 +20,10 @@ class CqlParquetSavepointsManager(
   cqlTokenRangeAccumulator: CqlTokenRangeAccumulator,
   sparkTaskEndListener: SparkListener,
   spark: SparkContext,
-  redactionRegex: Option[String] = None
+  savepointStore: Option[SavepointStore] = None
 ) extends SavepointsManager(
       migratorConfig,
-      Some(spark.hadoopConfiguration),
-      redactionRegex
+      savepointStore.orElse(Some(SavepointStore.forConfig(migratorConfig, Some(spark))))
     ) {
 
   def describeMigrationState(): String =
@@ -96,7 +95,7 @@ object CqlParquetSavepointsManager {
       cqlTokenRangeAccumulator,
       sparkTaskEndListener,
       spark,
-      redactionRegex.orElse(SparkSecretRedaction.redactionRegex(spark))
+      Some(SavepointStore.forConfig(migratorConfig, Some(spark), redactionRegex))
     )
   }
 

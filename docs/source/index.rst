@@ -11,6 +11,8 @@ The ScyllaDB Migrator is a Spark application that migrates data to ScyllaDB. Its
 
 Read over the :doc:`Getting Started </getting-started/index>` page to set up a Spark cluster and to configure your migration. Alternatively, follow our :doc:`step-by-step tutorial to perform a migration between fake databases using Docker </tutorials/dynamodb-to-scylladb-alternator/index>`.
 
+.. _compatibility-matrix:
+
 --------------------
 Compatibility Matrix
 --------------------

@@ -1,6 +1,7 @@
 package com.scylladb.migrator
 
-import com.scylladb.migrator.config.MigratorConfig
+import com.scylladb.migrator.config.{ MigratorConfig, SavepointTarget }
+import org.apache.spark.SparkContext
 import org.apache.hadoop.conf.Configuration
 import org.apache.logging.log4j.LogManager
 
@@ -26,74 +27,92 @@ object SavepointsResume {
   def resume(
     config: MigratorConfig,
     baseHadoopConfiguration: Option[Configuration],
-    redactionRegex: Option[String]
+    redactionRegex: Option[String],
+    sparkContext: Option[SparkContext] = None
   ): MigratorConfig =
     if (!config.source.supportsSavepoints || !config.savepoints.autoResume) config
     else
-      try {
-        val hadoopConfiguration =
-          SavepointStorage.hadoopConfiguration(config, baseHadoopConfiguration, redactionRegex)
-        val storagePath = config.savepoints.storagePath
-        val pathIO = PathIO.forPath(storagePath, Some(hadoopConfiguration))
-
-        if (!pathIO.exists(storagePath)) {
-          log.info(
-            s"Auto-resume: savepoints location ${pathIO.normalize(storagePath)} does not exist " +
-              s"yet; starting from the provided configuration."
-          )
-          config
-        } else {
-          // Walk savepoints newest-first and resume from the first one that parses. A single
-          // corrupt or partially-written latest savepoint (e.g. an in-flight object-store write)
-          // must not discard older, still-recoverable progress, so per-file read/parse errors are
-          // logged and skipped rather than aborting the whole resume.
-          val firstValidSavepoint =
-            SavepointsManager
-              .savepointNamesNewestFirst(pathIO.listFileNames(storagePath))
-              .iterator
-              .flatMap { name =>
-                val candidatePath = s"${storagePath}/${name}"
-                try
-                  Some(candidatePath -> MigratorConfig.loadFrom(candidatePath, hadoopConfiguration))
-                catch {
-                  case NonFatal(e) =>
-                    log.warn(
-                      s"Auto-resume: skipping unreadable savepoint " +
-                        s"${pathIO.normalize(candidatePath)}; trying an older one.",
-                      e
-                    )
-                    None
-                }
-              }
-              .nextOption()
-
-          firstValidSavepoint match {
-            case None =>
-              log.info(
-                s"Auto-resume: no usable savepoint found in ${pathIO.normalize(storagePath)}; " +
-                  s"starting from the provided configuration."
-              )
-              config
-            case Some((latestPath, savepoint)) =>
-              val merged = mergeSkipState(config, savepoint)
-              log.info(
-                s"Auto-resume: merged skip-state from ${pathIO.normalize(latestPath)} " +
-                  s"(skipTokenRanges=${merged.skipTokenRanges.fold(0)(_.size)}, " +
-                  s"skipSegments=${merged.skipSegments.fold(0)(_.size)}, " +
-                  s"skipParquetFiles=${merged.skipParquetFiles.fold(0)(_.size)})."
-              )
-              merged
-          }
+      try
+        config.savepoints.resolvedTarget match {
+          case _: SavepointTarget.TargetTable =>
+            val store = SavepointStore.target(config, sparkContext)
+            store.prepare()
+            val merged = mergeSkipState(config, store.latestConfig())
+            log.info("Auto-resume: merged matching progress from the target savepoints table.")
+            merged
+          case _: SavepointTarget.StoragePathTarget =>
+            resumeFromFiles(config, baseHadoopConfiguration, redactionRegex)
         }
-      } catch {
+      catch {
         case NonFatal(e) =>
           log.warn(
-            s"Auto-resume: could not load prior savepoint state from " +
-              s"${config.savepoints.storagePath}; starting from the provided configuration.",
+            s"Auto-resume: could not load prior ${config.savepoints.resolvedTarget.targetType} " +
+              "savepoint state; starting from the provided configuration.",
             e
           )
           config
       }
+
+  private def resumeFromFiles(
+    config: MigratorConfig,
+    baseHadoopConfiguration: Option[Configuration],
+    redactionRegex: Option[String]
+  ): MigratorConfig = {
+    val hadoopConfiguration =
+      SavepointStorage.hadoopConfiguration(config, baseHadoopConfiguration, redactionRegex)
+    val storagePath = config.savepoints.storagePath
+    val pathIO = PathIO.forPath(storagePath, Some(hadoopConfiguration))
+
+    if (!pathIO.exists(storagePath)) {
+      log.warn(
+        s"Auto-resume: savepoints location ${pathIO.normalize(storagePath)} does not exist " +
+          s"yet; starting from the provided configuration."
+      )
+      config
+    } else {
+      // Walk savepoints newest-first and resume from the first one that parses. A single
+      // corrupt or partially-written latest savepoint (e.g. an in-flight object-store write)
+      // must not discard older, still-recoverable progress, so per-file read/parse errors are
+      // logged and skipped rather than aborting the whole resume.
+      val firstValidSavepoint =
+        SavepointsManager
+          .savepointNamesNewestFirst(pathIO.listFileNames(storagePath))
+          .iterator
+          .flatMap { name =>
+            val candidatePath = s"${storagePath}/${name}"
+            try
+              Some(candidatePath -> MigratorConfig.loadFrom(candidatePath, hadoopConfiguration))
+            catch {
+              case NonFatal(e) =>
+                log.warn(
+                  s"Auto-resume: skipping unreadable savepoint " +
+                    s"${pathIO.normalize(candidatePath)}; trying an older one.",
+                  e
+                )
+                None
+            }
+          }
+          .nextOption()
+
+      firstValidSavepoint match {
+        case None =>
+          log.warn(
+            s"Auto-resume: no usable savepoint found in ${pathIO.normalize(storagePath)}; " +
+              s"starting from the provided configuration."
+          )
+          config
+        case Some((latestPath, savepoint)) =>
+          val merged = mergeSkipState(config, savepoint)
+          log.info(
+            s"Auto-resume: merged skip-state from ${pathIO.normalize(latestPath)} " +
+              s"(skipTokenRanges=${merged.skipTokenRanges.fold(0)(_.size)}, " +
+              s"skipSegments=${merged.skipSegments.fold(0)(_.size)}, " +
+              s"skipParquetFiles=${merged.skipParquetFiles.fold(0)(_.size)})."
+          )
+          merged
+      }
+    }
+  }
 
   /** Union the skip-state of `savepoint` into `config`. A field stays `None` only when both sides
     * are `None`, so a freshly merged config never spuriously gains an empty skip set.

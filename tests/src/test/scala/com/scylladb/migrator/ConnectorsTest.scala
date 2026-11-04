@@ -167,6 +167,33 @@ class ConnectorsTest extends munit.FunSuite {
     }
   }
 
+  test("target: multiple hosts produce one contact point each") {
+    val target = baseScyllaTarget.copy(
+      host  = "10.0.0.1, 10.0.0.2,[2001:db8::1]",
+      port  = 19042,
+      cloud = None
+    )
+
+    val conf = Connectors.buildTargetConf(new SparkConf(false), target)
+
+    conf.contactInfo match {
+      case ip: IpBasedContactInfo =>
+        assertEquals(
+          ip.hosts.map(_.getHostString),
+          Set("10.0.0.1", "10.0.0.2", "2001:db8:0:0:0:0:0:1")
+        )
+        assert(ip.hosts.forall(_.getPort == 19042))
+      case other => fail(s"Expected IpBasedContactInfo, got $other")
+    }
+  }
+
+  test("sparkSessionOptions: multiple hosts are passed as a comma-separated list") {
+    val options = Connectors.sparkSessionOptions(
+      Connectors.targetSessionOptions(baseScyllaTarget.copy(host = "10.0.0.1, 10.0.0.2"))
+    )
+    assertEquals(options("spark.cassandra.connection.host"), "10.0.0.1,10.0.0.2")
+  }
+
   // ---------------------------------------------------------------------------
   // Client routes
   // ---------------------------------------------------------------------------
@@ -195,25 +222,6 @@ class ConnectorsTest extends munit.FunSuite {
       case ip: IpBasedContactInfo =>
         assertEquals(ip.hosts.head.getHostString, "pl-endpoint.example.com")
         assertEquals(ip.hosts.head.getPort, 9042)
-      case other => fail(s"Expected IpBasedContactInfo, got $other")
-    }
-  }
-
-  test("several private endpoint addresses all become contact points") {
-    val target = baseScyllaTarget.copy(
-      host         = "pe-az1.example.com:9142,pe-az2.example.com",
-      port         = 9143,
-      clientRoutes = Some(routes)
-    )
-
-    val conf = Connectors.buildTargetConf(new SparkConf(false), target)
-
-    conf.contactInfo match {
-      case ip: IpBasedContactInfo =>
-        assertEquals(
-          ip.hosts.map(address => address.getHostString -> address.getPort),
-          Set("pe-az1.example.com" -> 9142, "pe-az2.example.com" -> 9143)
-        )
       case other => fail(s"Expected IpBasedContactInfo, got $other")
     }
   }
