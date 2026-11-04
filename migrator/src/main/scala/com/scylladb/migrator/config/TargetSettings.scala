@@ -89,14 +89,6 @@ object TargetSettings {
                  )
                )
              else Right(())
-        _ <- if (clientRoutes.isDefined && localDC.isEmpty)
-               Left(
-                 DecodingFailure(
-                   "Scylla target: 'localDC' is required when 'clientRoutes' is set.",
-                   c.history
-                 )
-               )
-             else Right(())
         _ <- if (cloud.isDefined && localDC.isDefined)
                Left(
                  DecodingFailure(
@@ -242,7 +234,7 @@ object TargetSettings {
   }
 
   private def validateScyllaTarget(t: Scylla): List[String] =
-    HostValidation.validateHostOrIp("Scylla target", t.host) ++
+    ContactPoints.parse("Scylla target", t.host, t.port).swap.getOrElse(Nil) ++
       HostValidation.validatePort("Scylla target", t.port)
 
   implicit val decoder: Decoder[TargetSettings] =

@@ -1,45 +1,50 @@
 package com.scylladb.migrator.config
 
-import com.datastax.oss.driver.api.core.config.{ ClientRouteProxy, ClientRoutesConfig }
+import com.datastax.oss.driver.api.core.config.ClientRouteProxy
+import com.datastax.spark.connector.cql.{ ClientRouteEndpointConf, ClientRoutesConf }
 import io.circe.{ Decoder, DecodingFailure, Encoder, JsonObject }
 import io.circe.syntax._
 
 import scala.util.Try
 
 /** Connect to a ScyllaDB Cloud cluster through a private endpoint (AWS PrivateLink, GCP Private
-  * Service Connect) using the driver's client routes support.
+  * Service Connect) using the client routes support of the Spark connector and the driver.
   *
   * The driver reads `system.client_routes` for the configured connection IDs and replaces the
   * address of every node with the private endpoint address and port published for it, so the Spark
   * driver and executors never need to reach node IPs directly. Requires ScyllaDB Cloud (or ScyllaDB
-  * 2026.1+ with routes registered through the `/v2/client-routes` REST API).
+  * 2026.1+ with routes registered through the `/v2/client-routes` REST API). When the Spark driver
+  * opens its first session, the connector checks that every node of the local datacenter has a
+  * usable route.
   *
-  * When this configuration is present, `host`/`port` must point at a private endpoint address that
-  * reaches one node (it is only used as the initial contact point), and `localDC` is mandatory.
-  * `cloud` must not be set.
+  * When this configuration is present, `host`/`port` are the private endpoint address(es) and port
+  * provided by the user, only used as initial contact points (see [[ContactPoints]] for listing
+  * several addresses), and `cloud` must not be set. `localDC` can be omitted when the listed
+  * connection IDs route the nodes of a single datacenter: the connector then uses that datacenter.
   *
   * @param endpoints
-  *   One entry per private endpoint connection. A multi-datacenter cluster typically exposes one
-  *   connection ID per datacenter; list every connection ID the migrator is allowed to use. The
-  *   connection covering `localDC` must be present.
+  *   One entry per private endpoint connection. A cluster can expose several connection IDs per
+  *   datacenter (e.g. one per availability zone) across several datacenters; list every connection
+  *   ID the migrator is allowed to use. Together, the listed IDs must route every node of the local
+  *   datacenter. When a node is published under several listed IDs, the driver uses one of them.
   * @param shardAwareness
-  *   Keep shard-aware routing through the load balancer. Only enable it when the endpoint forwards
-  *   the client source port (Proxy Protocol v2); otherwise connections land on random shards and
-  *   the driver may open excess connections.
+  *   Enable advanced shard awareness: the driver picks the source port of each connection so that
+  *   it lands on a given shard. Off by default, as in the driver. ScyllaDB Cloud private endpoints
+  *   support it, so enable it there; leave it off for a proxy that does not preserve the client
+  *   source port (Proxy Protocol v2). With `false`, basic shard awareness still applies: the driver
+  *   sends each request to a connection of the shard that owns the data.
   */
 case class ClientRoutesSettings(
   endpoints: List[ClientRouteEndpoint],
   shardAwareness: Boolean = false
 ) {
-  def toDriverConfig: ClientRoutesConfig =
-    endpoints
-      .foldLeft(ClientRoutesConfig.builder()) { (builder, endpoint) =>
-        builder.addEndpoint(
-          new ClientRouteProxy(endpoint.connectionId, endpoint.connectionAddr.orNull)
-        )
-      }
-      .withShardAwareness(shardAwareness)
-      .build()
+  def toConnectorConf: ClientRoutesConf =
+    ClientRoutesConf(
+      endpoints.map(endpoint =>
+        ClientRouteEndpointConf(endpoint.connectionId, endpoint.connectionAddr)
+      ),
+      shardAwareness = shardAwareness
+    )
 }
 
 /** @param connectionId

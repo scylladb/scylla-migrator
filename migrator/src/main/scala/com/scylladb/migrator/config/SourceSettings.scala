@@ -147,14 +147,6 @@ object SourceSettings {
                  )
                )
              else Right(())
-        _ <- if (clientRoutes.isDefined && localDC.isEmpty)
-               Left(
-                 DecodingFailure(
-                   "Cassandra source: 'localDC' is required when 'clientRoutes' is set.",
-                   c.history
-                 )
-               )
-             else Right(())
         _ <- if (cloud.isDefined && localDC.isDefined)
                Left(
                  DecodingFailure(
@@ -619,7 +611,7 @@ object SourceSettings {
   }
 
   private def validateCassandraSource(s: Cassandra): List[String] =
-    HostValidation.validateHostOrIp("Cassandra source", s.host) ++
+    ContactPoints.parse("Cassandra source", s.host, s.port).swap.getOrElse(Nil) ++
       HostValidation.validatePort("Cassandra source", s.port)
 
   implicit val decoder: Decoder[SourceSettings] = Decoder.instance { cursor =>

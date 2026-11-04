@@ -69,7 +69,8 @@ A source of type ``cassandra`` can be used together with a target of type ``cass
 
   source:
     type: cassandra
-    # Host name of one of the nodes of your database cluster
+    # Host name of one of the nodes of your database cluster. Several hosts can be listed,
+    # comma-separated, each optionally with its own port: "<host-1>,<host-2>:<port-2>"
     host: <cassandra-server-01>
     # TCP port to use for CQL
     port: 9042
@@ -186,41 +187,65 @@ every node through the private endpoint address and port published for it, so th
 and executors never need to reach the node IP addresses. Client routes require ScyllaDB Cloud
 (ScyllaDB 2026.1 or later).
 
-- ``host`` and ``port`` must point at an address of the private endpoint that reaches one node of
-  the cluster. They are only used for the initial connection.
-- ``localDC`` is required.
+- ``host`` and ``port`` are the private endpoint address and port you were given for the cluster.
+  The port is the one of the private endpoint, not necessarily 9042 (the usual port without client
+  routes). They are only used for the initial connection.
+- When you have several private endpoint addresses (for example one per availability zone), list
+  them all in ``host``, comma-separated; an address with a different port is written
+  ``address:port``, and ``port`` applies to the others. The migrator tries all of them for the
+  initial connection, so it still connects while one of them is unavailable.
+- ``localDC`` is optional when the listed connection IDs only route the nodes of one datacenter:
+  that datacenter is then used. Set it when they route several datacenters.
 - ``cloud`` must not be set.
 - ``sslOptions`` can be combined with ``clientRoutes``; the driver then uses the TLS port
-  published for each route.
+  published for each route. Enable it when the private connection only accepts TLS.
+- ``connectionAddr`` replaces the address published for a connection ID. Set it to the endpoint IP
+  address when the published DNS name does not resolve inside your VPC, for example on GCP Private
+  Service Connect or on AWS without private DNS enabled on the VPC endpoint.
 
-When a cluster spans several datacenters, ScyllaDB Cloud usually exposes one connection ID per
-datacenter. List every connection ID the migrator may use; the one serving ``localDC`` is
-mandatory. Before migrating, the migrator checks that every node of ``localDC`` has a route for
-one of the listed connection IDs, and fails with an error naming the uncovered nodes otherwise.
+A cluster can have several connection IDs: one per availability zone of each datacenter, across
+several datacenters. The connection IDs are shown in the ScyllaDB Cloud console with the private
+connection details. List every connection ID the migrator may use. Together, the listed IDs must
+route every node of the local datacenter, so include all the connection IDs that serve it. Listing
+the IDs of other datacenters is harmless when ``localDC`` is set: the migrator only connects to
+nodes of the local datacenter.
+
+When the migrator first connects, the Spark connector checks that every node of the local
+datacenter has a usable route (one that publishes the port the driver needs, ``tls_port`` when TLS
+is enabled) for one of the listed connection IDs, and fails with an error naming the uncovered
+nodes otherwise. When a node is
+published under several of the listed connection IDs, the driver uses one of those routes; the
+order of ``endpoints`` does not choose which.
 
 .. code-block:: yaml
 
   source:
     type: scylla
-    # Private endpoint address used for the initial connection
+    # Private endpoint address(es) used for the initial connection, comma-separated,
+    # e.g. "<private-endpoint-address-az1>,<private-endpoint-address-az2>:<other-port>"
     host: <private-endpoint-address>
-    port: 9042
-    # Required with clientRoutes
+    # Port of the private endpoint
+    port: <private-endpoint-port>
+    # Optional with clientRoutes when the connection IDs route a single datacenter
     localDC: <datacenter>
     credentials:
       username: <username>
       password: <pass>
     clientRoutes:
       endpoints:
-        # Connection ID shown in the ScyllaDB Cloud console for the private endpoint
-        - connectionId: <connection-id-dc1>
+        # Connection IDs shown in the ScyllaDB Cloud console, e.g. one per availability zone
+        - connectionId: <connection-id-dc1-az1>
+        - connectionId: <connection-id-dc1-az2>
         # Optional - hostname or IP address (without port) that replaces the address
-        # published by ScyllaDB Cloud for this connection ID
-        - connectionId: <connection-id-dc2>
-          connectionAddr: <vpc-local-endpoint-alias>
-      # Optional - keep shard-aware routing through the load balancer. Only enable it when
-      # the private endpoint forwards the client source port (Proxy Protocol v2). Default: false
-      shardAwareness: false
+        # published by ScyllaDB Cloud for this connection ID, e.g. the endpoint IP address
+        - connectionId: <connection-id-dc2-az1>
+          connectionAddr: <endpoint-ip-address>
+      # Optional - advanced shard awareness: the driver picks each connection's source port
+      # to reach a given shard. ScyllaDB Cloud private endpoints support it, but it is off by
+      # default on the client side: set it to true on ScyllaDB Cloud. Leave it false for a
+      # proxy that does not preserve the client source port (Proxy Protocol v2). Default: false.
+      # Requests are sent to the right shard either way (basic shard awareness).
+      shardAwareness: true
     keyspace: <keyspace>
     table: <table>
     consistencyLevel: LOCAL_QUORUM
@@ -432,7 +457,8 @@ Apache Cassandra Target
 
   target:
     type: cassandra
-    # Host name of one of the nodes of your target database cluster
+    # Host name of one of the nodes of your target database cluster. Several hosts can be
+    # listed, comma-separated, each optionally with its own port: "<host-1>,<host-2>:<port-2>"
     host: <scylla-server-01>
     # TCP port for CQL
     port: 9042
@@ -518,22 +544,23 @@ ScyllaDB Cloud private endpoints (PrivateLink, Private Service Connect)
 """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 Same semantics as :ref:`config-cassandra-client-routes-source` but on the target side:
-``host``/``port`` point at the private endpoint, ``localDC`` is required, and ``cloud`` must not
-be set.
+``host``/``port`` point at the private endpoint, ``localDC`` is required only when the listed
+connection IDs route several datacenters, and ``cloud`` must not be set.
 
 .. code-block:: yaml
 
   target:
     type: scylla
-    host: <private-endpoint-address>
-    port: 9042
+    host: <private-endpoint-address-az1>,<private-endpoint-address-az2>
+    port: <private-endpoint-port>
     localDC: <datacenter>
     credentials:
       username: <username>
       password: <pass>
     clientRoutes:
       endpoints:
-        - connectionId: <connection-id-dc1>
+        - connectionId: <connection-id-dc1-az1>
+        - connectionId: <connection-id-dc1-az2>
     keyspace: <keyspace>
     table: <table>
     consistencyLevel: LOCAL_QUORUM

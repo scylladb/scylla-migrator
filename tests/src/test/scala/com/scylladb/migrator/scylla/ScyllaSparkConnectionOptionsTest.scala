@@ -1,5 +1,6 @@
 package com.scylladb.migrator.scylla
 
+import com.datastax.spark.connector.cql.CassandraConnectorConf
 import com.datastax.spark.connector.datasource.CassandraSourceUtil
 import com.scylladb.migrator.Connectors
 import com.scylladb.migrator.config.{
@@ -183,10 +184,44 @@ class ScyllaSparkConnectionOptionsTest extends munit.FunSuite {
     }
   }
 
-  test("client routes target is rejected with IllegalArgumentException") {
+  test("client routes become the connector's client routes options") {
+    val routes = ClientRoutesSettings(
+      List(
+        ClientRouteEndpoint("conn-dc1-az1"),
+        ClientRouteEndpoint("conn-dc1-az2", Some("10.0.0.5"))
+      ),
+      shardAwareness = true
+    )
+    val routedTarget = baseTarget.copy(clientRoutes = Some(routes))
+    val readerOpts = ScyllaSparkConnectionOptions.readerOptionsFromTargetSettings(routedTarget)
+    val sessionConf = ScyllaSparkConnectionOptions.sessionConfFromTargetSettings(routedTarget)
+
+    assertEquals(
+      sessionConf(scoped("spark.cassandra.connection.clientRoutes.endpoints")),
+      "conn-dc1-az1,conn-dc1-az2=10.0.0.5"
+    )
+    assertEquals(
+      sessionConf(scoped("spark.cassandra.connection.clientRoutes.shardAwareness")),
+      "true"
+    )
+
+    // The connector parses them back into the same routes.
+    val consolidated = CassandraSourceUtil.consolidateConfs(
+      sparkConf   = new SparkConf(false),
+      sqlConf     = sessionConf,
+      cluster     = readerOpts("cluster"),
+      keyspace    = readerOpts("keyspace"),
+      userOptions = readerOpts
+    )
+    assertEquals(
+      CassandraConnectorConf.getClientRoutesFromSparkConf(consolidated),
+      Some(routes.toConnectorConf)
+    )
+  }
+
+  test("client routes with a connection ID that SparkConf cannot express are rejected") {
     val routedTarget = baseTarget.copy(
-      localDC      = Some("dc1"),
-      clientRoutes = Some(ClientRoutesSettings(List(ClientRouteEndpoint("conn-dc1"))))
+      clientRoutes = Some(ClientRoutesSettings(List(ClientRouteEndpoint("conn=1"))))
     )
     intercept[IllegalArgumentException] {
       ScyllaSparkConnectionOptions.sessionConfFromTargetSettings(routedTarget)

@@ -1,6 +1,9 @@
 package com.scylladb.migrator
 
+import com.datastax.oss.driver.api.core.config.{ DefaultDriverOption, DriverConfigLoader }
 import com.datastax.spark.connector.cql.{
+  ClientRouteEndpointConf,
+  ClientRoutesConf,
   CloudBasedContactInfo,
   DefaultConnectionFactory,
   IpBasedContactInfo,
@@ -172,7 +175,11 @@ class ConnectorsTest extends munit.FunSuite {
     List(ClientRouteEndpoint("conn-dc1"), ClientRouteEndpoint("conn-dc2", Some("10.0.0.5")))
   )
 
-  test("source: clientRoutes installs the client routes connection factory") {
+  private val connectorRoutes = ClientRoutesConf(
+    Seq(ClientRouteEndpointConf("conn-dc1"), ClientRouteEndpointConf("conn-dc2", Some("10.0.0.5")))
+  )
+
+  test("source: clientRoutes sets the connector's client routes") {
     val source = baseCassandraSource.copy(
       host         = "pl-endpoint.example.com",
       localDC      = Some("dc1"),
@@ -181,7 +188,8 @@ class ConnectorsTest extends munit.FunSuite {
 
     val conf = Connectors.buildSourceConf(new SparkConf(false), source)
 
-    assertEquals(conf.connectionFactory, ClientRoutesConnectionFactory(routes))
+    assertEquals(conf.clientRoutes, Some(connectorRoutes))
+    assertEquals(conf.connectionFactory, DefaultConnectionFactory)
     assertEquals(conf.localDC, Some("dc1"))
     conf.contactInfo match {
       case ip: IpBasedContactInfo =>
@@ -191,23 +199,44 @@ class ConnectorsTest extends munit.FunSuite {
     }
   }
 
-  test("target: clientRoutes installs the client routes connection factory") {
-    val target = baseScyllaTarget.copy(localDC = Some("dc1"), clientRoutes = Some(routes))
+  test("several private endpoint addresses all become contact points") {
+    val target = baseScyllaTarget.copy(
+      host         = "pe-az1.example.com:9142,pe-az2.example.com",
+      port         = 9143,
+      clientRoutes = Some(routes)
+    )
 
     val conf = Connectors.buildTargetConf(new SparkConf(false), target)
 
-    assertEquals(conf.connectionFactory, ClientRoutesConnectionFactory(routes))
-    assertEquals(conf.localDC, Some("dc1"))
+    conf.contactInfo match {
+      case ip: IpBasedContactInfo =>
+        assertEquals(
+          ip.hosts.map(address => address.getHostString -> address.getPort),
+          Set("pe-az1.example.com" -> 9142, "pe-az2.example.com" -> 9143)
+        )
+      case other => fail(s"Expected IpBasedContactInfo, got $other")
+    }
   }
 
-  test("without clientRoutes the default connection factory is kept") {
+  test("target: clientRoutes sets the connector's client routes, localDC may be omitted") {
+    val target = baseScyllaTarget.copy(
+      clientRoutes = Some(routes.copy(shardAwareness = true))
+    )
+
+    val conf = Connectors.buildTargetConf(new SparkConf(false), target)
+
+    assertEquals(conf.clientRoutes, Some(connectorRoutes.copy(shardAwareness = true)))
+    assertEquals(conf.localDC, None)
+  }
+
+  test("without clientRoutes the connector's client routes stay unset") {
     assertEquals(
-      Connectors.buildSourceConf(new SparkConf(false), baseCassandraSource).connectionFactory,
-      DefaultConnectionFactory
+      Connectors.buildSourceConf(new SparkConf(false), baseCassandraSource).clientRoutes,
+      None
     )
     assertEquals(
-      Connectors.buildTargetConf(new SparkConf(false), baseScyllaTarget).connectionFactory,
-      DefaultConnectionFactory
+      Connectors.buildTargetConf(new SparkConf(false), baseScyllaTarget).clientRoutes,
+      None
     )
   }
 
@@ -231,14 +260,38 @@ class ConnectorsTest extends munit.FunSuite {
     )
   }
 
-  test("client routes connection factory survives Java serialization") {
-    val factory = ClientRoutesConnectionFactory(routes.copy(shardAwareness = true))
+  test("client routes turn advanced shard awareness off unless shardAwareness is set") {
+    def driverProfile(settings: ClientRoutesSettings) = {
+      val conf = Connectors.buildTargetConf(
+        new SparkConf(false),
+        baseScyllaTarget.copy(localDC = Some("dc1"), clientRoutes = Some(settings))
+      )
+      DefaultConnectionFactory
+        .connectorConfigBuilder(conf, DriverConfigLoader.programmaticBuilder())
+        .build()
+        .getInitialConfig
+        .getDefaultProfile
+    }
+
+    val defaults = driverProfile(routes)
+    assert(!defaults.getBoolean(DefaultDriverOption.CONNECTION_ADVANCED_SHARD_AWARENESS_ENABLED))
+    assertEquals(defaults.getString(DefaultDriverOption.LOAD_BALANCING_LOCAL_DATACENTER), "dc1")
+
+    val shardAware = driverProfile(routes.copy(shardAwareness = true))
+    assert(shardAware.getBoolean(DefaultDriverOption.CONNECTION_ADVANCED_SHARD_AWARENESS_ENABLED))
+  }
+
+  test("a conf with client routes survives Java serialization") {
+    val conf = Connectors.buildTargetConf(
+      new SparkConf(false),
+      baseScyllaTarget.copy(localDC = Some("dc1"), clientRoutes = Some(routes))
+    )
     val bytes = new ByteArrayOutputStream()
     val out = new ObjectOutputStream(bytes)
-    out.writeObject(factory)
+    out.writeObject(conf)
     out.close()
     val restored = new ObjectInputStream(new ByteArrayInputStream(bytes.toByteArray)).readObject()
-    assertEquals(restored, factory)
+    assertEquals(restored, conf)
   }
 
   // ---------------------------------------------------------------------------

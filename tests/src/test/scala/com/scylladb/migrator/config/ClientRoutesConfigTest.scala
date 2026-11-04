@@ -1,6 +1,7 @@
 package com.scylladb.migrator.config
 
 import com.datastax.oss.driver.api.core.config.ClientRouteProxy
+import com.datastax.spark.connector.cql.{ ClientRouteEndpointConf, ClientRoutesConf }
 import io.circe.{ yaml, DecodingFailure }
 import io.circe.syntax._
 
@@ -70,7 +71,7 @@ class ClientRoutesConfigTest extends munit.FunSuite {
     )
   }
 
-  test("source: rejects clientRoutes without localDC") {
+  test("source: accepts clientRoutes without localDC (the connector infers it)") {
     val config =
       """type: scylla
         |host: pl-endpoint.example.com
@@ -84,7 +85,9 @@ class ClientRoutesConfigTest extends munit.FunSuite {
         |preserveTimestamps: true
         |fetchSize: 1000
         |""".stripMargin
-    assertDecodingError(parseSource(config), "'localDC' is required")
+    val parsed = parseSource(config)
+    assertEquals(parsed.localDC, None)
+    assertEquals(parsed.clientRoutes.map(_.endpoints), Some(List(ClientRouteEndpoint("conn-dc1"))))
   }
 
   test("source: rejects clientRoutes together with cloud") {
@@ -262,7 +265,39 @@ class ClientRoutesConfigTest extends munit.FunSuite {
     assertEquals(parsed.localDC, Some("dc1"))
   }
 
-  test("target: rejects clientRoutes without localDC") {
+  test("target: host may list several private endpoint addresses, each with its own port") {
+    val config =
+      """type: scylla
+        |host: "pe-az1.example.com:9142,pe-az2.example.com"
+        |port: 9143
+        |clientRoutes:
+        |  endpoints:
+        |    - connectionId: conn-dc1-az1
+        |    - connectionId: conn-dc1-az2
+        |keyspace: ks
+        |table: tbl
+        |consistencyLevel: LOCAL_QUORUM
+        |stripTrailingZerosForDecimals: false
+        |""".stripMargin
+    val parsed = parseTarget(config)
+    assertEquals(parsed.host, "pe-az1.example.com:9142,pe-az2.example.com")
+    assertEquals(parsed.port, 9143)
+  }
+
+  test("target: rejects an invalid entry in the host list") {
+    val config =
+      """type: scylla
+        |host: "pe-az1.example.com:9142,pe-az2.example.com:notaport"
+        |port: 9143
+        |keyspace: ks
+        |table: tbl
+        |consistencyLevel: LOCAL_QUORUM
+        |stripTrailingZerosForDecimals: false
+        |""".stripMargin
+    assertDecodingError(parseTarget(config), "has an invalid port 'notaport'")
+  }
+
+  test("target: accepts clientRoutes without localDC (the connector infers it)") {
     val config =
       """type: scylla
         |host: pl-endpoint.example.com
@@ -275,7 +310,9 @@ class ClientRoutesConfigTest extends munit.FunSuite {
         |consistencyLevel: LOCAL_QUORUM
         |stripTrailingZerosForDecimals: false
         |""".stripMargin
-    assertDecodingError(parseTarget(config), "'localDC' is required")
+    val parsed = parseTarget(config)
+    assertEquals(parsed.localDC, None)
+    assertEquals(parsed.clientRoutes.map(_.endpoints), Some(List(ClientRouteEndpoint("conn-dc1"))))
   }
 
   test("target: rejects clientRoutes together with cloud") {
@@ -323,17 +360,52 @@ class ClientRoutesConfigTest extends munit.FunSuite {
   // Driver mapping
   // ---------------------------------------------------------------------------
 
-  test("toDriverConfig maps endpoints and shard awareness") {
-    val driverConfig = ClientRoutesSettings(
+  test("toConnectorConf maps endpoints and shard awareness") {
+    val connectorConf = ClientRoutesSettings(
       List(ClientRouteEndpoint("conn-dc1"), ClientRouteEndpoint("conn-dc2", Some("10.0.0.5"))),
       shardAwareness = true
-    ).toDriverConfig
+    ).toConnectorConf
 
     assertEquals(
-      driverConfig.getEndpoints.asScala.toList,
+      connectorConf,
+      ClientRoutesConf(
+        Seq(
+          ClientRouteEndpointConf("conn-dc1"),
+          ClientRouteEndpointConf("conn-dc2", Some("10.0.0.5"))
+        ),
+        shardAwareness = true
+      )
+    )
+    assert(connectorConf.verify, "the connector must verify the routes")
+    assertEquals(
+      connectorConf.toDriver.getEndpoints.asScala.toList,
       List(new ClientRouteProxy("conn-dc1", null), new ClientRouteProxy("conn-dc2", "10.0.0.5"))
     )
-    assert(driverConfig.isShardAwarenessEnabled)
+  }
+
+  test("target: accepts one connection ID per availability zone of several datacenters") {
+    val connectionIds =
+      for {
+        dc <- List("dc1", "dc2")
+        az <- List("az1", "az2", "az3")
+      } yield s"conn-$dc-$az"
+    val parsed = parseTarget(
+      targetYaml(
+        connectionIds
+          .map(id => s"    - connectionId: $id\n")
+          .mkString("clientRoutes:\n  endpoints:\n", "", "")
+      )
+    )
+
+    assertEquals(
+      parsed.clientRoutes.map(_.endpoints.map(_.connectionId)),
+      Some(connectionIds)
+    )
+    assertEquals(
+      parsed.clientRoutes.get.toConnectorConf.toDriver.getEndpoints.asScala.toList
+        .map(_.getConnectionId),
+      connectionIds
+    )
   }
 
   // ---------------------------------------------------------------------------
