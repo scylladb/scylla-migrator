@@ -64,7 +64,7 @@ lazy val migrator = (project in file("migrator"))
       "com.github.jnr" % "jnr-posix" % "3.1.19", // Needed by the Spark ScyllaDB connector
       "com.scylladb.alternator" % "emr-dynamodb-hadoop"  % "5.9.2",
       "com.aerospike"           % "aerospike-client-jdk8" % aerospikeClientVersion, // jdk8 variant works on JDK 8+; jdk21 variant requires JDK 21+ (adds virtual threads)
-      "com.scylladb.alternator" % "load-balancing"       % "2.0.5",
+      "com.scylladb.alternator" % "load-balancing"       % "2.0.6",
       "com.mysql"              % "mysql-connector-j"     % "9.7.0",
       "io.circe"               %% "circe-generic"        % circeVersion,
       "io.circe"               %% "circe-parser"         % circeVersion,
