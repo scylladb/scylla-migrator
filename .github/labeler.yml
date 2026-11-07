@@ -1,0 +1,5 @@
+# One union must match every file; release/build controls and unknown paths stay visible.
+omit-from-release-notes:
+  - changed-files:
+      - all-globs-to-all-files:
+          - '{docs/**,tests/src/test/**,tests/docker/**,benchmarks/src/**,.github/dependabot.yml,.github/workflows/{tests.yml,tests-aws.yml,tutorial-dynamodb.yaml,docs-*.yaml,release-automation-tests.yml},.github/scripts/{test_*.py,*.test.cjs},README.md,CONTRIBUTING.md,.gitignore,.scalafmt.conf,docker-compose-tests.yml}'

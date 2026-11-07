@@ -1,6 +1,12 @@
 name: Publish Docker image
 
 on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag to build
+        required: true
+        type: string
   release:
     types: [published]
   workflow_dispatch:
@@ -19,16 +25,22 @@ jobs:
     steps:
       - name: Resolve git tag
         id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            echo "git_tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          [[ "$RELEASE_TAG$INPUT_TAG" != *$'\n'* ]]
+          if [ "$EVENT_NAME" = "release" ]; then
+            echo "git_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           else
-            echo "git_tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "git_tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Validate tag format
+        env:
+          GIT_TAG: ${{ steps.resolve.outputs.git_tag }}
         run: |
-          GIT_TAG="${{ steps.resolve.outputs.git_tag }}"
           if ! echo "${GIT_TAG}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "::error::Invalid tag '${GIT_TAG}'. Must match vX.Y.Z (e.g. v2.0.0)"
             exit 1
@@ -48,8 +60,9 @@ jobs:
 
       - name: Resolve Docker tags
         id: tags
+        env:
+          GIT_TAG: ${{ steps.resolve.outputs.git_tag }}
         run: |
-          GIT_TAG="${{ steps.resolve.outputs.git_tag }}"
           VERSION="${GIT_TAG#v}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
