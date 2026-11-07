@@ -958,6 +958,10 @@ Validation
 
 The ``validation`` field and its properties are mandatory only when the application is executed in :doc:`validation mode </validate>`.
 
+For custom MySQL join keys, see :ref:`mysql-custom-join-keys`. The source options
+``skipSourcePrimaryKeyValidation``, ``verifySourceJoinKeyUniqueness``, and
+``acknowledgeUnverifiedJoinKey`` default to ``false`` and affect validation only.
+
 When validating MySQL-to-ScyllaDB migrations, ensure that writes have stopped on both sides before
 starting the validator. The current implementation may issue multiple reads over time and therefore
 does not provide a single global point-in-time snapshot while the source or target table is still
