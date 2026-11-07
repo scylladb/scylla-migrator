@@ -4,6 +4,13 @@ import com.aerospike.client.{ AerospikeException, Host }
 
 /** Interpret seed specifications locally using the same grammar as the Aerospike client. */
 private[migrator] object AerospikeHosts {
+  def validateTls(hosts: Array[Host], tlsName: Option[String]): Unit =
+    require(
+      tlsName.isDefined || hosts.forall(_.tlsName == null),
+      "Aerospike inline seed TLS names require source.tlsName; " +
+        "set source.tlsName to enable TLS."
+    )
+
   def parse(specifications: Seq[String], defaultPort: Int): Array[Host] = {
     require(specifications.nonEmpty, "Aerospike 'hosts' must not be empty")
     require(defaultPort > 0 && defaultPort <= 65535, s"Invalid Aerospike port: $defaultPort")

@@ -6,6 +6,13 @@ import org.apache.spark.sql.types._
 
 class AerospikeTypesTest extends munit.FunSuite {
 
+  private def javaRoundTrip(row: org.apache.spark.sql.Row): org.apache.spark.sql.Row = {
+    val serializer = new org.apache.spark.serializer.JavaSerializer(
+      new org.apache.spark.SparkConf(false)
+    ).newInstance()
+    serializer.deserialize[org.apache.spark.sql.Row](serializer.serialize(row))
+  }
+
   test("HLL values preserve their bytes") {
     val bytes = Array[Byte](0, 1, 127, -128, -1)
     val hll = new com.aerospike.client.Value.HLLValue(bytes)
@@ -150,6 +157,78 @@ class AerospikeTypesTest extends munit.FunSuite {
     intercept[IllegalStateException] {
       AerospikeTypes.convertValue(map, MapType(BinaryType, StringType, true))
     }
+  }
+
+  test("map conversion preserves every long key and value when key hashes collide") {
+    val size = 32768
+    val map = new java.util.TreeMap[java.lang.Long, java.lang.Long]()
+    for (i <- 0 until size) map.put((i.toLong << 32) | i.toLong, -i.toLong)
+    val converted = AerospikeTypes
+      .convertValue(map, MapType(LongType, LongType, valueContainsNull = true))
+      .asInstanceOf[Map[Long, Long]]
+    val restored = javaRoundTrip(org.apache.spark.sql.Row(converted)).getMap[Long, Long](0)
+    assertEquals(converted.size, size)
+    assertEquals(restored.size, size)
+    for (i <- 0 until size) {
+      val key = (i.toLong << 32) | i.toLong
+      assertEquals(converted.get(key), Some(-i.toLong))
+      assertEquals(restored.get(key), Some(-i.toLong))
+    }
+  }
+
+  test("converted map keys retain their contents across Row Java serialization") {
+    val text = new java.util.LinkedHashMap[String, java.lang.Long]()
+    text.put("first", 1L)
+    text.put("second", 2L)
+    val binary = new java.util.LinkedHashMap[Array[Byte], java.lang.Long]()
+    binary.put(Array[Byte](1, 2), 1L)
+    binary.put(Array[Byte](3, 4), 2L)
+    val lists = new java.util.LinkedHashMap[java.util.List[java.lang.Long], java.lang.Long]()
+    lists.put(java.util.Arrays.asList[java.lang.Long](1L, 2L), 1L)
+    lists.put(java.util.Arrays.asList[java.lang.Long](3L, 4L), 2L)
+    val maps = new java.util.LinkedHashMap[java.util.Map[String, java.lang.Long], java.lang.Long]()
+    maps.put(java.util.Collections.singletonMap("first", java.lang.Long.valueOf(1L)), 1L)
+    maps.put(java.util.Collections.singletonMap("second", java.lang.Long.valueOf(2L)), 2L)
+    for (
+      (input, keyType) <- Seq(
+                            text   -> StringType,
+                            binary -> BinaryType,
+                            lists  -> ArrayType(LongType),
+                            maps   -> MapType(StringType, LongType)
+                          )
+    ) {
+      val converted = AerospikeTypes
+        .convertValue(input, MapType(keyType, LongType, valueContainsNull = true))
+        .asInstanceOf[Map[Any, Long]]
+      val restored = javaRoundTrip(org.apache.spark.sql.Row(converted)).getMap[Any, Long](0)
+      assertEquals(restored.size, 2)
+      for ((key, value) <- converted) assertEquals(restored.get(key), Some(value))
+      for ((key, value) <- restored) assertEquals(restored.get(key), Some(value))
+      val missingKey = keyType match {
+        case StringType   => "missing"
+        case BinaryType   => Array[Byte](99)
+        case _: ArrayType => Vector(99L)
+        case _: MapType   => Map("missing" -> 99L)
+        case unexpected   => fail(s"Unexpected test key type: $unexpected")
+      }
+      assertEquals(restored.get(missingKey), None)
+    }
+  }
+
+  test("large text-key maps preserve values and lookups across Row serialization") {
+    val size = 16384
+    val input = new java.util.LinkedHashMap[String, java.lang.Long]()
+    for (i <- 0 until size) input.put(f"key-$i%028d", i.toLong)
+    val converted = AerospikeTypes
+      .convertValue(input, MapType(StringType, LongType, valueContainsNull = true))
+      .asInstanceOf[Map[String, Long]]
+    val restored = javaRoundTrip(org.apache.spark.sql.Row(converted)).getMap[String, Long](0)
+    assertEquals(restored.size, size)
+    for ((key, value) <- restored) {
+      assertEquals(restored.get(key), Some(value))
+      assertEquals(restored.get(new String(key.toCharArray)), Some(value))
+    }
+    assertEquals(restored.get("missing"), None)
   }
 
   // --- convertValue ---

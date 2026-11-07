@@ -114,21 +114,37 @@ object AerospikeTypes {
             val seenKeys = scala.collection.mutable.TreeSet.empty[Any](
               TypeUtils.getInterpretedOrdering(k)
             )
-            val converted = v.asScala.iterator.zipWithIndex.map { case ((mk, mv), index) =>
+            val entries = v.asScala.iterator.zipWithIndex.map { case ((mk, mv), index) =>
               val convertedKey = convertCollectionMember(mk, k, s"$path.map key[$index]")
               if (!seenKeys.add(toCatalystKey(convertedKey)))
                 throw new InvalidValue(
                   s"Distinct Aerospike map keys at $path become the same Spark key after conversion to $k"
                 )
               convertedKey -> convertCollectionMember(mv, vt, s"$path.map value[$index]")
-            }.toMap
-            // Scala map equality can merge map-valued keys whose entry orders differ,
-            // even when Spark's ordering above considers those keys distinct.
-            if (converted.size != v.size())
-              throw new InvalidValue(
-                s"Distinct Aerospike map keys at $path become the same map key after conversion to $k"
-              )
-            converted
+            }.toVector
+            val keys = entries.map(_._1)
+            // Retain Spark's key comparison and hash-collision defense without encoding keys
+            // at every tree comparison. Only external keys survive Row serialization; the
+            // bounded identity cache is rebuilt lazily and never retains lookup-only keys.
+            val externalKeyOrdering = new Ordering[Any] {
+              @transient private lazy val toCatalyst =
+                CatalystTypeConverters.createToCatalystConverter(k)
+              @transient private lazy val ordering = TypeUtils.getInterpretedOrdering(k)
+              @transient private lazy val catalystKeys = {
+                val cache = new java.util.IdentityHashMap[Any, Any]()
+                keys.foreach(key => cache.put(key, toCatalyst(key)))
+                cache
+              }
+
+              private def comparisonKey(key: Any): Any =
+                if (catalystKeys.containsKey(key)) catalystKeys.get(key) else toCatalyst(key)
+
+              override def compare(left: Any, right: Any): Int =
+                ordering.compare(comparisonKey(left), comparisonKey(right))
+            }
+            // Sorted input lets the immutable factory build nodes without copying insertion paths.
+            val sortedEntries = scala.collection.mutable.TreeMap.from(entries)(externalKeyOrdering)
+            scala.collection.immutable.TreeMap.from(sortedEntries)(externalKeyOrdering)
           case StringType =>
             v.asScala.iterator
               .map { case (key, value) =>

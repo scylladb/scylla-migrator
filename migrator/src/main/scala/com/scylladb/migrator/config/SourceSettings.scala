@@ -1001,12 +1001,13 @@ object SourceSettings {
         })
         deriveDecoder[Aerospike].tryDecode(withHandlingDefault).flatMap { a =>
           val errors = List.newBuilder[String]
-          Try(
-            com.scylladb.migrator.readers.AerospikeHosts.parse(
+          Try {
+            val hosts = com.scylladb.migrator.readers.AerospikeHosts.parse(
               a.hosts,
               a.port.getOrElse(com.scylladb.migrator.readers.Aerospike.DefaultPort)
             )
-          ).failed.foreach(e => errors += e.getMessage)
+            com.scylladb.migrator.readers.AerospikeHosts.validateTls(hosts, a.tlsName)
+          }.failed.foreach(e => errors += e.getMessage)
           a.splitCount.foreach(s => if (s <= 0) errors += s"splitCount must be positive, got $s")
           a.queueSize.foreach(q => if (q <= 0) errors += s"queueSize must be positive, got $q")
           a.pollTimeoutSeconds

@@ -30,6 +30,27 @@ object Aerospike {
     invalidRecords: LongAccumulator,
     skippedRecords: LongAccumulator
   ) {
+    def withMigrationReport(migrate: => Unit): Unit = {
+      try migrate
+      catch {
+        case failure: Throwable =>
+          try
+            log.warn(
+              s"Aerospike source INCOMPLETE evaluated records after migration failure: " +
+                s"read=${recordsRead.value}, " +
+                s"invalid=${invalidRecords.value}, skipped=${skippedRecords.value}. " +
+                "Best-effort partial counts can include replay and omit accumulator " +
+                "updates from failed tasks."
+            )
+          catch {
+            // Diagnostics must never replace the original migration failure, even if logging fails.
+            case _: Throwable => ()
+          }
+          throw failure
+      }
+      report()
+    }
+
     def report(): Unit = {
       val message = s"Aerospike source evaluated records: read=${recordsRead.value}, " +
         s"invalid=${invalidRecords.value}, skipped=${skippedRecords.value}. Counts can include replay."
@@ -54,7 +75,10 @@ object Aerospike {
       source.namespace.nonEmpty,
       "Aerospike 'namespace' must not be empty in the source configuration"
     )
-    AerospikeHosts.parse(source.hosts, source.port.getOrElse(DefaultPort))
+    AerospikeHosts.validateTls(
+      AerospikeHosts.parse(source.hosts, source.port.getOrElse(DefaultPort)),
+      source.tlsName
+    )
     val schema = buildSchema(source)
 
     val connConfig = connectionConfig(source)
@@ -283,6 +307,8 @@ object Aerospike {
   ): Option[(String, String)] = {
     val user = Option(getenv("AEROSPIKE_USERNAME"))
     val pass = Option(getenv("AEROSPIKE_PASSWORD"))
+    require(user.forall(_.nonEmpty), "AEROSPIKE_USERNAME must not be empty")
+    require(pass.forall(_.nonEmpty), "AEROSPIKE_PASSWORD must not be empty")
     require(
       user.isDefined == pass.isDefined,
       "AEROSPIKE_USERNAME and AEROSPIKE_PASSWORD must both be set or both be absent"
@@ -331,6 +357,7 @@ object Aerospike {
     credentials: Option[(String, String)],
     hosts: Array[Host]
   ): ClientPolicy = {
+    AerospikeHosts.validateTls(hosts, connConfig.tlsName)
     val policy = new ClientPolicy()
     policy.readPolicyDefault.maxRetries          = DefaultReadMaxRetries
     policy.readPolicyDefault.sleepBetweenRetries = DefaultReadSleepBetweenRetriesMs
@@ -343,7 +370,7 @@ object Aerospike {
       policy.readPolicyDefault.totalTimeout = t
       policy.scanPolicyDefault.totalTimeout = t
     }
-    if (connConfig.tlsName.isDefined || hosts.exists(_.tlsName != null))
+    if (connConfig.tlsName.isDefined)
       policy.tlsPolicy = new TlsPolicy()
     connConfig.maxConnsPerNode.foreach(n => policy.maxConnsPerNode = n)
     connConfig.connPoolsPerNode.foreach(n => policy.connPoolsPerNode = n)

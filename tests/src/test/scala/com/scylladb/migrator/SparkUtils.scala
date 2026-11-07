@@ -43,8 +43,18 @@ object SparkUtils {
     }
   }
 
-  /** Shared SparkSession in local mode, created once and reused across all tests. */
-  private lazy val spark: SparkSession = {
+  private var sharedSession: Option[SparkSession] = None
+
+  /** Reuse the live context; another sequential suite may have stopped a borrowed session. */
+  private def spark: SparkSession = synchronized {
+    sharedSession.filterNot(_.sparkContext.isStopped).getOrElse {
+      val session = createSparkSession()
+      sharedSession = Some(session)
+      session
+    }
+  }
+
+  private def createSparkSession(): SparkSession = {
     Configurator.setRootLevel(Level.WARN)
     Configurator.setLevel("com.scylladb.migrator", Level.INFO)
     Configurator.setLevel("org.apache.spark.scheduler.TaskSetManager", Level.WARN)
