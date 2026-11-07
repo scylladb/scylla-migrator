@@ -100,11 +100,13 @@ lazy val migrator = (project in file("migrator"))
 lazy val tests = project
   .in(file("tests"))
   .settings(
+    // The query builder comes from the ScyllaDB driver bundled by the connector. Do not add
+    // org.apache.cassandra java-driver-* artifacts: their core classes shadow the ScyllaDB driver
+    // (e.g. SessionBuilder.withClientRoutesConfig) on the test classpath.
     libraryDependencies ++= Seq(
       "software.amazon.awssdk"    % "dynamodb"                  % awsSdkVersion,
       "org.apache.spark"         %% "spark-sql"                 % sparkVersion,
       "org.apache.spark"         %% "spark-streaming"           % sparkVersion,
-      "org.apache.cassandra"      % "java-driver-query-builder" % "4.18.0",
       "com.github.mjakubowski84" %% "parquet4s-core"            % "1.9.4",
       "org.apache.hadoop"         % "hadoop-client"             % hadoopVersion,
       ("com.google.cloud.bigdataoss" % "gcs-connector" % gcsConnectorVersion).classifier(
