@@ -11,6 +11,50 @@ MySQL source table and the ScyllaDB target table. The validator may scan both si
 statements over time, so it does not provide a single global point-in-time snapshot while live
 writes are still happening.
 
+.. _mysql-custom-join-keys:
+
+MySQL custom join keys
+----------------------
+
+By default, the MySQL validator checks that ``source.primaryKey`` matches the table's
+actual primary key, including column order. To validate using a different join key,
+set these properties in the MySQL ``source`` section:
+
+.. code-block:: yaml
+
+  source:
+    type: mysql
+    # Other MySQL connection settings are unchanged.
+    primaryKey: [tenant_id, external_id]
+    skipSourcePrimaryKeyValidation: true
+    verifySourceJoinKeyUniqueness: true
+
+The configured columns must exist in the source. After applying ``renames``, they
+must match the ScyllaDB target primary key. The override bypasses only the check
+against MySQL's declared primary key; it does not bypass the target check.
+
+All three custom-key options default to ``false``. When
+``skipSourcePrimaryKeyValidation`` is enabled, choose one of these safeguards:
+
+* Set ``verifySourceJoinKeyUniqueness: true`` to scan the selected source rows and
+  reject duplicate key combinations or null key components before target validation.
+  This adds a full scan and shuffle. Source rows are persisted in Spark memory and
+  disk for reuse during validation, then released on success or failure. An existing
+  caller-owned persistence setting is preserved.
+* Set ``acknowledgeUnverifiedJoinKey: true`` to explicitly accept proceeding without
+  that scan. Do this only after independently confirming that the configured key is
+  unique and non-null. Conflicting duplicate source rows can produce field mismatches
+  against one target row. With ``copyMissingRows``, duplicates can be written under the
+  same target key, where the last write wins. This acknowledgment does not establish
+  uniqueness.
+
+Validation refuses to use a custom join key if neither safeguard is selected. If
+both are enabled, verification takes precedence. The two safeguard options have no
+effect when ``skipSourcePrimaryKeyValidation`` is ``false``. These options affect
+validation only; they do not change how migration reads MySQL data. A source
+``where`` filter limits verification to the selected rows. Stop writes on both sides
+as described above, including throughout the uniqueness check.
+
 Before running the validator, adjust the corresponding configuration in the top-level ``validation`` property of the file ``config.yml``:
 
 .. code-block:: yaml
