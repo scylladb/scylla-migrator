@@ -39,6 +39,53 @@ class MySQLSourceSettingsParserTest extends munit.FunSuite {
     assertEquals(result.lowerBound, None)
     assertEquals(result.upperBound, None)
     assertEquals(result.zeroDateTimeBehavior, SourceSettings.MySQL.ZeroDateTimeBehavior.Exception)
+    assertEquals(result.skipSourcePrimaryKeyValidation, false)
+    assertEquals(result.verifySourceJoinKeyUniqueness, false)
+    assertEquals(result.acknowledgeUnverifiedJoinKey, false)
+  }
+
+  test("verifySourceJoinKeyUniqueness parses when set alongside skipSourcePrimaryKeyValidation") {
+    val config =
+      """type: mysql
+        |host: db.example.com
+        |port: 3306
+        |database: mydb
+        |table: users
+        |credentials:
+        |  username: admin
+        |  password: secret
+        |primaryKey:
+        |  - id
+        |skipSourcePrimaryKeyValidation: true
+        |verifySourceJoinKeyUniqueness: true
+        |""".stripMargin
+
+    val result = parseSourceSettings(config)
+    assertEquals(result.skipSourcePrimaryKeyValidation, true)
+    assertEquals(result.verifySourceJoinKeyUniqueness, true)
+    assertEquals(result.acknowledgeUnverifiedJoinKey, false)
+  }
+
+  test("acknowledgeUnverifiedJoinKey parses when set alongside skipSourcePrimaryKeyValidation") {
+    val config =
+      """type: mysql
+        |host: db.example.com
+        |port: 3306
+        |database: mydb
+        |table: users
+        |credentials:
+        |  username: admin
+        |  password: secret
+        |primaryKey:
+        |  - id
+        |skipSourcePrimaryKeyValidation: true
+        |acknowledgeUnverifiedJoinKey: true
+        |""".stripMargin
+
+    val result = parseSourceSettings(config)
+    assertEquals(result.skipSourcePrimaryKeyValidation, true)
+    assertEquals(result.verifySourceJoinKeyUniqueness, false)
+    assertEquals(result.acknowledgeUnverifiedJoinKey, true)
   }
 
   test("valid MySQL source config with optional fields") {

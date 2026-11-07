@@ -161,6 +161,28 @@ source:
 #   # Optional - columns forming the primary key, required for validation
 #   # primaryKey:
 #   #   - id
+#   # Optional - set to true only if 'primaryKey' intentionally differs from the columns
+#   # MySQL reports as the table's actual PRIMARY KEY (e.g. you want to validate using a
+#   # custom join key instead of the declared PK). Defaults to false, which requires
+#   # 'primaryKey' to exactly match MySQL's declared PRIMARY KEY (via JDBC metadata).
+#   # When set, you must also set one of 'verifySourceJoinKeyUniqueness' or
+#   # 'acknowledgeUnverifiedJoinKey' below -- validation refuses to run otherwise, since a
+#   # custom join key that is not actually unique can match multiple source rows to a
+#   # single target row, causing field mismatches or conflicting copyMissingRows writes.
+#   # skipSourcePrimaryKeyValidation: false
+#   # Optional - only consulted when 'skipSourcePrimaryKeyValidation' is true. When true,
+#   # the validator checks that the configured join key is unique in the source data and
+#   # aborts if it finds duplicates or null key components. This requires an extra full scan
+#   # (groupBy/count) of the source table, which can be expensive on large tables.
+#   # Spark persists source rows in memory and disk for validation reuse, then releases
+#   # them on success or failure.
+#   # verifySourceJoinKeyUniqueness: false
+#   # Optional - only consulted when 'skipSourcePrimaryKeyValidation' is true and
+#   # 'verifySourceJoinKeyUniqueness' is false. Explicitly accepts the risk of proceeding
+#   # without verifying join-key uniqueness, skipping its full-scan cost. Only set this if
+#   # you have independently confirmed the join key is unique and non-null (e.g. with
+#   # 'verifySourceJoinKeyUniqueness: true', or UNIQUE and NOT NULL constraints).
+#   # acknowledgeUnverifiedJoinKey: false
 #   # Optional - partition the read across multiple Spark tasks
 #   # partitionColumn: id
 #   # numPartitions: 8
