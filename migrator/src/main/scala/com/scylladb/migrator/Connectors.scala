@@ -12,6 +12,7 @@ import com.datastax.spark.connector.cql.{
   PasswordAuthConf
 }
 import com.scylladb.migrator.config.{
+  ClientRoutesSettings,
   CloudConfig,
   ContactPoints,
   Credentials,
@@ -29,7 +30,8 @@ object Connectors {
     sslOptions: Option[SSLOptions],
     localDC: Option[String],
     connections: Option[Int],
-    queryRetryCount: Int = -1
+    queryRetryCount: Int = -1,
+    clientRoutes: Option[ClientRoutesSettings] = None
   )
 
   private val ConnectionHost = "spark.cassandra.connection.host"
@@ -51,6 +53,8 @@ object Connectors {
   private val RemoteConnectionsPerExecutor =
     "spark.cassandra.connection.remoteConnectionsPerExecutor"
   private val QueryRetryCount = "spark.cassandra.query.retry.count"
+  private val ClientRoutesEndpoints = "spark.cassandra.connection.clientRoutes.endpoints"
+  private val ClientRoutesShardAwareness = "spark.cassandra.connection.clientRoutes.shardAwareness"
 
   private[migrator] def sourceSessionOptions(
     sourceSettings: SourceSettings.Cassandra
@@ -62,7 +66,8 @@ object Connectors {
       sslOptions      = sourceSettings.sslOptions,
       localDC         = sourceSettings.localDC,
       connections     = sourceSettings.connections,
-      queryRetryCount = -1
+      queryRetryCount = -1,
+      clientRoutes    = sourceSettings.clientRoutes
     )
 
   private[migrator] def targetSessionOptions(
@@ -75,7 +80,8 @@ object Connectors {
       sslOptions      = targetSettings.sslOptions,
       localDC         = targetSettings.localDC,
       connections     = targetSettings.connections,
-      queryRetryCount = -1
+      queryRetryCount = -1,
+      clientRoutes    = targetSettings.clientRoutes
     )
 
   private[migrator] def sparkSessionOptions(options: SessionOptions): Map[String, String] = {
@@ -112,13 +118,36 @@ object Connectors {
       ).flatten.toMap
       withLocalDc ++ requiredSslEntries ++ optionalSslEntries
     }
-    options.connections.fold(withSsl) { connections =>
+    val withConnections = options.connections.fold(withSsl) { connections =>
       withSsl ++ Map(
         LocalConnectionsPerExecutor  -> connections.toString,
         RemoteConnectionsPerExecutor -> connections.toString
       )
     }
+    options.clientRoutes.fold(withConnections) { routes =>
+      withConnections ++ Map(
+        ClientRoutesEndpoints      -> clientRoutesEndpointsValue(routes),
+        ClientRoutesShardAwareness -> routes.shardAwareness.toString
+      )
+    }
   }
+
+  /** The connector's `connectionId[=connectionAddr],...` syntax, which cannot express connection
+    * IDs that contain `,` or `=`.
+    */
+  private def clientRoutesEndpointsValue(routes: ClientRoutesSettings): String =
+    routes.endpoints
+      .map { endpoint =>
+        require(
+          !endpoint.connectionId.exists(c => c == ',' || c == '='),
+          s"Connection ID '${endpoint.connectionId}' cannot be passed as a Spark option: it " +
+            "contains ',' or '='."
+        )
+        endpoint.connectionAddr.fold(endpoint.connectionId)(addr =>
+          s"${endpoint.connectionId}=$addr"
+        )
+      }
+      .mkString(",")
 
   /** Build a `CassandraConnectorConf` from a Cassandra source.
     *
@@ -142,12 +171,15 @@ object Connectors {
           sourceSettings.sslOptions
         )
     }
-    CassandraConnectorConf(sparkConf).copy(
-      contactInfo = contact,
-      localDC     = if (sourceSettings.cloud.isDefined) None else sourceSettings.localDC,
-      localConnectionsPerExecutor  = sourceSettings.connections,
-      remoteConnectionsPerExecutor = sourceSettings.connections,
-      queryRetryCount              = -1
+    withClientRoutes(
+      CassandraConnectorConf(sparkConf).copy(
+        contactInfo = contact,
+        localDC     = if (sourceSettings.cloud.isDefined) None else sourceSettings.localDC,
+        localConnectionsPerExecutor  = sourceSettings.connections,
+        remoteConnectionsPerExecutor = sourceSettings.connections,
+        queryRetryCount              = -1
+      ),
+      sourceSettings.clientRoutes
     )
   }
 
@@ -168,20 +200,38 @@ object Connectors {
           targetSettings.sslOptions
         )
     }
-    CassandraConnectorConf(sparkConf).copy(
-      contactInfo = contact,
-      localDC     = if (targetSettings.cloud.isDefined) None else targetSettings.localDC,
-      localConnectionsPerExecutor  = targetSettings.connections,
-      remoteConnectionsPerExecutor = targetSettings.connections,
-      queryRetryCount              = -1
+    withClientRoutes(
+      CassandraConnectorConf(sparkConf).copy(
+        contactInfo = contact,
+        localDC     = if (targetSettings.cloud.isDefined) None else targetSettings.localDC,
+        localConnectionsPerExecutor  = targetSettings.connections,
+        remoteConnectionsPerExecutor = targetSettings.connections,
+        queryRetryCount              = -1
+      ),
+      targetSettings.clientRoutes
     )
   }
 
-  def sourceConnector(sparkConf: SparkConf, sourceSettings: SourceSettings.Cassandra) =
+  def sourceConnector(
+    sparkConf: SparkConf,
+    sourceSettings: SourceSettings.Cassandra
+  ): CassandraConnector =
     new CassandraConnector(buildSourceConf(sparkConf, sourceSettings))
 
-  def targetConnector(sparkConf: SparkConf, targetSettings: TargetSettings.Scylla) =
+  def targetConnector(
+    sparkConf: SparkConf,
+    targetSettings: TargetSettings.Scylla
+  ): CassandraConnector =
     new CassandraConnector(buildTargetConf(sparkConf, targetSettings))
+
+  /** The connector verifies the routes when the Spark driver opens its first session, which the
+    * readers, writers and validators all do before scheduling tasks.
+    */
+  private def withClientRoutes(
+    conf: CassandraConnectorConf,
+    clientRoutes: Option[ClientRoutesSettings]
+  ): CassandraConnectorConf =
+    clientRoutes.fold(conf)(routes => conf.copy(clientRoutes = Some(routes.toConnectorConf)))
 
   /** Map optional credentials to the connector's auth model. Missing credentials become
     * [[NoAuthConf]] rather than a parse-time error — Astra will reject unauthenticated sessions at

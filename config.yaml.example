@@ -118,6 +118,30 @@ source:
   #cloud:
   #  secureBundlePath: /opt/migrator/secure-connect-mycluster.zip
 
+  # Optional - Connect to ScyllaDB Cloud through a private endpoint (AWS PrivateLink,
+  # GCP Private Service Connect). 'host'/'port' must then be the private endpoint address and
+  # port you were given (the port is not necessarily 9042); list several addresses in 'host'
+  # (YAML list or comma-separated, all using 'port'), and all of them are tried for the initial
+  # connection. 'cloud' must not be set. 'localDC' can be omitted
+  # when the listed connection IDs only route one datacenter; set it otherwise.
+  # List every connection ID the migrator may use (a datacenter can have one per availability
+  # zone); together they must route every node of the local datacenter, so include all the IDs
+  # that serve it. 'connectionAddr' optionally overrides the address published for a connection ID
+  # (hostname or IP, no port); set it to the endpoint IP when the published DNS name does not
+  # resolve in your VPC (GCP Private Service Connect, AWS without private DNS). Set 'sslOptions'
+  # when the private connection only accepts TLS. 'shardAwareness' enables advanced shard
+  # awareness (shard-targeted source ports). It is off by default on the client side; ScyllaDB
+  # Cloud private endpoints support it, so set it to true there. Leave it false for a proxy that
+  # does not preserve the client source port (Proxy Protocol v2). Requests are sent to the right
+  # shard either way.
+  #clientRoutes:
+  #  endpoints:
+  #    - connectionId: <connection-id-dc1-az1>
+  #    - connectionId: <connection-id-dc1-az2>
+  #    - connectionId: <connection-id-dc2-az1>
+  #      connectionAddr: <endpoint-ip-address>
+  #  shardAwareness: true
+
 # Example for connecting to a DataStax Astra source via a Cloud Secure Connect bundle:
 # source:
 #   type: cassandra
@@ -319,6 +343,12 @@ source:
 #   ## connectionAcquisitionTimeoutMs: 10000
 #   ## connectionTimeoutMs: 15000
 #   ## maxItemsPerBatch: 100
+#   # Set to false behind a private endpoint (AWS PrivateLink, GCP Private Service Connect): every
+#   # request then goes to 'endpoint' (the private endpoint address and its port that reaches all
+#   # nodes) with the plain AWS SDK client, because the node addresses that the load-balancing
+#   # client discovers are not reachable. The settings above, except maxItemsPerBatch, then
+#   # cannot be used.
+#   ## loadBalancing: true
 
 # Example for loading from a DynamoDB S3 export (see https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/S3DataExport.Output.html)
 # source:
@@ -416,6 +446,13 @@ target:
   # Same path rules as the source cloud block above. See source section for details.
   #cloud:
   #  secureBundlePath: /opt/migrator/secure-connect-mycluster.zip
+
+  # Optional - Connect to ScyllaDB Cloud through a private endpoint.
+  # Same rules as the source clientRoutes block above.
+  #clientRoutes:
+  #  endpoints:
+  #    - connectionId: <connection-id-dc1-az1>
+  #    - connectionId: <connection-id-dc1-az2>
 
 # Example for loading into a DataStax Astra target via a Cloud Secure Connect bundle:
 # target:
@@ -523,6 +560,12 @@ target:
 #   ## connectionAcquisitionTimeoutMs: 10000
 #   ## connectionTimeoutMs: 15000
 #   ## maxItemsPerBatch: 100
+#   # Set to false behind a private endpoint (AWS PrivateLink, GCP Private Service Connect): every
+#   # request then goes to 'endpoint' (the private endpoint address and its port that reaches all
+#   # nodes) with the plain AWS SDK client, because the node addresses that the load-balancing
+#   # client discovers are not reachable. The settings above, except maxItemsPerBatch, then
+#   # cannot be used.
+#   ## loadBalancing: true
 
 # Optional savepoint configuration for resumable migrations. Savepoints are configuration
 # files (like this one), saved by the migrator as it runs. Their purpose is to skip data

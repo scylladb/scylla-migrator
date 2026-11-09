@@ -1,13 +1,31 @@
 package com.scylladb.migrator
 
+import com.datastax.oss.driver.api.core.config.{ DefaultDriverOption, DriverConfigLoader }
 import com.datastax.spark.connector.cql.{
+  ClientRouteEndpointConf,
+  ClientRoutesConf,
   CloudBasedContactInfo,
+  DefaultConnectionFactory,
   IpBasedContactInfo,
   NoAuthConf,
   PasswordAuthConf
 }
-import com.scylladb.migrator.config.{ CloudConfig, Credentials, SourceSettings, TargetSettings }
+import com.scylladb.migrator.config.{
+  ClientRouteEndpoint,
+  ClientRoutesSettings,
+  CloudConfig,
+  Credentials,
+  SourceSettings,
+  TargetSettings
+}
 import org.apache.spark.SparkConf
+
+import java.io.{
+  ByteArrayInputStream,
+  ByteArrayOutputStream,
+  ObjectInputStream,
+  ObjectOutputStream
+}
 
 class ConnectorsTest extends munit.FunSuite {
 
@@ -174,6 +192,114 @@ class ConnectorsTest extends munit.FunSuite {
       Connectors.targetSessionOptions(baseScyllaTarget.copy(host = "10.0.0.1, 10.0.0.2"))
     )
     assertEquals(options("spark.cassandra.connection.host"), "10.0.0.1,10.0.0.2")
+  }
+
+  // ---------------------------------------------------------------------------
+  // Client routes
+  // ---------------------------------------------------------------------------
+
+  private val routes = ClientRoutesSettings(
+    List(ClientRouteEndpoint("conn-dc1"), ClientRouteEndpoint("conn-dc2", Some("10.0.0.5")))
+  )
+
+  private val connectorRoutes = ClientRoutesConf(
+    Seq(ClientRouteEndpointConf("conn-dc1"), ClientRouteEndpointConf("conn-dc2", Some("10.0.0.5")))
+  )
+
+  test("source: clientRoutes sets the connector's client routes") {
+    val source = baseCassandraSource.copy(
+      host         = "pl-endpoint.example.com",
+      localDC      = Some("dc1"),
+      clientRoutes = Some(routes)
+    )
+
+    val conf = Connectors.buildSourceConf(new SparkConf(false), source)
+
+    assertEquals(conf.clientRoutes, Some(connectorRoutes))
+    assertEquals(conf.connectionFactory, DefaultConnectionFactory)
+    assertEquals(conf.localDC, Some("dc1"))
+    conf.contactInfo match {
+      case ip: IpBasedContactInfo =>
+        assertEquals(ip.hosts.head.getHostString, "pl-endpoint.example.com")
+        assertEquals(ip.hosts.head.getPort, 9042)
+      case other => fail(s"Expected IpBasedContactInfo, got $other")
+    }
+  }
+
+  test("target: clientRoutes sets the connector's client routes, localDC may be omitted") {
+    val target = baseScyllaTarget.copy(
+      clientRoutes = Some(routes.copy(shardAwareness = true))
+    )
+
+    val conf = Connectors.buildTargetConf(new SparkConf(false), target)
+
+    assertEquals(conf.clientRoutes, Some(connectorRoutes.copy(shardAwareness = true)))
+    assertEquals(conf.localDC, None)
+  }
+
+  test("without clientRoutes the connector's client routes stay unset") {
+    assertEquals(
+      Connectors.buildSourceConf(new SparkConf(false), baseCassandraSource).clientRoutes,
+      None
+    )
+    assertEquals(
+      Connectors.buildTargetConf(new SparkConf(false), baseScyllaTarget).clientRoutes,
+      None
+    )
+  }
+
+  test("confs that differ only by client routes do not share a session cache key") {
+    val target = baseScyllaTarget.copy(localDC = Some("dc1"))
+    val plain = Connectors.buildTargetConf(new SparkConf(false), target)
+    val routed = Connectors.buildTargetConf(
+      new SparkConf(false),
+      target.copy(clientRoutes = Some(routes))
+    )
+    val otherRoutes = Connectors.buildTargetConf(
+      new SparkConf(false),
+      target.copy(clientRoutes = Some(ClientRoutesSettings(List(ClientRouteEndpoint("conn-x")))))
+    )
+
+    assertNotEquals(plain, routed)
+    assertNotEquals(routed, otherRoutes)
+    assertEquals(
+      routed,
+      Connectors.buildTargetConf(new SparkConf(false), target.copy(clientRoutes = Some(routes)))
+    )
+  }
+
+  test("client routes turn advanced shard awareness off unless shardAwareness is set") {
+    def driverProfile(settings: ClientRoutesSettings) = {
+      val conf = Connectors.buildTargetConf(
+        new SparkConf(false),
+        baseScyllaTarget.copy(localDC = Some("dc1"), clientRoutes = Some(settings))
+      )
+      DefaultConnectionFactory
+        .connectorConfigBuilder(conf, DriverConfigLoader.programmaticBuilder())
+        .build()
+        .getInitialConfig
+        .getDefaultProfile
+    }
+
+    val defaults = driverProfile(routes)
+    assert(!defaults.getBoolean(DefaultDriverOption.CONNECTION_ADVANCED_SHARD_AWARENESS_ENABLED))
+    assertEquals(defaults.getString(DefaultDriverOption.LOAD_BALANCING_LOCAL_DATACENTER), "dc1")
+
+    val shardAware = driverProfile(routes.copy(shardAwareness = true))
+    assert(shardAware.getBoolean(DefaultDriverOption.CONNECTION_ADVANCED_SHARD_AWARENESS_ENABLED))
+  }
+
+  test("a conf with client routes survives Java serialization") {
+    val conf = Connectors.buildTargetConf(
+      new SparkConf(false),
+      baseScyllaTarget.copy(localDC = Some("dc1"), clientRoutes = Some(routes))
+    )
+    val bytes = new ByteArrayOutputStream()
+    val out = new ObjectOutputStream(bytes)
+    out.writeObject(conf)
+    out.close()
+    val restored = new ObjectInputStream(new ByteArrayInputStream(bytes.toByteArray)).readObject()
+    assertEquals(restored, conf)
   }
 
   // ---------------------------------------------------------------------------

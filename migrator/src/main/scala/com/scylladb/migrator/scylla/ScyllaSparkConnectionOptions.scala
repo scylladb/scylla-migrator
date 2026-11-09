@@ -24,11 +24,12 @@ object ScyllaSparkConnectionOptions {
     * These settings intentionally exclude table-selection properties so that credentials and SSL
     * secrets do not need to be passed through DataFrame reader options.
     *
-    * '''Cloud mode is not supported''' through this helper — cloud targets use
-    * [[Connectors.buildTargetConf]] which directly constructs a `CloudBasedContactInfo`.
+    * '''Cloud mode is not supported''' through this helper — such targets use
+    * [[Connectors.buildTargetConf]], which constructs a `CloudBasedContactInfo`. Client routes are
+    * passed as the connector's `spark.cassandra.connection.clientRoutes.*` options.
     *
     * @throws IllegalArgumentException
-    *   if `t.cloud` is defined
+    *   if `t.cloud` is defined, or a client routes connection ID contains `,` or `=`
     */
   def sessionConfFromTargetSettings(
     t: TargetSettings.Scylla,

@@ -82,7 +82,8 @@ object SourceSettings {
     // Opt-in: preserve per-element TTL/WRITETIME of non-frozen collection columns (maps, sets).
     // Requires a source that supports reading collection-element metadata (Cassandra 5.0+ /
     // modern ScyllaDB). Has no effect unless `preserveTimestamps` is also true.
-    preserveCollectionTimestamps: Boolean = false
+    preserveCollectionTimestamps: Boolean = false,
+    clientRoutes: Option[ClientRoutesSettings] = None
   ) extends SourceSettings {
     val supportsSavepoints: Boolean = true
   }
@@ -145,6 +146,15 @@ object SourceSettings {
         preserveCollectionTimestamps <- c.getOrElse[Boolean]("preserveCollectionTimestamps")(false)
         where                        <- c.get[Option[String]]("where")
         consistencyLevel             <- c.get[String]("consistencyLevel")
+        clientRoutes                 <- c.get[Option[ClientRoutesSettings]]("clientRoutes")
+        _ <- if (cloud.isDefined && clientRoutes.isDefined)
+               Left(
+                 DecodingFailure(
+                   "Cassandra source: 'clientRoutes' is mutually exclusive with 'cloud'.",
+                   c.history
+                 )
+               )
+             else Right(())
         _ <- if (cloud.isDefined && localDC.isDefined)
                Left(
                  DecodingFailure(
@@ -179,7 +189,8 @@ object SourceSettings {
         where,
         consistencyLevel,
         cloud,
-        preserveCollectionTimestamps
+        preserveCollectionTimestamps,
+        clientRoutes
       )
     }
 
@@ -196,7 +207,8 @@ object SourceSettings {
         "preserveTimestamps"           -> c.preserveTimestamps.asJson,
         "preserveCollectionTimestamps" -> c.preserveCollectionTimestamps.asJson,
         "where"                        -> c.where.asJson,
-        "consistencyLevel"             -> c.consistencyLevel.asJson
+        "consistencyLevel"             -> c.consistencyLevel.asJson,
+        "clientRoutes"                 -> c.clientRoutes.asJson
       )
       c.cloud match {
         case Some(cloud) =>
