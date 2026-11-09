@@ -38,6 +38,7 @@ import org.apache.spark.sql.types.{
   StructField,
   StructType
 }
+import org.apache.spark.storage.StorageLevel
 
 import scala.collection.immutable.ArraySeq
 import scala.collection.mutable
@@ -324,15 +325,26 @@ object ScyllaValidator {
     * snapshot taken ''before'' the copy, so it may contain `MissingTargetRow` entries for rows that
     * have since been written. A subsequent re-validation can be used to confirm convergence.
     *
-    * The comparison and the repair write share a single, uncached pass over the source/target join,
-    * so a retried repair task re-reads the target from scratch. If an earlier (failed) attempt of
-    * that task already wrote some rows before failing, the retry will see those rows as already
-    * present and will not re-report them as missing - the repaired-row count and failure sample can
-    * therefore slightly undercount in that scenario, even though every originally-missing row is
-    * still written exactly once overall (repair writes are idempotent upserts, so no data is lost
-    * or duplicated). This is an accepted trade-off for avoiding a second full pass over the
-    * source/target databases; a subsequent re-validation run confirms the data itself converged
-    * correctly regardless.
+    * The comparison and the repair write share a single pass over the source/target join. When
+    * `preserveTimestamps` is disabled, each row is written as a single atomic upsert, and this pass
+    * is left uncached: a retried repair task re-reads the target from scratch, and if an earlier
+    * (failed) attempt of that task already wrote some rows before failing, the retry will see those
+    * rows as already present and will not re-report them as missing - the repaired-row count and
+    * failure sample can therefore slightly undercount in that scenario. This is harmless to the
+    * data itself (each row's repair write is an idempotent upsert, so an already-written row is
+    * simply, and correctly, not re-attempted); a subsequent re-validation run confirms the data
+    * converged correctly regardless. This is an accepted trade-off for avoiding a second full pass
+    * over the source/target databases.
+    *
+    * When `preserveTimestamps` is enabled, a single row's columns can instead be written as several
+    * separate physical writes (grouped by distinct per-cell TTL/WRITETIME, and/or a base write plus
+    * one pass per non-frozen collection column). A task failing between those writes would
+    * otherwise leave a row only partially repaired, and an uncached retry would see that row as no
+    * longer missing and permanently skip the rest of it - so for this case, the rows to repair are
+    * materialized (persisted and counted) once, before any of those writes begin, trading a bit of
+    * memory/disk for correctness: a write-task retry then replays the same, already-decided set of
+    * rows rather than re-deriving "missing" against a target its own earlier, failed attempt may
+    * have partially mutated.
     *
     * @return
     *   A list of comparison failures (which is empty if the data are the same in both databases).
@@ -840,51 +852,79 @@ object ScyllaValidator {
           timestampColumns: TimestampColumns
         ): RDD[Row] = overrideWritetimeColumn(rdd, writeSchema, timestampColumns.writeTime)
 
-        if (perElementCollectionMetadata) {
-          // Scalar/frozen base write + per-element collection-append passes, mirroring the
-          // direct migration multi-pass write so missing rows regain element-level metadata.
-          // The explosion persists `rawRepairDf` so the base and append passes share one
-          // read; release it once every pass has been written (or one has failed).
-          try {
-            val (baseRdd, baseSchema, timestampColumns, appendWrites) =
-              readers.Cassandra.explodeRowsFromPerColumnMetaCollectionAware(spark, rawRepairDf)
+        if (includePerColumnMetadata) {
+          // A row's columns can be split into several separate physical writes here (per-cell
+          // TTL/WRITETIME groups below, and/or a base write plus one pass per non-frozen
+          // collection column in the perElementCollectionMetadata branch) - each is its own Spark
+          // job. The whole chain up to `rawRepairDf` (scan, join, the missingness/accumulator
+          // mapPartitions above) is shuffle-free, so without this checkpoint a task that fails
+          // after committing some of a row's writes but before the rest would, on retry, re-run
+          // that chain against a target its OWN earlier attempt already partially mutated - the
+          // row would no longer look missing, permanently losing the remaining writes. `persist()`
+          // alone would likely already close this for a single-batch partition, since Spark fully
+          // unrolls a cached partition into the block store before exposing even its first element
+          // downstream - but relying on that depends on internal details of Dataset/columnar
+          // caching (e.g. per-batch exposure for a partition spanning multiple cache batches) we
+          // have not verified hold in general. `.count()` sidesteps that: unlike `.take()`, it is a
+          // dedicated, exhaustive action that only returns once every batch of every partition has
+          // been read and cached, while the target is still untouched by this run and before any
+          // write job starts; every later read - including a write-task retry - is then served from
+          // that cache, not from the live join. (Verified against the simpler, single-batch RDD
+          // case in CopyMissingRowsRetryMechanismTest.)
+          rawRepairDf.persist(StorageLevel.MEMORY_AND_DISK)
+          rawRepairDf.count()
 
-            writers.Scylla.writeRowRDD(
-              targetSettings,
-              Nil,
-              applyRepairStrategy(baseRdd, baseSchema, timestampColumns),
-              baseSchema,
-              Some(timestampColumns),
-              None,
-              sourceSettings
-            )
+          try
+            if (perElementCollectionMetadata) {
+              // Scalar/frozen base write + per-element collection-append passes, mirroring the
+              // direct migration multi-pass write so missing rows regain element-level metadata.
+              // `rawRepairDf` is already cached above; `explodeRowsFromPerColumnMetaCollectionAware`
+              // persisting it again internally (shared with the migration path, which doesn't
+              // pre-cache its own frame) is a harmless no-op at the same storage level.
+              val (baseRdd, baseSchema, timestampColumns, appendWrites) =
+                readers.Cassandra.explodeRowsFromPerColumnMetaCollectionAware(spark, rawRepairDf)
 
-            appendWrites.foreach { caw =>
-              writers.Scylla.writeCollectionAppendRDD(
+              writers.Scylla.writeRowRDD(
                 targetSettings,
                 Nil,
-                caw.columnName,
-                overrideWritetimeColumn(caw.rdd, caw.schema, "writetime"),
-                caw.schema,
+                applyRepairStrategy(baseRdd, baseSchema, timestampColumns),
+                baseSchema,
+                Some(timestampColumns),
+                None,
+                sourceSettings
+              )
+
+              appendWrites.foreach { caw =>
+                writers.Scylla.writeCollectionAppendRDD(
+                  targetSettings,
+                  Nil,
+                  caw.columnName,
+                  overrideWritetimeColumn(caw.rdd, caw.schema, "writetime"),
+                  caw.schema,
+                  None,
+                  sourceSettings
+                )
+              }
+            } else {
+              // repairWithScalarMetadata: the only other case once includePerColumnMetadata holds.
+              val (repairRdd, writeRepairSchema, timestampColumns) =
+                readers.Cassandra.explodeRowsFromPerColumnMeta(spark, rawRepairDf)
+
+              writers.Scylla.writeRowRDD(
+                targetSettings,
+                Nil,
+                applyRepairStrategy(repairRdd, writeRepairSchema, timestampColumns),
+                writeRepairSchema,
+                Some(timestampColumns),
                 None,
                 sourceSettings
               )
             }
-          } finally rawRepairDf.unpersist()
-        } else if (repairWithScalarMetadata) {
-          val (repairRdd, writeRepairSchema, timestampColumns) =
-            readers.Cassandra.explodeRowsFromPerColumnMeta(spark, rawRepairDf)
-
-          writers.Scylla.writeRowRDD(
-            targetSettings,
-            Nil,
-            applyRepairStrategy(repairRdd, writeRepairSchema, timestampColumns),
-            writeRepairSchema,
-            Some(timestampColumns),
-            None,
-            sourceSettings
-          )
-        } else {
+          finally rawRepairDf.unpersist()
+        } else
+          // No per-column metadata: each row is a single atomic upsert, so a task failing between
+          // rows can only skip a row that was genuinely never written - no persist/count
+          // checkpoint is needed here (see the trade-off noted in this method's doc comment).
           writers.Scylla.writeDataframe(
             targetSettings,
             Nil,
@@ -893,7 +933,6 @@ object ScyllaValidator {
             None,
             sourceSettings
           )
-        }
 
         val missingSourceRowCount = missingCountAcc.values.sum
 

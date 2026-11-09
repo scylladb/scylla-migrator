@@ -1121,15 +1121,16 @@ object MySQLToScyllaValidator {
 
         val missingSourceDf = missingSourceRows(rawSourceDF, rawTargetDF, renamedPK)
 
-        // writeDataframe is the only action over missingSourceDf, so no persist is needed. Note
-        // that since this is an uncached pass, a repair task that retries after already writing
-        // some rows will re-read the target and see those rows as no longer missing, slightly
-        // undercounting in that scenario even though every row is still written exactly once
-        // overall (see ScyllaValidator's runValidation doc for the full rationale). The count is
-        // reported once per task completion, keyed by (partitionId, stageAttemptNumber), so a
-        // resubmitted stage (e.g. after a shuffle fetch failure from the anti-join) cannot
-        // double-count a partition that already succeeded under an older stage attempt - see
-        // ScyllaValidator for the full rationale. This block only needs a count (failure sampling
+        // writeDataframe is the only action over missingSourceDf, so no persist is needed: each row
+        // here is a single atomic upsert (no per-column metadata splitting), so a task that retries
+        // after already writing some rows will re-read the target, see those rows as no longer
+        // missing, and simply (and correctly) not re-attempt them - slightly undercounting the
+        // diagnostic total in that scenario, but losing no data (see ScyllaValidator's
+        // runValidation doc for the full rationale, including why a timestamp-preserving repair
+        // path needs a stronger guarantee than this one does). The count is reported once per task
+        // completion, keyed by (partitionId, stageAttemptNumber), so a resubmitted stage (e.g. after
+        // a shuffle fetch failure from the anti-join) cannot double-count a partition that already
+        // succeeded under an older stage attempt. This block only needs a count (failure sampling
         // already happened above via collectFailureSample), so it uses
         // PartitionKeyedAccumulator[Long] directly rather than PartitionRepairSummary.
         // Registered WITHOUT a name: a named accumulator has its value snapshotted into every

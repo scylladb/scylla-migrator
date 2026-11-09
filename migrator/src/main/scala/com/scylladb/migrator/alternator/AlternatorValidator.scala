@@ -34,11 +34,11 @@ object AlternatorValidator {
     * so a retried repair task re-reads the target from scratch. If an earlier (failed) attempt of
     * that task already wrote some items before failing, the retry will see those items as already
     * present and will not re-report them as missing - the repaired-row count and failure sample can
-    * therefore slightly undercount in that scenario, even though every originally-missing item is
-    * still written exactly once overall (repair writes are idempotent upserts, so no data is lost
-    * or duplicated). This is an accepted trade-off for avoiding a second full pass over the
-    * source/target tables; a subsequent re-validation run confirms the data itself converged
-    * correctly regardless.
+    * therefore slightly undercount in that scenario. This is harmless to the data itself (each
+    * item's repair write is an idempotent upsert, so an already-written item is simply, and
+    * correctly, not re-attempted); a subsequent re-validation run confirms the data converged
+    * correctly regardless. This is an accepted trade-off for avoiding a second full pass over the
+    * source/target tables.
     *
     * @return
     *   A list of comparison failures (which is empty if the data are the same in both databases).
