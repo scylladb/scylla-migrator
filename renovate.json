@@ -1,0 +1,36 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommitTypeAll(chore)"
+  ],
+  "enabledManagers": [
+    "pep621"
+  ],
+  "schedule": [
+    "before 5am on monday"
+  ],
+  "packageRules": [
+    {
+      "description": "Docs Python dependencies should be updated together, including transitive ones through lock file maintenance",
+      "matchManagers": [
+        "pep621"
+      ],
+      "rangeStrategy": "update-lockfile",
+      "groupName": "docs",
+      "lockFileMaintenance": {
+        "enabled": true
+      }
+    },
+    {
+      "description": "Docs Python version is pinned to the one used by the docs build and has to be bumped together with it",
+      "matchManagers": [
+        "pep621"
+      ],
+      "matchDepTypes": [
+        "requires-python"
+      ],
+      "enabled": false
+    }
+  ]
+}
