@@ -14,4 +14,5 @@ services:
       --memory 2048M
       --alternator-port 8000
       --alternator-write-isolation only_rmw_uses_lwt
+      --api-address 0.0.0.0
       --tablets-mode-for-new-keyspaces disabled

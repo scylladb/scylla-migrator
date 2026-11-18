@@ -24,7 +24,8 @@ object TargetSettings {
     writeWritetimestampInuS: Option[Long],
     consistencyLevel: String,
     dropNullPrimaryKeys: Option[Boolean] = None,
-    cloud: Option[CloudConfig] = None
+    cloud: Option[CloudConfig] = None,
+    clientRoutes: Option[ClientRoutesSettings] = None
   ) extends TargetSettings
 
   /** Mirror of `SourceSettings.Cassandra` cloud handling. See the doc-comment on [[CloudConfig]]
@@ -81,6 +82,15 @@ object TargetSettings {
         writeWritetimestampInuS       <- c.get[Option[Long]]("writeWritetimestampInuS")
         consistencyLevel              <- c.get[String]("consistencyLevel")
         dropNullPrimaryKeys           <- c.get[Option[Boolean]]("dropNullPrimaryKeys")
+        clientRoutes                  <- c.get[Option[ClientRoutesSettings]]("clientRoutes")
+        _ <- if (cloud.isDefined && clientRoutes.isDefined)
+               Left(
+                 DecodingFailure(
+                   "Scylla target: 'clientRoutes' is mutually exclusive with 'cloud'.",
+                   c.history
+                 )
+               )
+             else Right(())
         _ <- if (cloud.isDefined && localDC.isDefined)
                Left(
                  DecodingFailure(
@@ -113,7 +123,8 @@ object TargetSettings {
         writeWritetimestampInuS,
         consistencyLevel,
         dropNullPrimaryKeys,
-        cloud
+        cloud,
+        clientRoutes
       )
     }
 
@@ -129,7 +140,8 @@ object TargetSettings {
         "writeTTLInS"                   -> s.writeTTLInS.asJson,
         "writeWritetimestampInuS"       -> s.writeWritetimestampInuS.asJson,
         "consistencyLevel"              -> s.consistencyLevel.asJson,
-        "dropNullPrimaryKeys"           -> s.dropNullPrimaryKeys.asJson
+        "dropNullPrimaryKeys"           -> s.dropNullPrimaryKeys.asJson,
+        "clientRoutes"                  -> s.clientRoutes.asJson
       )
       s.cloud match {
         case Some(cloud) => common.add("cloud", cloud.asJson)

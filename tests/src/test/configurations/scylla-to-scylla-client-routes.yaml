@@ -1,0 +1,37 @@
+source:
+  type: scylla
+  host: scylla-source
+  port: 9042
+  localDC: datacenter1
+  credentials:
+    username: dummy
+    password: dummy
+  keyspace: test
+  table: clientroutestest
+  consistencyLevel: LOCAL_QUORUM
+  preserveTimestamps: true
+  splitCount: 8
+  connections: 8
+  fetchSize: 1000
+
+target:
+  type: scylla
+  host: scylla
+  port: 9042
+  localDC: datacenter1
+  credentials:
+    username: dummy
+    password: dummy
+  keyspace: test
+  table: clientroutestest
+  consistencyLevel: LOCAL_QUORUM
+  connections: 16
+  stripTrailingZerosForDecimals: false
+  # ScyllaClientRoutesTest registers this connection ID through the REST API before running.
+  clientRoutes:
+    endpoints:
+      - connectionId: migrator-it-connection
+
+savepoints:
+  path: /app/savepoints
+  intervalSeconds: 300

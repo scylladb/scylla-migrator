@@ -236,6 +236,86 @@ finds a local copy — no dependency on Hadoop URL handlers or repeated S3 fetch
 
 This setting is also accepted on a Cassandra target. See :ref:`config-cassandra-cloud-target`.
 
+.. _config-cassandra-client-routes-source:
+
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+ScyllaDB Cloud private endpoints (PrivateLink, Private Service Connect)
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+Set the ``clientRoutes`` block to reach a ScyllaDB Cloud cluster through a private endpoint.
+The driver reads the ``system.client_routes`` table for the listed connection IDs and connects to
+every node through the private endpoint address and port published for it, so the Spark driver
+and executors never need to reach the node IP addresses. Client routes require ScyllaDB Cloud
+(ScyllaDB 2026.1 or later).
+
+- ``host`` and ``port`` are the private endpoint address and port you were given for the cluster.
+  The port is the one of the private endpoint, not necessarily 9042 (the usual port without client
+  routes). They are only used for the initial connection.
+- When you have several private endpoint addresses (for example one per availability zone), list
+  them all in ``host``, as a YAML list or comma-separated; they all use ``port``. The migrator tries
+  all of them for the initial connection, so it still connects while one of them is unavailable.
+- ``localDC`` is optional when the listed connection IDs only route the nodes of one datacenter:
+  that datacenter is then used. Set it when they route several datacenters.
+- ``cloud`` must not be set.
+- ``sslOptions`` can be combined with ``clientRoutes``; the driver then uses the TLS port
+  published for each route. Enable it when the private connection only accepts TLS.
+- ``connectionAddr`` replaces the address published for a connection ID. Set it to the endpoint IP
+  address when the published DNS name does not resolve inside your VPC, for example on GCP Private
+  Service Connect or on AWS without private DNS enabled on the VPC endpoint.
+
+A cluster can have several connection IDs: one per availability zone of each datacenter, across
+several datacenters. The connection IDs are shown in the ScyllaDB Cloud console with the private
+connection details. List every connection ID the migrator may use. Together, the listed IDs must
+route every node of the local datacenter, so include all the connection IDs that serve it. Listing
+the IDs of other datacenters is harmless when ``localDC`` is set: the migrator only connects to
+nodes of the local datacenter.
+
+When the migrator first connects, the Spark connector checks that every node of the local
+datacenter has a usable route (one that publishes the port the driver needs, ``tls_port`` when TLS
+is enabled) for one of the listed connection IDs, and fails with an error naming the uncovered
+nodes otherwise. When a node is
+published under several of the listed connection IDs, the driver uses one of those routes; the
+order of ``endpoints`` does not choose which.
+
+.. code-block:: yaml
+
+  source:
+    type: scylla
+    # Private endpoint address(es) used for the initial connection, as a YAML list or
+    # comma-separated, e.g. [<private-endpoint-address-az1>, <private-endpoint-address-az2>]
+    host: <private-endpoint-address>
+    # Port of the private endpoint
+    port: <private-endpoint-port>
+    # Optional with clientRoutes when the connection IDs route a single datacenter
+    localDC: <datacenter>
+    credentials:
+      username: <username>
+      password: <pass>
+    clientRoutes:
+      endpoints:
+        # Connection IDs shown in the ScyllaDB Cloud console, e.g. one per availability zone
+        - connectionId: <connection-id-dc1-az1>
+        - connectionId: <connection-id-dc1-az2>
+        # Optional - hostname or IP address (without port) that replaces the address
+        # published by ScyllaDB Cloud for this connection ID, e.g. the endpoint IP address
+        - connectionId: <connection-id-dc2-az1>
+          connectionAddr: <endpoint-ip-address>
+      # Optional - advanced shard awareness: the driver picks each connection's source port
+      # to reach a given shard. ScyllaDB Cloud private endpoints support it, but it is off by
+      # default on the client side: set it to true on ScyllaDB Cloud. Leave it false for a
+      # proxy that does not preserve the client source port (Proxy Protocol v2). Default: false.
+      # Requests are sent to the right shard either way (basic shard awareness).
+      shardAwareness: true
+    keyspace: <keyspace>
+    table: <table>
+    consistencyLevel: LOCAL_QUORUM
+    preserveTimestamps: true
+    splitCount: 256
+    connections: 8
+    fetchSize: 1000
+
+This setting is also accepted on a Scylla target. See :ref:`config-scylla-client-routes-target`.
+
 ^^^^^^^^^^^^^^
 Parquet Source
 ^^^^^^^^^^^^^^
@@ -338,6 +418,42 @@ A source of type ``alternator`` can be used together with a target of type ``dyn
     connectionAcquisitionTimeoutMs: 10000
     connectionTimeoutMs: 15000
     maxItemsPerBatch: 100
+    # Optional - Set to false to send every request to 'endpoint' with the plain AWS SDK client
+    # instead of discovering and load balancing over the nodes. Required behind a private
+    # endpoint, see below. Default: true.
+    loadBalancing: true
+
+.. _config-alternator-private-endpoint:
+
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+Alternator through a private endpoint (PrivateLink, Private Service Connect)
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+By default, the migrator uses the Alternator load-balancing client, which asks the ``endpoint``
+for the list of nodes (``/localnodes``) and then sends requests to the nodes directly. Behind a
+ScyllaDB Cloud private endpoint those node addresses are not reachable. The Alternator client in
+use has no support for private endpoints yet, so set:
+
+- ``endpoint`` to the private endpoint address and its port that reaches all nodes, with
+  ``https://`` when the private connection only accepts TLS;
+- ``loadBalancing: false``, so that every request goes to that endpoint, whose load balancer spreads
+  the requests over the nodes.
+
+The settings that only the load-balancing client applies (``datacenter``, ``rack``, the refresh
+intervals, ``compression``, ``optimizeHeaders`` and the connection pool settings) cannot be combined
+with ``loadBalancing: false``. ``maxItemsPerBatch`` and ``removeConsumedCapacity`` still apply.
+
+.. code-block:: yaml
+
+  source:
+    type: alternator
+    table: <table>
+    endpoint:
+      host: https://<private-endpoint-address>
+      port: <private-endpoint-port>
+    loadBalancing: false
+
+The same applies to an Alternator target.
 
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 DynamoDB S3 Export Source
@@ -668,6 +784,36 @@ are accepted.
     connections: 16
     stripTrailingZerosForDecimals: false
 
+.. _config-scylla-client-routes-target:
+
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+ScyllaDB Cloud private endpoints (PrivateLink, Private Service Connect)
+"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+Same semantics as :ref:`config-cassandra-client-routes-source` but on the target side:
+``host``/``port`` point at the private endpoint, ``localDC`` is required only when the listed
+connection IDs route several datacenters, and ``cloud`` must not be set.
+
+.. code-block:: yaml
+
+  target:
+    type: scylla
+    host: <private-endpoint-address-az1>,<private-endpoint-address-az2>
+    port: <private-endpoint-port>
+    localDC: <datacenter>
+    credentials:
+      username: <username>
+      password: <pass>
+    clientRoutes:
+      endpoints:
+        - connectionId: <connection-id-dc1-az1>
+        - connectionId: <connection-id-dc1-az2>
+    keyspace: <keyspace>
+    table: <table>
+    consistencyLevel: LOCAL_QUORUM
+    connections: 16
+    stripTrailingZerosForDecimals: false
+
 
 ^^^^^^^^^^^^^^^
 DynamoDB Target
@@ -733,6 +879,10 @@ Alternator Target
     connectionAcquisitionTimeoutMs: 10000
     connectionTimeoutMs: 15000
     maxItemsPerBatch: 100
+    # Optional - Set to false to send every request to 'endpoint' with the plain AWS SDK client.
+    # Required behind a private endpoint, see :ref:`config-alternator-private-endpoint`.
+    # Default: true.
+    loadBalancing: true
 
 -------
 Renames

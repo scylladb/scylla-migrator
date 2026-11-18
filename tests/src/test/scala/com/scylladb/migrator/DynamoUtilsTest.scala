@@ -19,6 +19,8 @@ import software.amazon.awssdk.services.dynamodb.model.{
   UpdateItemRequest
 }
 
+import scala.jdk.CollectionConverters._
+
 class DynamoUtilsTest extends munit.FunSuite {
 
   // --- Section 3: RemoveConsumedCapacityInterceptor ---
@@ -267,6 +269,70 @@ class DynamoUtilsTest extends munit.FunSuite {
     val jobConf = new JobConf()
     DynamoUtils.setDynamoDBJobConf(jobConf, None, None, None, None, None)
     assertEquals(jobConf.get(DynamoDBConstants.MAX_ITEMS_PER_BATCH), null)
+  }
+
+  // --- Section 7: alternator loadBalancing ---
+
+  test("alternator settings install the load-balancing client on executors by default") {
+    val jobConf = new JobConf()
+    DynamoUtils.setDynamoDBJobConf(
+      jobConf,
+      None,
+      None,
+      None,
+      None,
+      None,
+      alternatorSettings = Some(config.AlternatorSettings())
+    )
+    assertEquals(
+      jobConf.get(DynamoDBConstants.CUSTOM_CLIENT_BUILDER_TRANSFORMER),
+      classOf[DynamoUtils.AlternatorLoadBalancingEnabler].getName
+    )
+    assertEquals(jobConf.get("scylla.migrator.use_alternator_client"), "true")
+  }
+
+  test("loadBalancing: false keeps the default client but still applies maxItemsPerBatch") {
+    val jobConf = new JobConf()
+    DynamoUtils.setDynamoDBJobConf(
+      jobConf,
+      None,
+      None,
+      None,
+      None,
+      None,
+      removeConsumedCapacity = true,
+      alternatorSettings = Some(
+        config.AlternatorSettings(maxItemsPerBatch = Some(25), loadBalancing = Some(false))
+      )
+    )
+    // The transformer stays: it also strips consumed capacity, which Alternator rejects.
+    assertEquals(
+      jobConf.get(DynamoDBConstants.CUSTOM_CLIENT_BUILDER_TRANSFORMER),
+      classOf[DynamoUtils.AlternatorLoadBalancingEnabler].getName
+    )
+    assertEquals(jobConf.get("scylla.migrator.use_alternator_client"), "false")
+    assertEquals(jobConf.get(DynamoDBConstants.MAX_ITEMS_PER_BATCH), "25")
+    assertEquals(jobConf.get("scylla.migrator.remove_consumed_capacity"), "true")
+  }
+
+  test("loadBalancing: false builds the plain AWS SDK client") {
+    val client = DynamoUtils.buildDynamoClient(
+      Some(DynamoDBEndpoint("http://pe-alternator.example.com", 8000)),
+      None,
+      Some("dummy"),
+      Seq.empty,
+      Some(config.AlternatorSettings(loadBalancing = Some(false)))
+    )
+    try {
+      val interceptors = client.serviceClientConfiguration.overrideConfiguration
+        .executionInterceptors()
+        .asScala
+        .map(_.getClass.getName)
+      assert(
+        !interceptors.exists(_.startsWith("com.scylladb.alternator")),
+        s"expected no Alternator query-plan interceptor, got $interceptors"
+      )
+    } finally client.close()
   }
 
   test("removeConsumedCapacity defaults to false in setDynamoDBJobConf") {

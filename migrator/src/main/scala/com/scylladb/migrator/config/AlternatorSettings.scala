@@ -15,8 +15,19 @@ case class AlternatorSettings(
   connectionTimeToLiveMs: Option[Long] = None,
   connectionAcquisitionTimeoutMs: Option[Long] = None,
   connectionTimeoutMs: Option[Long] = None,
-  maxItemsPerBatch: Option[Int] = None
-)
+  maxItemsPerBatch: Option[Int] = None,
+  loadBalancing: Option[Boolean] = None
+) {
+
+  /** Whether requests go through the Alternator load-balancing client, which discovers the nodes
+    * through `/localnodes` and spreads requests over them. Disabled, every request goes to the
+    * configured `endpoint` with the plain AWS SDK client. That is the only mode that works behind a
+    * private endpoint (AWS PrivateLink, GCP Private Service Connect) until the Alternator client
+    * supports client routes, because `/localnodes` returns node addresses that cannot be reached
+    * through it.
+    */
+  def loadBalancingEnabled: Boolean = loadBalancing.getOrElse(true)
+}
 
 object AlternatorSettings {
   implicit val decoder: Decoder[AlternatorSettings] = deriveDecoder
@@ -113,6 +124,29 @@ object AlternatorSettings {
       errors += "'connectionTimeoutMs' must not be negative."
     if (s.maxItemsPerBatch.exists(_ <= 0))
       errors += "'maxItemsPerBatch' must be a positive integer."
+    if (!s.loadBalancingEnabled) {
+      val clientOnly = loadBalancingClientSettings(s)
+      if (clientOnly.nonEmpty)
+        errors +=
+          s"${clientOnly.mkString(", ")} only apply to the Alternator load-balancing client; " +
+            "remove them or remove 'loadBalancing: false'."
+    }
     errors.result()
   }
+
+  /** Names of the settings that only the Alternator load-balancing client applies. */
+  private def loadBalancingClientSettings(s: AlternatorSettings): List[String] =
+    List(
+      "datacenter"                     -> s.datacenter,
+      "rack"                           -> s.rack,
+      "activeRefreshIntervalMs"        -> s.activeRefreshIntervalMs,
+      "idleRefreshIntervalMs"          -> s.idleRefreshIntervalMs,
+      "compression"                    -> s.compression,
+      "optimizeHeaders"                -> s.optimizeHeaders,
+      "maxConnections"                 -> s.maxConnections,
+      "connectionMaxIdleTimeMs"        -> s.connectionMaxIdleTimeMs,
+      "connectionTimeToLiveMs"         -> s.connectionTimeToLiveMs,
+      "connectionAcquisitionTimeoutMs" -> s.connectionAcquisitionTimeoutMs,
+      "connectionTimeoutMs"            -> s.connectionTimeoutMs
+    ).collect { case (name, Some(_)) => s"'$name'" }
 }
