@@ -20,8 +20,13 @@ import com.scylladb.migrator.config.{
   TargetSettings
 }
 import com.scylladb.migrator.readers.TimestampColumns
-import com.scylladb.migrator.validation.RowComparisonFailure
+import com.scylladb.migrator.validation.{
+  BoundedListAccumulator,
+  PartitionKeyedAccumulator,
+  RowComparisonFailure
+}
 import org.apache.logging.log4j.LogManager
+import org.apache.spark.TaskContext
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{ Row, SparkSession }
 import org.apache.spark.sql.cassandra.DataTypeConverter
@@ -320,6 +325,27 @@ object ScyllaValidator {
     * snapshot taken ''before'' the copy, so it may contain `MissingTargetRow` entries for rows that
     * have since been written. A subsequent re-validation can be used to confirm convergence.
     *
+    * The comparison and the repair write share a single pass over the source/target join. When
+    * `preserveTimestamps` is disabled, each row is written as a single atomic upsert, and this pass
+    * is left uncached: a retried repair task re-reads the target from scratch, and if an earlier
+    * (failed) attempt of that task already wrote some rows before failing, the retry will see those
+    * rows as already present and will not re-report them as missing - the repaired-row count and
+    * failure sample can therefore slightly undercount in that scenario. This is harmless to the
+    * data itself (each row's repair write is an idempotent upsert, so an already-written row is
+    * simply, and correctly, not re-attempted); a subsequent re-validation run confirms the data
+    * converged correctly regardless. This is an accepted trade-off for avoiding a second full pass
+    * over the source/target databases.
+    *
+    * When `preserveTimestamps` is enabled, a single row's columns can instead be written as several
+    * separate physical writes (grouped by distinct per-cell TTL/WRITETIME, and/or a base write plus
+    * one pass per non-frozen collection column). A task failing between those writes would
+    * otherwise leave a row only partially repaired, and an uncached retry would see that row as no
+    * longer missing and permanently skip the rest of it - so for this case, the rows to repair are
+    * materialized (persisted and counted) once, before any of those writes begin, trading a bit of
+    * memory/disk for correctness: a write-task retry then replays the same, already-decided set of
+    * rows rather than re-deriving "missing" against a target its own earlier, failed attempt may
+    * have partially mutated.
+    *
     * @return
     *   A list of comparison failures (which is empty if the data are the same in both databases).
     */
@@ -612,29 +638,24 @@ object ScyllaValidator {
         addElementMetadata(joined, sourceSide, targetSide, lookupColumns)
       }
 
-    val cachedJoined =
-      if (validationConfig.copyMissingRows)
-        withElementMetadata.persist(StorageLevel.MEMORY_AND_DISK)
-      else withElementMetadata
-
-    try {
-      val failures = cachedJoined
-        .flatMap { case (l, r) =>
-          RowComparisonFailure.compareCassandraRows(
-            dropColumns(l, sourceOnlyColumns),
-            r,
-            validationConfig.floatingPointTolerance,
-            validationConfig.timestampMsTolerance,
-            validationConfig.ttlToleranceMillis,
-            validationConfig.writetimeToleranceMillis,
-            validationConfig.compareTimestamps,
-            validationConfig.numericTypePolicy
-          )
-        }
-        .take(validationConfig.failuresToFetch)
-        .toList
-
-      if (validationConfig.copyMissingRows) {
+    val failures: List[RowComparisonFailure] =
+      if (!validationConfig.copyMissingRows)
+        withElementMetadata
+          .flatMap { case (l, r) =>
+            RowComparisonFailure.compareCassandraRows(
+              dropColumns(l, sourceOnlyColumns),
+              r,
+              validationConfig.floatingPointTolerance,
+              validationConfig.timestampMsTolerance,
+              validationConfig.ttlToleranceMillis,
+              validationConfig.writetimeToleranceMillis,
+              validationConfig.compareTimestamps,
+              validationConfig.numericTypePolicy
+            )
+          }
+          .take(validationConfig.failuresToFetch)
+          .toList
+      else {
         if (
           !includePerColumnMetadata &&
           validationConfig.repairWritetimeStrategy != RepairWritetimeStrategy.Source
@@ -676,16 +697,71 @@ object ScyllaValidator {
             includePerColumnMetadata,
             nonFrozenCollectionNames
           )
+        val repairFields = repairSchema.fields.toIndexedSeq
 
-        val missingRowsRdd =
-          cachedJoined.filter { case (_, r) => r.isEmpty }.persist(StorageLevel.MEMORY_AND_DISK)
-        try {
-          val missingSourceRowCount = missingRowsRdd.count()
+        // failureAccumulator is a best-effort, globally-bounded sample (capped at
+        // failuresToFetch across ALL partitions combined, not per partition - a per-partition
+        // cap would retain up to failuresToFetch entries for EACH partition, which does not
+        // bound driver memory as partition count grows). missingCountAcc keeps the exact,
+        // stage-retry-deduplicated row count (see PartitionKeyedAccumulator). Both accumulators
+        // are registered WITHOUT a name: a named accumulator has its value snapshotted into
+        // every completed task's metadata for UI/event-log display, which is fine for a small
+        // scalar but grows unboundedly (and, for a map keyed by partition, quadratically) as
+        // more tasks complete.
+        val failureAccumulator =
+          new BoundedListAccumulator[RowComparisonFailure](validationConfig.failuresToFetch)
+        spark.sparkContext.register(failureAccumulator)
+        val missingCountAcc = new PartitionKeyedAccumulator[Long]()
+        spark.sparkContext.register(missingCountAcc)
 
-          if (missingSourceRowCount > 0) {
-            val repairFields = repairSchema.fields.toIndexedSeq
-            val rawRepairDf = spark.createDataFrame(
-              missingRowsRdd.map { case (sourceRow, _) =>
+        // The comparison and the repair row are both derived from a single pass over
+        // `withElementMetadata`, so there is no second action that would require persisting it.
+        // The repaired-row count is accumulated locally while this partition's iterator is
+        // consumed, and reported to missingCountAcc exactly once, when the task ends, keyed by
+        // (partitionId, stageAttemptNumber).
+        //
+        // This defends against the known Spark behavior (SPARK-9809/SPARK-10042) where a
+        // resubmitted stage attempt can re-run tasks for partitions that already succeeded under
+        // an older stage attempt: keeping only the highest stageAttemptNumber per partition means
+        // such a partition's contribution is counted exactly once. Ordinary task-level retries
+        // (same stage attempt) need no special handling: Spark discards a failed task's
+        // accumulator updates rather than merging them, so only a successful attempt's single
+        // `add` call is ever observed here. (See the class docs above for a residual case this
+        // does not cover: a retry observing rows its own earlier, failed attempt already wrote.)
+        val repairRowsRdd: RDD[Row] = withElementMetadata.mapPartitions { partitionIter =>
+          val tc = TaskContext.get()
+          val partitionId = tc.partitionId()
+          val stageAttemptNumber = tc.stageAttemptNumber()
+
+          var missingCount = 0L
+          var localSampleCount = 0
+
+          val result = partitionIter.flatMap { case (sourceRow, targetRow) =>
+            // Skip the comparison entirely once this partition's local contribution to the
+            // sample is full - compareCassandraRows builds full row representations, which is
+            // wasted work once we already have enough examples from this partition to pass on
+            // to the (globally-bounded) failureAccumulator.
+            if (localSampleCount < validationConfig.failuresToFetch) {
+              RowComparisonFailure
+                .compareCassandraRows(
+                  dropColumns(sourceRow, sourceOnlyColumns),
+                  targetRow,
+                  validationConfig.floatingPointTolerance,
+                  validationConfig.timestampMsTolerance,
+                  validationConfig.ttlToleranceMillis,
+                  validationConfig.writetimeToleranceMillis,
+                  validationConfig.compareTimestamps,
+                  validationConfig.numericTypePolicy
+                )
+                .foreach { failure =>
+                  failureAccumulator.add(failure)
+                  localSampleCount += 1
+                }
+            }
+
+            if (targetRow.isEmpty) {
+              missingCount += 1
+              Some(
                 Row.fromSeq(
                   repairFields.map { field =>
                     coerceRepairValue(
@@ -696,106 +772,141 @@ object ScyllaValidator {
                     )
                   }
                 )
-              },
-              repairSchema
-            )
+              )
+            } else None
+          }
 
-            // Precompute the writetime override (if any) ONCE so the scalar/frozen base write and
-            // every collection-append pass are stamped consistently. Lazy so the value-only repair
-            // path (no metadata) neither logs nor triggers the `config` validation error.
-            //   - source: no override; base + appends keep original per-cell/per-element WRITETIME.
-            //   - coordinator/config: override applied to BOTH base and appends. This collapses the
-            //     per-element WRITETIMEs to a single value, but keeping the appends on source
-            //     WRITETIME while overriding the base would leave the base "resurrected" (live) with
-            //     collection elements that are still shadowed by their older tombstones — an
-            //     inconsistent, partially-empty row. Consistency is preferred over per-element
-            //     granularity whenever the operator explicitly opts into an override strategy.
-            lazy val repairWritetimeOverrideMicros: Option[Long] =
-              validationConfig.repairWritetimeStrategy match {
-                case RepairWritetimeStrategy.Source =>
-                  log.info(
-                    "repairWritetimeStrategy=source: using original source writetime(s). " +
-                      "Repair writes may be shadowed by newer delete tombstones on the target."
-                  )
-                  None
-                case RepairWritetimeStrategy.Coordinator =>
-                  val micros = System.currentTimeMillis() * 1000L
-                  log.info(
-                    s"repairWritetimeStrategy=coordinator: overriding writetime to $micros. " +
-                      "Repair writes will beat most tombstones but may resurrect deleted rows."
-                  )
-                  Some(micros)
-                case RepairWritetimeStrategy.Config =>
-                  val micros = targetSettings.writeWritetimestampInuS.getOrElse(
-                    sys.error(
-                      "repairWritetimeStrategy=config requires target.writeWritetimestampInuS " +
-                        "to be set in the configuration."
-                    )
-                  )
-                  log.info(
-                    s"repairWritetimeStrategy=config: overriding writetime to $micros " +
-                      "(from target.writeWritetimestampInuS)."
-                  )
-                  Some(micros)
+          // Keep the listener body trivial and non-throwing: it fires on success, failure, or
+          // cancellation alike, but a failed/cancelled attempt's update is discarded by Spark's
+          // scheduler regardless (never merged into the driver-side accumulator).
+          tc.addTaskCompletionListener[Unit] { _ =>
+            missingCountAcc.add((partitionId, stageAttemptNumber, missingCount))
+          }
+
+          result
+        }
+
+        val rawRepairDf = spark.createDataFrame(repairRowsRdd, repairSchema)
+
+        // Precompute the writetime override (if any) ONCE so the scalar/frozen base write and
+        // every collection-append pass are stamped consistently. Lazy so the value-only repair
+        // path (no metadata) neither logs nor triggers the `config` validation error.
+        //   - source: no override; base + appends keep original per-cell/per-element WRITETIME.
+        //   - coordinator/config: override applied to BOTH base and appends. This collapses the
+        //     per-element WRITETIMEs to a single value, but keeping the appends on source
+        //     WRITETIME while overriding the base would leave the base "resurrected" (live) with
+        //     collection elements that are still shadowed by their older tombstones — an
+        //     inconsistent, partially-empty row. Consistency is preferred over per-element
+        //     granularity whenever the operator explicitly opts into an override strategy.
+        lazy val repairWritetimeOverrideMicros: Option[Long] =
+          validationConfig.repairWritetimeStrategy match {
+            case RepairWritetimeStrategy.Source =>
+              log.info(
+                "repairWritetimeStrategy=source: using original source writetime(s). " +
+                  "Repair writes may be shadowed by newer delete tombstones on the target."
+              )
+              None
+            case RepairWritetimeStrategy.Coordinator =>
+              val micros = System.currentTimeMillis() * 1000L
+              log.info(
+                s"repairWritetimeStrategy=coordinator: overriding writetime to $micros. " +
+                  "Repair writes will beat most tombstones but may resurrect deleted rows."
+              )
+              Some(micros)
+            case RepairWritetimeStrategy.Config =>
+              val micros = targetSettings.writeWritetimestampInuS.getOrElse(
+                sys.error(
+                  "repairWritetimeStrategy=config requires target.writeWritetimestampInuS " +
+                    "to be set in the configuration."
+                )
+              )
+              log.info(
+                s"repairWritetimeStrategy=config: overriding writetime to $micros " +
+                  "(from target.writeWritetimestampInuS)."
+              )
+              Some(micros)
+          }
+
+        def overrideWritetimeColumn(
+          rdd: RDD[Row],
+          writeSchema: StructType,
+          writetimeColumn: String
+        ): RDD[Row] =
+          repairWritetimeOverrideMicros match {
+            case None => rdd
+            case Some(micros) =>
+              val writetimeIdx = writeSchema.fieldIndex(writetimeColumn)
+              rdd.map { row =>
+                val values = row.toSeq.toArray
+                values(writetimeIdx) match {
+                  case com.datastax.spark.connector.types.CassandraOption.Unset =>
+                  case _ => values(writetimeIdx) = java.lang.Long.valueOf(micros)
+                }
+                Row(ArraySeq.unsafeWrapArray(values): _*)
               }
+          }
 
-            def overrideWritetimeColumn(
-              rdd: RDD[Row],
-              writeSchema: StructType,
-              writetimeColumn: String
-            ): RDD[Row] =
-              repairWritetimeOverrideMicros match {
-                case None => rdd
-                case Some(micros) =>
-                  val writetimeIdx = writeSchema.fieldIndex(writetimeColumn)
-                  rdd.map { row =>
-                    val values = row.toSeq.toArray
-                    values(writetimeIdx) match {
-                      case com.datastax.spark.connector.types.CassandraOption.Unset =>
-                      case _ => values(writetimeIdx) = java.lang.Long.valueOf(micros)
-                    }
-                    Row(ArraySeq.unsafeWrapArray(values): _*)
-                  }
-              }
+        def applyRepairStrategy(
+          rdd: RDD[Row],
+          writeSchema: StructType,
+          timestampColumns: TimestampColumns
+        ): RDD[Row] = overrideWritetimeColumn(rdd, writeSchema, timestampColumns.writeTime)
 
-            def applyRepairStrategy(
-              rdd: RDD[Row],
-              writeSchema: StructType,
-              timestampColumns: TimestampColumns
-            ): RDD[Row] = overrideWritetimeColumn(rdd, writeSchema, timestampColumns.writeTime)
+        if (includePerColumnMetadata) {
+          // A row's columns can be split into several separate physical writes here (per-cell
+          // TTL/WRITETIME groups below, and/or a base write plus one pass per non-frozen
+          // collection column in the perElementCollectionMetadata branch) - each is its own Spark
+          // job. The whole chain up to `rawRepairDf` (scan, join, the missingness/accumulator
+          // mapPartitions above) is shuffle-free, so without this checkpoint a task that fails
+          // after committing some of a row's writes but before the rest would, on retry, re-run
+          // that chain against a target its OWN earlier attempt already partially mutated - the
+          // row would no longer look missing, permanently losing the remaining writes. `persist()`
+          // alone would likely already close this for a single-batch partition, since Spark fully
+          // unrolls a cached partition into the block store before exposing even its first element
+          // downstream - but relying on that depends on internal details of Dataset/columnar
+          // caching (e.g. per-batch exposure for a partition spanning multiple cache batches) we
+          // have not verified hold in general. `.count()` sidesteps that: unlike `.take()`, it is a
+          // dedicated, exhaustive action that only returns once every batch of every partition has
+          // been read and cached, while the target is still untouched by this run and before any
+          // write job starts; every later read - including a write-task retry - is then served from
+          // that cache, not from the live join. (Verified against the simpler, single-batch RDD
+          // case in CopyMissingRowsRetryMechanismTest.)
+          rawRepairDf.persist(StorageLevel.MEMORY_AND_DISK)
+          rawRepairDf.count()
 
+          try
             if (perElementCollectionMetadata) {
               // Scalar/frozen base write + per-element collection-append passes, mirroring the
               // direct migration multi-pass write so missing rows regain element-level metadata.
-              // The explosion persists `rawRepairDf` so the base and append passes share one
-              // read; release it once every pass has been written (or one has failed).
-              try {
-                val (baseRdd, baseSchema, timestampColumns, appendWrites) =
-                  readers.Cassandra.explodeRowsFromPerColumnMetaCollectionAware(spark, rawRepairDf)
+              // `rawRepairDf` is already cached above; `explodeRowsFromPerColumnMetaCollectionAware`
+              // persisting it again internally (shared with the migration path, which doesn't
+              // pre-cache its own frame) is a harmless no-op at the same storage level.
+              val (baseRdd, baseSchema, timestampColumns, appendWrites) =
+                readers.Cassandra.explodeRowsFromPerColumnMetaCollectionAware(spark, rawRepairDf)
 
-                writers.Scylla.writeRowRDD(
+              writers.Scylla.writeRowRDD(
+                targetSettings,
+                Nil,
+                applyRepairStrategy(baseRdd, baseSchema, timestampColumns),
+                baseSchema,
+                Some(timestampColumns),
+                None,
+                sourceSettings
+              )
+
+              appendWrites.foreach { caw =>
+                writers.Scylla.writeCollectionAppendRDD(
                   targetSettings,
                   Nil,
-                  applyRepairStrategy(baseRdd, baseSchema, timestampColumns),
-                  baseSchema,
-                  Some(timestampColumns),
+                  caw.columnName,
+                  overrideWritetimeColumn(caw.rdd, caw.schema, "writetime"),
+                  caw.schema,
                   None,
                   sourceSettings
                 )
-
-                appendWrites.foreach { caw =>
-                  writers.Scylla.writeCollectionAppendRDD(
-                    targetSettings,
-                    Nil,
-                    caw.columnName,
-                    overrideWritetimeColumn(caw.rdd, caw.schema, "writetime"),
-                    caw.schema,
-                    None,
-                    sourceSettings
-                  )
-                }
-              } finally rawRepairDf.unpersist()
-            } else if (repairWithScalarMetadata) {
+              }
+            } else {
+              // repairWithScalarMetadata: the only other case once includePerColumnMetadata holds.
               val (repairRdd, writeRepairSchema, timestampColumns) =
                 readers.Cassandra.explodeRowsFromPerColumnMeta(spark, rawRepairDf)
 
@@ -808,27 +919,31 @@ object ScyllaValidator {
                 None,
                 sourceSettings
               )
-            } else {
-              writers.Scylla.writeDataframe(
-                targetSettings,
-                Nil,
-                rawRepairDf,
-                None,
-                None,
-                sourceSettings
-              )
             }
-          }
-
-          log.info(
-            s"Finished copying missing rows to target: $missingSourceRowCount missing row(s) copied"
+          finally rawRepairDf.unpersist()
+        } else
+          // No per-column metadata: each row is a single atomic upsert, so a task failing between
+          // rows can only skip a row that was genuinely never written - no persist/count
+          // checkpoint is needed here (see the trade-off noted in this method's doc comment).
+          writers.Scylla.writeDataframe(
+            targetSettings,
+            Nil,
+            rawRepairDf,
+            None,
+            None,
+            sourceSettings
           )
-        } finally missingRowsRdd.unpersist()
+
+        val missingSourceRowCount = missingCountAcc.values.sum
+
+        log.info(
+          s"Finished copying missing rows to target: $missingSourceRowCount missing row(s) copied"
+        )
+
+        failureAccumulator.value.take(validationConfig.failuresToFetch)
       }
 
-      failures
-    } finally
-      if (validationConfig.copyMissingRows) cachedJoined.unpersist()
+    failures
   }
 
 }
