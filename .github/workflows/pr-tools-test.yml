@@ -1,0 +1,40 @@
+name: PR tools test
+
+# Runs the pr-resolver-tools.sh tests (scan-push against a scratch repo, review/reply checks
+# with gh stubbed, and the agent-settings.json deny rules) when the script, its tests, the
+# settings, the workflows whose prompts the hard-coded deny-rule cases mirror (update those
+# cases when a prompt's commands change), or this workflow change.
+on:
+  pull_request:
+    paths:
+      - .github/scripts/pr-resolver-tools.sh
+      - .github/scripts/test-pr-resolver-tools.sh
+      - .github/agent-settings.json
+      - .github/workflows/pr-tools-test.yml
+      - .github/workflows/pr-code-review.yml
+      - .github/workflows/pr-comment-resolver.yml
+  # Also after merging: two PRs that each pass can still break together. (actionlint rejects a
+  # YAML alias for paths, so the list is repeated.)
+  push:
+    branches: [main, master, dev]
+    paths:
+      - .github/scripts/pr-resolver-tools.sh
+      - .github/scripts/test-pr-resolver-tools.sh
+      - .github/agent-settings.json
+      - .github/workflows/pr-tools-test.yml
+      - .github/workflows/pr-code-review.yml
+      - .github/workflows/pr-comment-resolver.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - run: .github/scripts/test-pr-resolver-tools.sh
