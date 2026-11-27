@@ -13,12 +13,12 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain — 2 marker(s) remain for genuine documentation gaps/contradictions (see spec).
-- [x] Requirements are testable and unambiguous (except where marked)
+- [x] No [NEEDS CLARIFICATION] markers remain — 0 markers remain: supported validator pairs (FR-003) and outcome signalling via logs/exit status (FR-012) were resolved from code; `copyMissingRows` placement/default moved from Assumptions into FR-021.
+- [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)
 - [x] All acceptance scenarios are defined
-- [x] Edge cases are identified — taken from every caution/warning/note in the source docs.
+- [x] Edge cases are identified — taken from every caution/warning/note in the source docs, plus validator-specific limitations found in code.
 - [x] Scope is clearly bounded — sibling concerns are cross-referenced to other specs.
 - [x] Dependencies and assumptions identified
 
@@ -32,3 +32,4 @@
 ## Notes
 
 - Baseline (as-built) spec derived from documentation; markers should be resolved via `/speckit-clarify` and a docs fix before planning changes in this area.
+- Reviewed against source code 2026-11-27 (commit 06835d0): FRs corrected to as-built behaviour (FR-001, FR-003–FR-013, FR-016, FR-020–FR-021), new FRs added (FR-004a, FR-012a, FR-019a, FR-019b, FR-022) and User Story 7 (repair); docs discrepancies recorded in the spec's "Docs vs Code Review" table.

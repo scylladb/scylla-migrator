@@ -16,8 +16,9 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain — 1 marker remains (interaction of
-  `writeTTLInS`/`writeWritetimestampInuS` with `preserveTimestamps: true`), a genuine gap in the docs.
+- [x] No [NEEDS CLARIFICATION] markers remain — the `writeTTLInS`/`writeWritetimestampInuS` vs
+  `preserveTimestamps: true` marker was resolved from code (forced values are silently ignored when
+  timestamps are preserved; FR-027a).
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details) — they refer to the
@@ -37,8 +38,13 @@
 ## Notes
 
 - Items marked incomplete require spec updates before `/speckit-clarify` or `/speckit-plan`
-- Baseline spec derived from existing docs; the remaining marker should be resolved via
-  `/speckit-clarify` against the docs/code owners.
+- Reviewed against source code 2026-11-27 (commit 06835d0). Code-derived corrections: CQL target
+  tables are never created (FR-028), `scylla` source alias (FR-001), Parquet target allowed
+  (FR-003), consistency-level range and late validation (FR-010/010a), optional
+  `splitCount`/`connections`, host/port/bundle validation, extra `preserveTimestamps` rejections,
+  collection-size limits, `dropNullPrimaryKeys`. Docs/code disagreements are tabulated in the
+  spec's "Docs vs Code Review" section.
+- Baseline spec originally derived from existing docs.
 - Docs discrepancy noted in Assumptions: `migrate-from-cassandra-or-parquet.rst` says
   `preserveTimestamps` is incompatible with all collections, while `configuration.rst` supports frozen
   collections and opt-in non-frozen set/map support; the spec follows the configuration reference.

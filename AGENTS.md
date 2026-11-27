@@ -63,7 +63,7 @@ Read `README.md` for deployment instructions.
 ## Spec-driven development (Spec Kit)
 
 - Project principles: `.specify/memory/constitution.md`. Specs: `specs/` (see `specs/README.md`).
-- Specs `001`–`010` are baseline (as-built) specs derived from `docs/source/`; keep them in sync
+- Specs `001`–`012` are baseline (as-built) specs derived from `docs/source/` and the code; keep them in sync
   when documented behaviour changes.
 - For new features use the `/speckit-specify` → `/speckit-clarify` → `/speckit-plan` →
   `/speckit-tasks` → `/speckit-implement` skills in `.claude/skills/`.

@@ -16,8 +16,9 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain — 1 marker remains (FR-001: the resume page's list
-  of non-resumable sources omits Aerospike).
+- [x] No [NEEDS CLARIFICATION] markers remain — the FR-001 marker was resolved from code
+  (Aerospike is non-resumable and ignores `savepoints`, like MySQL and DynamoDB S3 export); the
+  resume page's omission is recorded as a docs gap.
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)
@@ -37,5 +38,8 @@
 
 - Baseline (as-built) spec derived from `resume-interrupted-migration.rst` and
   `configuration.rst` "Savepoints".
-- The remaining marker is a documentation consistency question; behaviour is already specified
-  (Aerospike is not resumable).
+- Reviewed against source code 2026-11-27 (commit 06835d0): FR-001/002/003/007/010/012–017/019/021
+  refined; FR-028–FR-034 added (rejected target types, signal handling, no identity check for
+  file resume, `enableParquetFileTracking`, clock-skew seeding, redaction-regex guard, Validator
+  does not resume); new acceptance scenarios and edge cases. Discrepancies are listed in the
+  spec's "Docs vs Code Review" section.

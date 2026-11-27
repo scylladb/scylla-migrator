@@ -17,8 +17,9 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain — 1 marker remains (Validator support for
-  Aerospike sources is undocumented).
+- [x] No [NEEDS CLARIFICATION] markers remain — the Validator-support marker was resolved from
+  code (the Validator rejects Aerospike sources; FR-035); the docs gap is recorded in the Docs vs
+  Code Review table.
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)
@@ -37,5 +38,8 @@
 ## Notes
 
 - Baseline (as-built) spec derived from `docs/source/configuration.rst` "Aerospike Source".
-- The remaining clarification should be resolved (via `/speckit-clarify`) before new work on
-  Aerospike validation is planned.
+- Reviewed against source code 2026-11-27 (commit 06835d0): FR-001/002/003/005/006/011/013/023/024
+  corrected or tightened; FR-030–FR-036 added (read tuning, scan retries, metrics report, enum
+  rejection, credential warnings, Validator gap, reserved/colliding column names). Discrepancies
+  with the docs are listed in the spec's "Docs vs Code Review" section.
+- Adding Aerospike validation would be new work requiring its own spec.

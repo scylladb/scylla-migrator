@@ -16,8 +16,9 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain — 1 marker remains (Ansible step "Ensure the table has
-  been created in the target environment" vs. automatic target-table creation documented elsewhere).
+- [x] No [NEEDS CLARIFICATION] markers remain — the Ansible "Ensure the table has been created" marker
+  was resolved from code (CQL target tables are never created by the migrator, so pre-creation is
+  required for CQL; DynamoDB/Alternator tables are created when missing).
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details) — they reference
@@ -40,3 +41,9 @@
 - Items marked incomplete require spec updates before `/speckit-clarify` or `/speckit-plan`
 - Docs gap recorded in Edge Cases (not as a marker): the `index.rst` feature list names only
   Cassandra, Parquet, DynamoDB and DynamoDB S3 export as sources.
+- Reviewed against source code 2026-11-27 (commit 06835d0). Code-derived additions: Spark runtime
+  defaults (`spark.task.maxFailures` 1024, `spark.stage.maxConsecutiveAttempts` 60, default
+  `spark.redaction.regex`), signal-triggered savepoints (cross-ref 008), remote config URIs,
+  Ansible hardware-derived sizing and `spark_master` naming, submit-script details, Docker details,
+  `deploy_spark_cluster.py` (User Story 9). Docs/code disagreements are tabulated in the spec's
+  "Docs vs Code Review" section.

@@ -13,12 +13,12 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain — 2 marker(s) remain for genuine documentation gaps/contradictions (see spec).
-- [x] Requirements are testable and unambiguous (except where marked)
+- [x] No [NEEDS CLARIFICATION] markers remain — 0 markers remain: region-with-endpoint (FR-007) and the dynamodb-s3-export target (FR-002, cross-referenced to 012) were resolved from code.
+- [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)
 - [x] All acceptance scenarios are defined
-- [x] Edge cases are identified — taken from every caution/warning/note in the source docs.
+- [x] Edge cases are identified — taken from every caution/warning/note in the source docs, plus startup validations and runtime behaviours found in code.
 - [x] Scope is clearly bounded — sibling concerns are cross-referenced to other specs.
 - [x] Dependencies and assumptions identified
 
@@ -32,3 +32,4 @@
 ## Notes
 
 - Baseline (as-built) spec derived from documentation; markers should be resolved via `/speckit-clarify` and a docs fix before planning changes in this area.
+- Reviewed against source code 2026-11-27 (commit 06835d0): FRs corrected to as-built behaviour (FR-001, FR-002, FR-007, FR-010–FR-015, FR-017, FR-019–FR-030), new FRs added (FR-013a, FR-014a, FR-018a, FR-019a, FR-027a, FR-027b, FR-034–FR-036); docs discrepancies recorded in the spec's "Docs vs Code Review" table.

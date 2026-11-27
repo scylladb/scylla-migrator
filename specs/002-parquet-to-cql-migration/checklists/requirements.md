@@ -14,8 +14,8 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain — 1 marker remains (whether `source.path` may be a
-  directory/prefix of several Parquet files, given file-level savepoint tracking).
+- [x] No [NEEDS CLARIFICATION] markers remain — the directory/prefix marker was resolved from code
+  (directories accepted; files discovered recursively for tracking; FR-001a).
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)
@@ -35,4 +35,9 @@
 ## Notes
 
 - Items marked incomplete require spec updates before `/speckit-clarify` or `/speckit-plan`
-- Baseline spec derived from existing docs; resolve the remaining marker via `/speckit-clarify`.
+- Reviewed against source code 2026-11-27 (commit 06835d0). Code-derived corrections: directory
+  paths, target table must pre-exist, `endpoint` not used for S3 reads, `region` not validated,
+  TTL/WRITETIME restore from migrator metadata columns (new User Story 5), null-key row dropping,
+  `enableParquetFileTracking`. Docs/code disagreements are tabulated in the spec's "Docs vs Code
+  Review" section.
+- Baseline spec originally derived from existing docs.

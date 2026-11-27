@@ -4,9 +4,9 @@
 
 **Created**: 2026-11-27
 
-**Status**: Baseline (as-built, derived from docs)
+**Status**: Baseline (as-built; derived from docs, reviewed against code 2026-11-27)
 
-**Input**: Existing documentation: `docs/source/index.rst` (feature list, "Compatibility Matrix"); `docs/source/getting-started/index.rst` (whole page); `docs/source/getting-started/docker.rst`; `docs/source/getting-started/spark-standalone.rst`; `docs/source/getting-started/ansible.rst`; `docs/source/run-the-migration.rst` (whole page); `docs/source/tutorials/dynamodb-to-scylladb-alternator/index.rst` (Spark/Docker setup, `spark-submit` invocation, executor sizing, monitoring); `docs/source/configuration.rst` (introduction: YAML format and `DecodingFailure`/`ParsingFailure` errors); `docs/source/validate.rst` (validator entry point per deployment)
+**Input**: Existing documentation: `docs/source/index.rst` (feature list, "Compatibility Matrix"); `docs/source/getting-started/index.rst` (whole page); `docs/source/getting-started/docker.rst`; `docs/source/getting-started/spark-standalone.rst`; `docs/source/getting-started/ansible.rst`; `docs/source/run-the-migration.rst` (whole page); `docs/source/tutorials/dynamodb-to-scylladb-alternator/index.rst` (Spark/Docker setup, `spark-submit` invocation, executor sizing, monitoring); `docs/source/configuration.rst` (introduction: YAML format and `DecodingFailure`/`ParsingFailure` errors); `docs/source/validate.rst` (validator entry point per deployment); source code at commit 06835d0 (`Migrator.scala`, `Validator.scala`, `config/MigratorConfig.scala`, `config/SparkTaskRetries.scala`, `config/SparkSecretRedaction.scala`, `config/SensitiveKeys.scala`, `PathIO.scala`, `SavepointsManager.scala`, `writers/Scylla.scala`, `docker-compose.yaml`, `dockerfiles/spark/Dockerfile`, `ansible/` (playbook, templates, files), `Makefile`, `build.sbt`, `deploy_spark_cluster.py`, `README.md`)
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -33,6 +33,15 @@ small valid configuration and confirm that the job starts, logs the migrator ver
 3. **Given** a running job, **When** the operator opens `http://<spark-master>:4040`, **Then** the
    Spark application UI shows the job's stages and tasks; when no job is running that page is
    unavailable.
+4. **Given** `spark.scylla.config` is an `s3a://`, `gs://` or other Hadoop filesystem URI, **When**
+   the job starts, **Then** the configuration is read from that location (a scheme without a Hadoop
+   connector in the runtime fails with an error naming the missing connector).
+5. **Given** the operator did not pass `spark.task.maxFailures`, **When** the job runs, **Then** a
+   task may be retried up to 1024 times before the job fails; a value passed to `spark-submit` is
+   kept. A stage may be re-attempted up to 60 consecutive times.
+6. **Given** a running migration of a resumable source, **When** the driver receives SIGINT, SIGTERM
+   or SIGUSR2, **Then** it writes a savepoint before exiting (a second signal forces exit; see
+   `008-savepoints-and-resume`).
 
 ---
 
@@ -55,6 +64,9 @@ not valid YAML; check the startup error.
    with a message starting with `ParsingFailure` describing the problem.
 3. **Given** a property that is not documented as "Optional" is missing, **When** the job starts,
    **Then** it fails with a `DecodingFailure` naming that property's path.
+4. **Given** a source/target pair the entry point does not support (e.g. a Parquet source with the
+   Validator), **When** the job starts, **Then** it fails before reading data with "Unsupported
+   combination of source and target ...".
 
 ---
 
@@ -125,7 +137,10 @@ UI at `http://localhost:8080`, then run a small migration.
 2. **Given** the cluster is up, **When** the job is submitted via `docker compose exec spark-master`,
    **Then** the jar is found under `/jars` (mounted from `./migrator/target/scala-2.13`) and the
    configuration under `/app` (the repository root), and progress is visible at `http://localhost:4040`.
-3. **Given** the DynamoDB-to-Alternator tutorial compose file, **When** the services start, **Then**
+3. **Given** the repository `docker-compose.yaml`, **When** it starts, **Then** the worker has 2 cores
+   and 4 GB, its UI is on port 8081, both containers mount `./parquet-data` at `/parquet-data`, and
+   the image runs Spark 4.0.2 on OpenJDK 17.
+4. **Given** the DynamoDB-to-Alternator tutorial compose file, **When** the services start, **Then**
    DynamoDB local listens on port 8000, ScyllaDB Alternator on port 8001, the Spark worker has 2
    cores and 4 GB, Spark 4.0.2 is installed, and the master exposes ports 8080 and 4040.
 
@@ -144,10 +159,12 @@ services, open the three web UIs, and run `submit-cql-job.sh` under `nohup`.
 
 **Acceptance Scenarios**:
 
-1. **Given** an inventory with groups `spark`, `master` and `worker`, hosts reachable over SSH as
-   user `ubuntu`, and Ubuntu 22.04/24.04 (or compatible), **When** the operator runs
+1. **Given** an inventory with groups `spark`, `master` and `worker`, the master host named
+   `spark_master`, hosts reachable over SSH as user `ubuntu`, and Ubuntu 22.04/24.04 (or
+   compatible), **When** the operator runs
    `ansible-playbook -i <inventory> --private-key <key> -u ubuntu scylla-migrator.yml`, **Then**
-   prerequisites and Spark are installed on all hosts and the migrator on the master node.
+   OpenJDK 17, cqlsh, AWS CLI v2 and Spark 4.0.2 are installed on all hosts and the latest released
+   migrator jar on the master node; services are enabled but not started.
 2. **Given** a provisioned cluster, **When** the operator runs
    `sudo systemctl restart spark-master spark-history-server` on the master and
    `sudo systemctl restart spark-worker` on each worker, **Then** the Spark master UI is available on
@@ -161,9 +178,15 @@ services, open the three web UIs, and run `submit-cql-job.sh` under `nohup`.
    script, **Then** the script uses that file.
 5. **Given** a completed migration, **When** the operator runs `./submit-cql-job-validator.sh` or
    `./submit-alternator-validator.sh`, **Then** the validator runs.
-6. **Given** the resource environment templates `ansible/templates/spark-env-master` and
-   `ansible/templates/spark-env-worker`, **When** the operator edits them before deploying, **Then**
-   driver, executor and worker resource allocation follow those values.
+6. **Given** no edits to `ansible/templates/spark-env-master` and `ansible/templates/spark-env-worker`,
+   **When** the playbook runs, **Then** worker cores (all vCPUs), worker memory (85% of RAM, at
+   least 1 GB), executor cores (the largest of 10..1 that divides the worker cores), executor
+   memory (90% of worker memory per executor, at least 1 GB) and local directories (`/mnt` if
+   mounted, else `/tmp`) are derived from each host's hardware; edits to the templates override
+   that.
+7. **Given** the operator runs a submit script from a directory other than
+   `/home/ubuntu/scylla-migrator`, **When** it starts, **Then** it fails to find `spark-env` (and, for
+   the CQL scripts, `config.yaml`), because both are referenced relative to the current directory.
 
 ---
 
@@ -201,6 +224,30 @@ The operator runs the migrator or validator as an EMR cluster step using
 1. **Given** the jar and configuration at `/mnt1/`, **When** the EMR step runs with
    `--deploy-mode cluster`, **Then** the chosen entry point runs on the EMR cluster.
 
+---
+
+### User Story 9 - Provision an AWS cluster with the deploy helper (Priority: P3)
+
+The operator uses `./deploy_spark_cluster.py` (README only) to create EC2 infrastructure with
+Terraform, configure it with the Ansible playbook, upload a configuration, run the job and tear the
+cluster down.
+
+**Why this priority**: Convenience path on AWS; the manual Ansible path remains available.
+
+**Independent Test**: Run `deploy`, `show`, `run`, `destroy --yes` against a test AWS account.
+
+**Acceptance Scenarios**:
+
+1. **Given** Python 3.10+, Terraform, `ssh`/`scp`, AWS credentials and an SSH key pair, **When** the
+   operator runs `./deploy_spark_cluster.py deploy --region ... --workers N --migration-type cql|alternator
+   --config-file ...`, **Then** the cluster is created, configured with the playbook, and the
+   config uploaded; state is kept in `.deploy_spark_cluster/`.
+2. **Given** a deployed cluster, **When** the operator runs `run` (optionally `--validator`),
+   **Then** the helper checks the master and workers, launches the submit script with `nohup` and
+   prints the remote PID and log path.
+3. **Given** a finished migration, **When** the operator runs `destroy --yes`, **Then** the AWS
+   resources are removed (`--delete-state-dir` also removes local state).
+
 ### Edge Cases
 
 - Migrator, Spark and Scala versions must be compatible: Migrator 0.9.x and 1.x require Spark
@@ -220,11 +267,22 @@ The operator runs the migrator or validator as an EMR cluster step using
   at startup.
 - The Ansible submit scripts expect `config.yaml` (CQL) and `config.dynamodb.yml` (Alternator) under
   `/home/ubuntu/scylla-migrator/` unless edited.
-- The Ansible procedure requires the target table to exist before submission ("Ensure the table has
-  been created in the target environment"), while the migration pages say a missing target table is
-  created on the fly. [NEEDS CLARIFICATION: Is pre-creating the target table actually required for
-  Ansible-submitted jobs (e.g. because of the submit scripts), or is step 10 only a recommendation
-  that predates automatic table creation?]
+- Pre-creating the target table is required for CQL targets regardless of how the job is submitted:
+  the migrator never creates CQL tables (see `001-cql-to-cql-migration` FR-028), and neither the
+  playbook nor the submit scripts create them. DynamoDB/Alternator target tables are created by the
+  migrator when missing (`003-dynamodb-family-migration`). Ansible step 10 is therefore correct for
+  CQL and optional for Alternator.
+- The Ansible templates reference the master by inventory name `spark_master`; an inventory that
+  names the master differently fails when templates are rendered.
+- The CQL submit scripts pass `spark.cassandra.input/output.consistency.level=LOCAL_QUORUM` and
+  `spark.cassandra.connection.localConnectionsPerExecutor=4`; the configuration's
+  `consistencyLevel` and `connections` (when set) take precedence. All submit scripts enable the
+  Spark event log (read by the history server from `/tmp/spark-events`) and create
+  `/tmp/savepoints`; the Alternator scripts use `--driver-memory 4G`.
+- The playbook does not copy `ansible/files/config.dynamodb.yml` to the master; the operator copies
+  the edited file.
+- If `spark.redaction.regex` is set only on the SparkSession at run time (not on the SparkConf at
+  submission), the job fails with an error asking to set it before session creation.
 - `index.rst` lists only Cassandra, Parquet, DynamoDB and DynamoDB S3 export as readable sources,
   while other pages and the constitution also cover ScyllaDB Alternator, DataStax Astra, Aerospike
   and MySQL sources; the feature list on the landing page is incomplete (source specifics are owned
@@ -247,11 +305,18 @@ The operator runs the migrator or validator as an EMR cluster step using
 
 - **FR-004**: System MUST expose the migration entry point `com.scylladb.migrator.Migrator` and the
   validation entry point `com.scylladb.migrator.Validator`, selected with `spark-submit --class`.
+- **FR-001a**: The repository MUST build the jar at
+  `migrator/target/scala-2.13/scylla-migrator-assembly.jar` with `make build` (sbt, JDK 17) or
+  `make docker-build-jar` (Docker only); the build targets Spark 4.0.2 and Scala 2.13.
 - **FR-005**: System MUST read its configuration file from the location given by
-  `--conf spark.scylla.config=<path>`.
+  `--conf spark.scylla.config=<path>`, which may be a local path or any Hadoop filesystem URI
+  (`s3a://`, `gs://`, ...) whose connector is on the classpath; a missing connector fails with an
+  error that names the scheme and the connector to add.
 - **FR-006**: System MUST run on a Spark standalone master given by `--master spark://<host>:7077`,
   and in `--deploy-mode cluster` on managed Spark such as AWS EMR.
-- **FR-007**: System MUST log its version at startup (`ScyllaDB Migrator <version>`).
+- **FR-007**: System MUST log its version at startup (`ScyllaDB Migrator <version>`), run as Spark
+  application `scylla-migrator` (or `scylla-validator`), log the loaded configuration with secrets
+  redacted, and set log levels to WARN globally and INFO for the migrator's own messages.
 
 **Configuration errors**
 
@@ -263,6 +328,23 @@ The operator runs the migrator or validator as an EMR cluster step using
 - **FR-010**: System MUST require the top-level `source` and `target` properties and treat
   `renames`, `skipTokenRanges` and `skipSegments` as optional; `savepoints` is required for
   resumable migrations and `validation` only in validation mode.
+- **FR-010a**: System MUST fail before reading data with "Unsupported combination of source and
+  target ..." when the Migrator or Validator is given a source/target pair it does not support.
+
+**Spark runtime defaults**
+
+- **FR-010b**: System MUST set `spark.task.maxFailures` to 1024 when the operator has not set it,
+  and MUST keep any value supplied to `spark-submit`.
+- **FR-010c**: System MUST run with `spark.stage.maxConsecutiveAttempts=60` (both entry points).
+- **FR-010d**: System MUST install a default `spark.redaction.regex`
+  (`(?i)password|secret|token|credential|access[._-]?key|api[._-]?key|private[._-]?key|key[._-]?file`)
+  when the operator has not set one, so that secrets are redacted in Spark UIs, event logs and
+  savepoints; an operator-supplied value is kept. This applies to every source type.
+- **FR-010e**: System MUST, for resumable sources, write a savepoint and exit on the first SIGINT,
+  SIGTERM or SIGUSR2 and force exit on a second signal (behaviour owned by
+  `008-savepoints-and-resume`).
+- **FR-010f**: System MUST stop gracefully on shutdown when streaming changes
+  (`spark.streaming.stopGracefullyOnShutdown=true`).
 
 **Resources and throughput**
 
@@ -281,23 +363,35 @@ The operator runs the migrator or validator as an EMR cluster step using
   mounts `./migrator/target/scala-2.13` at `/jars` and the repository root at `/app`, and accepts
   submission through `docker compose exec spark-master /spark/bin/spark-submit` with
   `--conf spark.driver.host=spark-master`.
+- **FR-014a**: The Docker Compose worker MUST have 2 cores and 4 GB with its UI on port 8081, and both
+  containers MUST mount `./parquet-data` at `/parquet-data`; the image MUST run Spark 4.0.2 on
+  OpenJDK 17.
 - **FR-015**: System MUST provide an Ansible playbook (`ansible/scylla-migrator.yml`) that installs
-  prerequisites and Spark on hosts of inventory groups `spark`, `master` and `worker`, installs the
-  migrator on the master, connects as user `ubuntu`, and targets Ubuntu 22.04/24.04 LTS or
-  Ubuntu-compatible distributions.
+  prerequisites (OpenJDK 17, cqlsh, AWS CLI v2) and Spark 4.0.2 on hosts of inventory groups
+  `spark`, `master` and `worker`, downloads the latest released migrator jar to the master,
+  connects as user `ubuntu`, requires the master host to be named `spark_master`, and targets
+  Ubuntu 22.04/24.04 LTS or Ubuntu-compatible distributions.
 - **FR-016**: The Ansible deployment MUST install systemd services `spark-master`,
   `spark-history-server` and `spark-worker`, with the master UI on TCP 8080, the application UI on
-  4040 and the history server on 18080.
+  4040 and the history server on 18080; the services are enabled (restart on failure) but not
+  started by the playbook.
 - **FR-017**: The Ansible deployment MUST install submit scripts `submit-cql-job.sh`,
   `submit-alternator-job.sh`, `submit-cql-job-validator.sh` and `submit-alternator-validator.sh` in
   `/home/ubuntu/scylla-migrator/`, defaulting to `config.yaml` (CQL) and `config.dynamodb.yml`
-  (Alternator), and editable to use other file names.
-- **FR-018**: The Ansible deployment MUST expose Spark driver, executor and worker resource settings
-  through the `ansible/templates/spark-env-master` and `ansible/templates/spark-env-worker`
-  templates.
+  (Alternator), and editable to use other file names. The scripts MUST be run from
+  `/home/ubuntu/scylla-migrator` (they source `spark-env` and, for CQL, read `config.yaml` relative
+  to the current directory).
+- **FR-018**: The Ansible deployment MUST derive worker cores/memory, executor cores/memory and local
+  directories from each host's hardware and write them through the
+  `ansible/templates/spark-env-master` and `ansible/templates/spark-env-worker` templates, which
+  operators may still edit.
 - **FR-019**: System MUST provide a self-contained DynamoDB-to-Alternator tutorial (Docker Compose
   with DynamoDB local on port 8000, a Spark 4.0.2 master/worker with 2 cores and 4 GB, ScyllaDB
   Alternator on port 8001, data-generation scripts and a `run-migrator.sh` submit script).
+- **FR-020**: The repository MUST provide `deploy_spark_cluster.py` (Python 3.10+, Terraform, AWS)
+  with `deploy`, `show`, `redeploy`, `run` (optionally `--validator`) and `destroy` commands that
+  provision EC2 hosts, configure them with the Ansible playbook, upload the configuration and
+  submit the job with `nohup`.
 
 ### Key Entities
 
@@ -310,6 +404,8 @@ The operator runs the migrator or validator as an EMR cluster step using
 - **Ansible inventory**: hosts grouped into `spark`, `master`, `worker`.
 - **Submit script**: per-mode wrapper around `spark-submit` installed by Ansible.
 - **Compatibility matrix**: mapping from migrator release line to required Spark and Scala versions.
+- **Deploy helper state** (`.deploy_spark_cluster/`): Terraform files and state, generated Ansible
+  inventory, metadata and SSH known hosts for an AWS cluster created by `deploy_spark_cluster.py`.
 
 ## Success Criteria *(mandatory)*
 
@@ -342,3 +438,26 @@ The operator runs the migrator or validator as an EMR cluster step using
   `009-migration-validation`.
 - Kubernetes and other orchestrators are mentioned only as restart environments for automatic
   resume; their deployment is not documented and is out of scope.
+
+## Docs vs Code Review (2026-11-27)
+
+| # | Topic | Docs say | Code does | Spec follows | Suggested docs fix |
+|---|-------|----------|-----------|--------------|--------------------|
+| 1 | Target table before submission (Ansible step 10) | Ansible: "Ensure the table has been created"; migration pages: CQL table "created on the fly". | No CQL table is ever created (`writers/Scylla.scala:346`); DynamoDB tables are created (`DynamoUtils.scala:249-254`); Ansible creates none (`ansible/scylla-migrator.yml`). | Code (Edge Cases) | Keep step 10 for CQL; fix the CQL target docs. |
+| 2 | `spark.task.maxFailures` | Not documented. | Defaults to 1024 unless supplied (`config/SparkTaskRetries.scala:7-8`, `Migrator.scala:16`, `Validator.scala:42`). | Code (FR-010b, US1-5) | Document the default and how to override it. |
+| 3 | `spark.stage.maxConsecutiveAttempts` | Not documented. | Hard-coded to 60 (`Migrator.scala:23`, `Validator.scala:49`). | Code (FR-010c) | Document it. |
+| 4 | `spark.redaction.regex` | Not documented. | Default regex installed when unset, for every source (`config/SparkSecretRedaction.scala:18-20`, `config/SensitiveKeys.scala:6-7`, `Migrator.scala:17`, `Validator.scala:43`); runtime-only session value rejected (`config/SparkSecretRedaction.scala:31-49`). | Code (FR-010d) | Document the default and that overrides must be passed at submission. |
+| 5 | Signals | Not in the deployment pages. | SIGINT/SIGTERM/SIGUSR2 write a savepoint then exit; second signal forces exit (`SavepointsManager.scala:42-46,153-175`). | Code (FR-010e; details in 008) | Cross-reference from "Run the Migration". |
+| 6 | Config file location | "It must be a path on the Spark master node" (`run-the-migration.rst:27`). | Local path or Hadoop URI (`config/MigratorConfig.scala:192-212`, `PathIO.scala:34-48,180-203`). | Code (FR-005, US1-4) | Mention remote URIs. |
+| 7 | Ansible inventory naming | Example names the master `spark_master` but does not say it is required. | Templates use `hostvars["spark_master"]` (`ansible/templates/spark-env-master`, `spark-env-worker`, submit scripts). | Code (FR-015) | State the name is mandatory. |
+| 8 | Ansible resource settings | Templates "contain environment variables" to edit (`getting-started/ansible.rst` step 3). | Values are derived from hardware facts (`ansible/scylla-migrator.yml:88-131`); Spark 4.0.2, OpenJDK 17, cqlsh, AWS CLI installed; services only enabled. | Code (FR-015, FR-016, FR-018, US6-6) | Describe the derivation and that editing is optional. |
+| 9 | Submit scripts | Run from `/home/ubuntu/scylla-migrator` (shown with `cd`). | Relative `spark-env`/`config.yaml`; CQL scripts force LOCAL_QUORUM and 4 local connections (overridden by config); event log on; `/tmp/savepoints` created (`ansible/templates/submit-*.sh`). | Code (FR-017, Edge Cases) | Note the working-directory requirement and the defaults. |
+| 10 | Docker Compose details | Master/worker, ports 8080/4040, `/jars`, `/app`. | Also worker UI 8081, 2 cores/4 GB, `/parquet-data` mount, Spark 4.0.2/OpenJDK 17 image (`docker-compose.yaml`, `dockerfiles/spark/Dockerfile`). | Code (FR-014a) | Optional mention. |
+| 11 | `deploy_spark_cluster.py` | Not in `docs/source/` (README only). | Terraform + Ansible AWS lifecycle helper (`deploy_spark_cluster.py`, `README.md:38-170`). | Code (US9, FR-020) | Add a docs page or link. |
+| 12 | Unsupported combinations | Not described as an error. | Migrator/Validator fail with "Unsupported combination of source and target" after config load (`Migrator.scala:110-114`, `Validator.scala:33-37`). | Code (FR-010a) | Mention the error. |
+
+Verified unchanged: entry points, `spark.scylla.config`, standalone master URL, EMR cluster mode,
+version log line, `DecodingFailure`/`ParsingFailure` startup errors, executor sizing guidance,
+`spark.cores.max`, Docker `/jars` and `/app` mounts and ports 8080/4040, Ansible groups, user,
+systemd services and ports, submit script names and default config file names, and the
+compatibility matrix (build targets Spark 4.0.2 / Scala 2.13) match the documentation.

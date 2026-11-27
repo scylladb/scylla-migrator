@@ -15,17 +15,16 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain — 2 markers remain: undocumented MySQL source
-  configuration / `mysql` missing from the source-type list (FR-001), and reject-vs-ignore of a
-  configured `savepoints` section (FR-007).
-- [ ] Requirements are testable and unambiguous — FR-001 and FR-007 are ambiguous until the
-  markers are resolved; the other requirements are testable.
+- [x] No [NEEDS CLARIFICATION] markers remain — both resolved from code: the MySQL source
+  contract (properties, defaults, validation, `scylla`/`cassandra`-only target) is now specified
+  in FR-001 and FR-015–FR-026, and a configured `savepoints` section is ignored with a warning
+  (FR-007). The corresponding documentation gaps are recorded in "Docs vs Code Review".
+- [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)
 - [x] All acceptance scenarios are defined
 - [x] Edge cases are identified
-- [ ] Scope is clearly bounded — compatible target types for a MySQL source are not documented
-  (part of the FR-001 marker).
+- [x] Scope is clearly bounded — only `scylla`/`cassandra` targets are supported (FR-001).
 - [x] Dependencies and assumptions identified
 
 ## Feature Readiness
@@ -39,5 +38,9 @@
 
 - Baseline (as-built) spec; MySQL documentation in `docs/source` is thin. Source property names
   were taken from `config.yaml.example` only to name the user-facing contract.
-- Resolve the markers with `/speckit-clarify` (and add a "MySQL Source" section to
-  `configuration.rst`) before planning further MySQL work.
+- Reviewed against source code 2026-11-27 (commit 06835d0): FR-001/002/003/005/007/008/013/014
+  updated; FR-015–FR-026 added (connection validation, fetch size, zero dates, connection
+  properties, timeouts, TLS URL warning, type/time-zone semantics, redaction, startup logs,
+  partition column checks, null-PK dropping, Validator rename/PK checks); User Story 4 added.
+- Docs still lack a "MySQL Source" section in `configuration.rst`; see the spec's Docs vs Code
+  Review table.

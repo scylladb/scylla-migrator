@@ -4,9 +4,9 @@
 
 **Created**: 2026-11-27
 
-**Status**: Baseline (as-built, derived from docs)
+**Status**: Baseline (as-built; derived from docs, reviewed against code 2026-11-27)
 
-**Input**: Existing documentation: `docs/source/migrate-from-cassandra-or-parquet.rst` (sections "Reading from a Parquet File" and "Configuring the Destination"); `docs/source/configuration.rst` (sections "Source" type list, "Parquet Source", "AWS Authentication", and the Parquet mention in "CQL-Compatible Source" `preserveCollectionTimestamps` batching); `docs/source/resume-interrupted-migration.rst` (Parquet file-level tracking note, automatic resume)
+**Input**: Existing documentation: `docs/source/migrate-from-cassandra-or-parquet.rst` (sections "Reading from a Parquet File" and "Configuring the Destination"); `docs/source/configuration.rst` (sections "Source" type list, "Parquet Source", "AWS Authentication", and the Parquet mention in "CQL-Compatible Source" `preserveCollectionTimestamps` batching); `docs/source/resume-interrupted-migration.rst` (Parquet file-level tracking note, automatic resume); source code at commit 06835d0 (`config/SourceSettings.scala`, `config/AWSCredentials.scala`, `config/Savepoints.scala`, `config/MigratorConfig.scala`, `AwsUtils.scala`, `Migrator.scala`, `Validator.scala`, `readers/Parquet.scala`, `readers/ParquetWithoutSavepoints.scala`, `readers/ParquetSavepointsManager.scala`, `readers/TimestampColumns.scala`, `readers/Cassandra.scala` (Parquet restore), `readers/CollectionBatching.scala`, `writers/Scylla.scala`, `scylla/ScyllaMigrator.scala`, `config.yaml.example`, test fixtures `parquet-to-scylla-*.yaml`)
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -14,8 +14,9 @@
 
 A migration operator has data exported in Parquet format on the filesystem of the Spark master
 node and wants it loaded into a ScyllaDB (or Cassandra) table. They configure
-`source: {type: parquet, path: /my-directory/my-file.parquet}` and a CQL target (see
-`001-cql-to-cql-migration` for target properties), then submit the Migrator job.
+`source: {type: parquet, path: /my-directory/my-file.parquet}` (a single file or a directory of
+Parquet files) and a CQL target (see `001-cql-to-cql-migration` for target properties), create the
+target table, then submit the Migrator job.
 
 **Why this priority**: The minimal Parquet path; it delivers value without any cloud setup.
 
@@ -26,11 +27,22 @@ table, and check that the target contains every row.
 
 1. **Given** a Parquet file at a local path and a `cassandra` target, **When** the Migrator runs to
    completion, **Then** every row of the Parquet data is written to the target table.
-2. **Given** the target table does not exist, **When** the Migrator runs, **Then** the target table
-   is created on the fly and the data is written into it.
-3. **Given** `source.type: parquet` and a target type other than `cassandra`, **When** the Migrator
-   starts, **Then** the combination is not supported (a `parquet` source can only be used with a
-   `cassandra` target).
+2. **Given** the target table does not exist, **When** the Migrator runs, **Then** the write fails:
+   the migrator never creates CQL target tables (see `001-cql-to-cql-migration` FR-028).
+3. **Given** `source.type: parquet` and a target type other than `cassandra`/`scylla`, **When** the
+   Migrator starts, **Then** it stops before reading data with "Unsupported combination of source
+   and target".
+4. **Given** `path` names a directory, **When** the Migrator runs, **Then** every Parquet file under
+   it is migrated (with file tracking enabled, files are discovered recursively, including
+   sub-directories).
+5. **Given** `path` matches no Parquet file, **When** the Migrator runs with file tracking, **Then**
+   it fails with "No Parquet files found in <path>" (credentials and query strings in the path are
+   redacted in logs and errors).
+6. **Given** Parquet rows whose primary-key column is null, **When** they are migrated, **Then** they
+   are skipped and "Dropped <n> rows with null primary key values" is logged, unless the target sets
+   `dropNullPrimaryKeys: false`.
+7. **Given** a Parquet column that does not exist in the target table (after renames), **When** the
+   migration runs, **Then** the write fails.
 
 ---
 
@@ -51,8 +63,13 @@ credentials, migrate, and verify the row count in the target.
    Migrator runs, **Then** it reads the object and writes its rows to the target.
 2. **Given** a private object and valid `credentials.accessKey`/`credentials.secretKey`, **When**
    the Migrator runs, **Then** it authenticates with those keys and migrates the data.
-3. **Given** a custom S3-compatible `endpoint` (host and port), **When** `region` is also set,
-   **Then** the Migrator reads from that endpoint.
+3. **Given** a custom S3-compatible `endpoint` (host and port), **When** the Migrator runs, **Then**
+   `endpoint` is **not** used for reading the Parquet data (it only addresses the STS service when
+   `assumeRole` is set); an S3-compatible store must be configured through Spark/Hadoop settings
+   such as `--conf spark.hadoop.fs.s3a.endpoint=...`.
+4. **Given** `credentials` and `region`, **When** the Migrator runs, **Then** the region is applied to
+   the S3A client; **given** `region` without `credentials`, **Then** it is ignored and the
+   Spark/Hadoop default credential chain and region apply.
 
 ---
 
@@ -74,8 +91,9 @@ confirm the migration reads it.
    role's permissions.
 2. **Given** `assumeRole` without `sessionName`, **When** the role is assumed, **Then** the session
    name `scylla-migrator` is used.
-3. **Given** `assumeRole` without `region`, **When** the configuration is validated, **Then** it is
-   invalid because `region` is mandatory with `assumeRole`.
+3. **Given** `assumeRole` without `region`, **When** the configuration is loaded, **Then** it is
+   not rejected; the AWS SDK default region lookup is used for the role assumption, which fails at
+   run time if no region can be found (the docs call `region` mandatory with `assumeRole`).
 
 ---
 
@@ -96,53 +114,124 @@ re-run with the same configuration and confirm completed files are not re-read.
    re-run with the same configuration, **Then** files recorded as completed in the latest savepoint
    are skipped and the remaining files are migrated (file-level tracking; savepoint mechanics are
    specified in `008-savepoints-and-resume`).
+2. **Given** `savepoints.enableParquetFileTracking: false`, **When** an interrupted job is re-run,
+   **Then** every file is migrated again (no progress is saved), although the `savepoints` section
+   is still required.
+3. **Given** a successful run, **When** it completes, **Then** a final savepoint lists every
+   processed file, and a re-run with the same configuration logs "No Parquet files to process.
+   Migration is complete." and writes nothing.
+
+---
+
+### User Story 5 - Restore a CQL export with its TTLs and WRITETIMEs (Priority: P2)
+
+The operator exported a CQL table to Parquet with `preserveTimestamps: true`
+(`011-cql-to-parquet-export`), so the files carry `__migrator_meta_<column>_ttl` and
+`__migrator_meta_<column>_writetime` columns. Loading those files into a CQL table restores each
+cell's TTL and WRITETIME, including per-element metadata of non-frozen sets and maps.
+
+**Why this priority**: Makes CQL → Parquet → CQL a lossless round trip for timestamps.
+
+**Independent Test**: Export a table with known TTL/WRITETIME values to Parquet, load it into an
+empty target table, and validate timestamps.
+
+**Acceptance Scenarios**:
+
+1. **Given** Parquet files with migrator metadata columns, **When** they are migrated, **Then** the
+   metadata columns are not written as data and each target cell carries the exported TTL/WRITETIME
+   ("Detected per-column CQL timestamp metadata in Parquet schema" is logged).
+2. **Given** per-element collection metadata, **When** the files are restored, **Then** files are
+   written in batches (about `collectionBatchPartitions` x `spark.sql.files.maxPartitionBytes` of data
+   each), each batch's files are recorded as processed only after all of its write passes succeed,
+   and incremental per-file tracking is disabled.
+3. **Given** malformed per-element metadata (missing collection-kind marker, non-array or wrongly
+   typed sidecars, unsupported key type, mismatched element counts, out-of-range TTL), **When** the
+   restore runs, **Then** it aborts with a "Parquet restore: ..." error instead of writing data
+   with wrong timestamps.
 
 ### Edge Cases
 
 - A local `path` must be on the Spark master node's filesystem.
 - An S3 object that is not public requires `credentials`; the docs only describe credentials as
   needed "in case the object is not public".
-- `region` is required when using a custom `endpoint` and when using `assumeRole`.
+- The docs say `region` is required with a custom `endpoint` and with `assumeRole`; the code does
+  not enforce either at startup (see FR-006, FR-009).
 - Resume granularity is a whole Parquet file: a file that was partially written when the job was
   interrupted is migrated again from its start; writes are idempotent on the target primary key, so
   this costs extra load only.
 - When the CQL target uses `stripTrailingZerosForDecimals`, decimal values read from Parquet follow
   the same padding/stripping rules as CQL sources (see `001-cql-to-cql-migration`).
-- `configuration.rst` mentions that collection-timestamp batching applies "a Parquet restore: a
-  batch of files of about that many splits' size"; how Parquet data supplies per-element collection
-  metadata is not documented, so this spec does not define it.
-- The configuration reference describes `path` as "Path of the Parquet file", while savepoints track
-  progress per Parquet file. [NEEDS CLARIFICATION: Can `source.path` point to a directory (or
-  prefix) containing several Parquet files, and if so are sub-directories included? The docs only
-  show single-file paths, yet resume is described as file-level tracking across "Parquet files".]
+- Per-element collection metadata is supplied by migrator metadata columns produced by a CQL →
+  Parquet export (User Story 5); Parquet data from other producers is migrated as plain values.
+- `source.path` may be a single file or a directory/prefix. With file tracking, the file list is
+  built recursively (sub-directories included) and recorded by full file URI. Data is then read with
+  Spark's Parquet directory rules: on a first run the whole `path` is read (so `key=value`
+  sub-directories may become partition columns), whereas a resumed run reads the remaining files
+  individually; keep datasets flat (no partition directories) to avoid schema differences between
+  runs.
+- When writes run as several passes (per-element collection restore), resume granularity is a batch
+  of files rather than a single file.
+- `region` is applied to S3 reads only when `credentials` are given; `endpoint` is never applied to
+  S3 reads.
+- With timestamps restored from metadata columns, `writeTTLInS`/`writeWritetimestampInuS` on the
+  target are ignored (as for CQL sources).
+- A Parquet → CQL configuration cannot be validated: the Validator stops with "Unsupported
+  combination of source and target".
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
 - **FR-001**: System MUST accept a source of `type: parquet` with a mandatory `path`.
-- **FR-002**: System MUST accept a `parquet` source only together with a `cassandra` (CQL) target.
+- **FR-001a**: System MUST accept as `path` either a single Parquet file or a directory/prefix of
+  Parquet files, and with file tracking MUST discover files recursively, failing with "No Parquet
+  files found in <path>" when none exist and "Failed to list Parquet files from <path>" when the
+  path cannot be listed.
+- **FR-002**: System MUST accept a `parquet` source only together with a `cassandra`/`scylla` (CQL)
+  target, stopping before reading data with "Unsupported combination of source and target"
+  otherwise.
 - **FR-003**: System MUST read Parquet data from a path on the Spark master node's filesystem.
-- **FR-004**: System MUST read Parquet data from S3 using `s3a://` URLs.
+- **FR-004**: System MUST read Parquet data from S3 using `s3a://` URLs (and from any other Hadoop
+  filesystem URI the Spark runtime supports).
 - **FR-005**: System MUST accept optional `credentials` with `accessKey` and `secretKey` for S3 and
-  use them to authenticate.
-- **FR-006**: System MUST accept optional `endpoint` (`host`, `port`) and `region` for S3 access,
-  and MUST require `region` when a custom endpoint is used.
+  use them to authenticate; without `credentials` the Spark/Hadoop default credential chain applies.
+- **FR-006**: System MUST accept optional `endpoint` (`host`, `port`) and `region`. `region` MUST be
+  applied to S3 reads when `credentials` are set; `endpoint` is used only to reach STS for
+  `assumeRole` and is not applied to S3 reads. Neither is validated against the other at startup.
 - **FR-007**: System MUST support AssumeRole via `credentials.assumeRole.arn`, using the provided
   access/secret keys as the identity that assumes the role.
 - **FR-008**: System MUST use `scylla-migrator` as the role session name when
   `credentials.assumeRole.sessionName` is not set.
-- **FR-009**: System MUST require `region` when `assumeRole` is used.
+- **FR-009**: System MUST use `region` for the role assumption when `assumeRole` is used; a missing
+  `region` is not rejected at startup and falls back to the AWS SDK default region lookup.
 - **FR-010**: System MUST write the Parquet rows to the configured CQL target using the target
-  behaviour of `001-cql-to-cql-migration` (table auto-creation, consistency level, connections,
-  `stripTrailingZerosForDecimals`, optional forced `writeTTLInS`/`writeWritetimestampInuS`, TLS,
-  Astra `cloud` target).
+  behaviour of `001-cql-to-cql-migration` (existing target table required, consistency level,
+  connections, `stripTrailingZerosForDecimals`, optional forced `writeTTLInS`/`writeWritetimestampInuS`,
+  TLS, Astra `cloud` target).
+- **FR-010a**: System MUST, by default, skip Parquet rows with a null primary-key value and log
+  how many were dropped; the target property `dropNullPrimaryKeys: false` disables this.
 - **FR-011**: System MUST apply configured column renames to Parquet columns before writing (see
   `007-column-renames`).
 - **FR-012**: System MUST support savepoints for Parquet sources with file-level tracking, recording
   completed Parquet files so that automatic resume skips them (see `008-savepoints-and-resume`).
+  Tracking is on by default and controlled by `savepoints.enableParquetFileTracking`; the
+  `savepoints` section is required for Parquet sources even when tracking is disabled.
+- **FR-012a**: System MUST, after a successful run, record every processed file in a final
+  savepoint, and MUST finish without writing when all files are already recorded ("No Parquet files
+  to process. Migration is complete.").
 - **FR-013**: System MUST never write AWS secrets to savepoints in clear text (savepoints store
-  `<redacted>`), and resume MUST take credentials from the launch configuration.
+  `<redacted>`), and resume MUST take credentials from the launch configuration. Credentials, query
+  strings and fragments in `path` MUST be redacted in log messages.
+- **FR-014**: System MUST detect migrator metadata columns (`__migrator_meta_<column>_ttl`,
+  `__migrator_meta_<column>_writetime`) in the Parquet schema and restore each cell's TTL and
+  WRITETIME instead of writing those columns as data; per-element metadata of non-frozen sets and
+  maps MUST be restored as well.
+- **FR-015**: System MUST write per-element collection restores in batches of files (about
+  `scylla.migrator.collectionBatchPartitions` x `spark.sql.files.maxPartitionBytes` each, at least one
+  file), marking a batch's files processed only after all its write passes succeed.
+- **FR-016**: System MUST abort a restore whose per-element metadata is malformed (missing
+  collection-kind marker, inconsistent sidecar types, unsupported key type, length mismatch,
+  out-of-range TTL) with a "Parquet restore: ..." error.
 
 ### Key Entities
 
@@ -150,7 +239,10 @@ re-run with the same configuration and confirm completed files are not re-read.
   optional `credentials`, `endpoint`, `region`.
 - **AWS credentials** (`credentials`): `accessKey`, `secretKey`, optional `assumeRole`
   (`arn`, optional `sessionName`).
-- **Parquet file**: the unit of resume progress; completed files are recorded in savepoints.
+- **Parquet file**: the unit of resume progress; completed files are recorded in savepoints by full
+  URI (a batch of files when per-element collection metadata is restored).
+- **Migrator metadata columns**: `__migrator_meta_<column>_ttl` / `__migrator_meta_<column>_writetime`
+  written by a CQL → Parquet export and consumed to restore TTL/WRITETIME.
 - **CQL Target configuration**: as defined in `001-cql-to-cql-migration`.
 
 ## Success Criteria *(mandatory)*
@@ -176,5 +268,24 @@ re-run with the same configuration and confirm completed files are not re-read.
 - Target-side properties and behaviours are not repeated here and are owned by
   `001-cql-to-cql-migration`; savepoint storage, naming and resume rules are owned by
   `008-savepoints-and-resume`.
-- The docs do not describe validating a Parquet source; Parquet-to-CQL validation is out of scope for
-  this spec (see `009-migration-validation`).
+- The docs do not describe validating a Parquet source, and the Validator rejects Parquet → CQL;
+  validation is out of scope for this spec (see `009-migration-validation`).
+- Operators create the target table before the migration.
+
+## Docs vs Code Review (2026-11-27)
+
+| # | Topic | Docs say | Code does | Spec follows | Suggested docs fix |
+|---|-------|----------|-----------|--------------|--------------------|
+| 1 | Directory paths | "Path of the Parquet file" (`configuration.rst` Parquet Source); only single-file examples. | Directories/prefixes accepted; file tracking lists files recursively (`readers/Parquet.scala:274-297`); `config.yaml.example:223` already shows a directory. | Code (FR-001a, US1-4) | Say "file or directory"; recommend flat layouts (no `key=value` dirs). |
+| 2 | Missing target table | "If it does not exist, it will be created on the fly" (`migrate-from-cassandra-or-parquet.rst:154`). | CQL tables are never created (`writers/Scylla.scala:346`). | Code (US1-2, FR-010) | Require the table to exist. |
+| 3 | S3 `endpoint` | "AWS endpoint configuration" for S3 reads (`configuration.rst:999-1011`). | `endpoint` is only passed to the STS client for `assumeRole` (`AwsUtils.scala:43-81`); S3A gets keys, session token and region only (`readers/Parquet.scala:311-347`). | Code (FR-006, US2-3) | State that S3-compatible endpoints need `spark.hadoop.fs.s3a.endpoint`, or wire `endpoint` into S3A. |
+| 4 | `region` handling | "required if you use a custom endpoint"; "mandatory when you use `assumeRole`". | Not validated at startup (`config/AWSCredentials.scala`, derived decoder at `config/SourceSettings.scala:765-766`); applied to S3A only when `credentials` are set (`readers/Parquet.scala:330-332`). | Code (FR-006, FR-009, US3-3) | Clarify that missing region is not detected until run time and is ignored without credentials. |
+| 5 | Timestamp/collection metadata restore | Only an indirect mention of "a Parquet restore" batch in `configuration.rst`. | Metadata columns `__migrator_meta_*_ttl/_writetime` restore TTL/WRITETIME and per-element collection metadata, batched by files, with strict validation (`readers/TimestampColumns.scala:12-57`, `readers/Parquet.scala:117-145,220-272`, `readers/Cassandra.scala:1648-1800`). | Code (US5, FR-014–016) | Document the CQL → Parquet → CQL round trip. |
+| 6 | Null primary keys | Not documented. | Rows with null key columns are dropped by default for Parquet sources and counted in a warning; `dropNullPrimaryKeys` overrides (`writers/Scylla.scala:97-107,310-371`). | Code (FR-010a, US1-6) | Document the behaviour and property. |
+| 7 | Tracking toggle and completion | Docs mention file-level tracking only. | `savepoints.enableParquetFileTracking` (default `true`) selects tracking; disabled means no resume (`config/Savepoints.scala:31,298`, `readers/Parquet.scala:53-68`, `readers/ParquetWithoutSavepoints.scala`); final savepoint lists all files and an all-done re-run is a no-op (`readers/Parquet.scala:84-90,172-175`). | Code (FR-012, FR-012a, US4-2/3) | Document the toggle in the Parquet section. |
+| 8 | Allowed target / validation | "can be used together with a target of type `cassandra` only". | `scylla` alias also accepted; other targets fail with "Unsupported combination" after config load (`Migrator.scala:94,110-114`); the Validator rejects Parquet sources (`Validator.scala:26-37`). | Code (FR-002) | Mention `scylla` and that Parquet sources cannot be validated. |
+
+Verified unchanged: `type: parquet` with mandatory `path`, local and `s3a://` paths, optional
+`credentials` (`accessKey`/`secretKey`), AssumeRole with default session name `scylla-migrator`,
+renames applied before writing, CQL target behaviour, file-level savepoints with automatic resume
+and redacted secrets match the documentation.

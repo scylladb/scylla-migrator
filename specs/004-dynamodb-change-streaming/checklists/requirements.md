@@ -13,12 +13,12 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain — 3 marker(s) remain for genuine documentation gaps/contradictions (see spec).
-- [x] Requirements are testable and unambiguous (except where marked)
+- [x] No [NEEDS CLARIFICATION] markers remain — 0 markers remain: Kinesis default lease-table name (FR-017), placement of `initialTimestamp`/`appName` (FR-021) and `skipInitialSnapshotTransfer` with Kinesis/S3 chaining (FR-027) were resolved from code.
+- [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)
 - [x] All acceptance scenarios are defined
-- [x] Edge cases are identified — taken from every caution/warning/note in the source docs.
+- [x] Edge cases are identified — taken from every caution/warning/note in the source docs, plus startup checks, timeouts and runtime behaviours found in code.
 - [x] Scope is clearly bounded — sibling concerns are cross-referenced to other specs.
 - [x] Dependencies and assumptions identified
 
@@ -32,3 +32,4 @@
 ## Notes
 
 - Baseline (as-built) spec derived from documentation; markers should be resolved via `/speckit-clarify` and a docs fix before planning changes in this area.
+- Reviewed against source code 2026-11-27 (commit 06835d0): FRs corrected to as-built behaviour (FR-001, FR-002, FR-004–FR-006, FR-008, FR-009, FR-012–FR-014, FR-017, FR-021–FR-028), new FRs added (FR-029–FR-031); docs discrepancies recorded in the spec's "Docs vs Code Review" table.
