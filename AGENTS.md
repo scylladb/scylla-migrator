@@ -60,6 +60,14 @@ Read `README.md` for deployment instructions.
 - Report the checks that you ran and any failures.
   Report the checks that you skipped and the reasons.
 
+## Spec-driven development (Spec Kit)
+
+- Project principles: `.specify/memory/constitution.md`. Specs: `specs/` (see `specs/README.md`).
+- Specs `001`–`012` are baseline (as-built) specs derived from `docs/source/` and the code; keep them in sync
+  when documented behaviour changes.
+- For new features use the `/speckit-specify` → `/speckit-clarify` → `/speckit-plan` →
+  `/speckit-tasks` → `/speckit-implement` skills in `.claude/skills/`.
+
 <!-- pr-review-bots:start -->
 ## PR review automation
 
